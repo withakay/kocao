@@ -30,3 +30,8 @@ go.work.sum
 # Editor/IDE
 # .idea/
 # .vscode/
+.ito/session.json
+.ito/.state/audit/.session
+!.ito/.state/audit/
+.ito/config.local.json
+.local/ito/config.json

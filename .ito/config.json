@@ -1,0 +1,19 @@
+{
+  "$schema": "https://raw.githubusercontent.com/withakay/ito/v0.1.7/schemas/ito-config.schema.json",
+  "tools": {},
+  "agents": {},
+  "defaults": {
+    "testing": {
+      "tdd": {
+        "workflow": "red-green-refactor"
+      },
+      "coverage": {
+        "target_percent": 100,
+        "minimum_percent": 80
+      },
+      "mocking": {
+        "policy": "avoid"
+      }
+    }
+  }
+}
