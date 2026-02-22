@@ -64,6 +64,13 @@ func (in *HarnessRun) DeepCopyInto(out *HarnessRun) {
 		out.Spec.Env = make([]EnvVar, len(in.Spec.Env))
 		copy(out.Spec.Env, in.Spec.Env)
 	}
+	if in.Spec.GitAuth != nil {
+		out.Spec.GitAuth = &GitAuthSpec{
+			SecretName:  in.Spec.GitAuth.SecretName,
+			TokenKey:    in.Spec.GitAuth.TokenKey,
+			UsernameKey: in.Spec.GitAuth.UsernameKey,
+		}
+	}
 	if in.Spec.TTLSecondsAfterFinished != nil {
 		v := *in.Spec.TTLSecondsAfterFinished
 		out.Spec.TTLSecondsAfterFinished = &v

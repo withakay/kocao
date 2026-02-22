@@ -58,8 +58,41 @@ func TestHarnessRunReconcile_CreatesPodAndInitializesStatus(t *testing.T) {
 	if len(podList.Items) != 1 {
 		t.Fatalf("expected 1 pod, got %d", len(podList.Items))
 	}
-	if podList.Items[0].Spec.Containers[0].Image != "busybox:latest" {
-		t.Fatalf("expected pod image busybox:latest, got %q", podList.Items[0].Spec.Containers[0].Image)
+	pod := podList.Items[0]
+	if pod.Spec.Containers[0].Image != "busybox:latest" {
+		t.Fatalf("expected pod image busybox:latest, got %q", pod.Spec.Containers[0].Image)
+	}
+	// Pod contract: always mounts a workspace volume at /workspace.
+	volOK := false
+	for _, v := range pod.Spec.Volumes {
+		if v.Name == "workspace" {
+			volOK = v.EmptyDir != nil
+			break
+		}
+	}
+	if !volOK {
+		t.Fatalf("expected workspace emptyDir volume, got volumes=%#v", pod.Spec.Volumes)
+	}
+	mountOK := false
+	for _, m := range pod.Spec.Containers[0].VolumeMounts {
+		if m.Name == "workspace" && m.MountPath == "/workspace" {
+			mountOK = true
+			break
+		}
+	}
+	if !mountOK {
+		t.Fatalf("expected workspace mount at /workspace, got mounts=%#v", pod.Spec.Containers[0].VolumeMounts)
+	}
+
+	env := map[string]string{}
+	for _, ev := range pod.Spec.Containers[0].Env {
+		env[ev.Name] = ev.Value
+	}
+	if env["KOCAO_WORKSPACE_DIR"] != "/workspace" {
+		t.Fatalf("expected KOCAO_WORKSPACE_DIR=/workspace, got %q", env["KOCAO_WORKSPACE_DIR"])
+	}
+	if env["KOCAO_REPO_DIR"] == "" {
+		t.Fatalf("expected KOCAO_REPO_DIR to be set")
 	}
 
 	var updated operatorv1alpha1.HarnessRun
@@ -75,6 +108,67 @@ func TestHarnessRunReconcile_CreatesPodAndInitializesStatus(t *testing.T) {
 	}
 	if updated.Status.Phase != operatorv1alpha1.HarnessRunPhaseStarting {
 		t.Fatalf("expected phase Starting, got %q", updated.Status.Phase)
+	}
+}
+
+func TestHarnessRunReconcile_GitAuthAddsSecretVolumeAndAskpassEnv(t *testing.T) {
+	scheme := runtime.NewScheme()
+	_ = corev1.AddToScheme(scheme)
+	_ = operatorv1alpha1.AddToScheme(scheme)
+
+	run := &operatorv1alpha1.HarnessRun{
+		TypeMeta:   metav1.TypeMeta{APIVersion: operatorv1alpha1.GroupVersion.String(), Kind: "HarnessRun"},
+		ObjectMeta: metav1.ObjectMeta{Name: "run-auth", Namespace: "default"},
+		Spec: operatorv1alpha1.HarnessRunSpec{
+			RepoURL: "https://example.com/repo",
+			Image:   "busybox",
+			GitAuth: &operatorv1alpha1.GitAuthSpec{SecretName: "repo-creds", TokenKey: "token", UsernameKey: "username"},
+		},
+	}
+
+	cl := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(&operatorv1alpha1.HarnessRun{}, &corev1.Pod{}).Build()
+	if err := cl.Create(context.Background(), run); err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	r := &HarnessRunReconciler{Client: cl, Scheme: scheme, Clock: clocktesting.NewFakeClock(time.Unix(1, 0))}
+
+	_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(run)})
+	if err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	var updated operatorv1alpha1.HarnessRun
+	if err := cl.Get(context.Background(), client.ObjectKeyFromObject(run), &updated); err != nil {
+		t.Fatalf("get run: %v", err)
+	}
+	var pod corev1.Pod
+	if err := cl.Get(context.Background(), client.ObjectKey{Namespace: "default", Name: updated.Status.PodName}, &pod); err != nil {
+		t.Fatalf("get pod: %v", err)
+	}
+
+	secretVol := false
+	for _, v := range pod.Spec.Volumes {
+		if v.Name == "git-auth" && v.Secret != nil && v.Secret.SecretName == "repo-creds" {
+			secretVol = true
+			break
+		}
+	}
+	if !secretVol {
+		t.Fatalf("expected git-auth secret volume, got volumes=%#v", pod.Spec.Volumes)
+	}
+
+	env := map[string]string{}
+	for _, ev := range pod.Spec.Containers[0].Env {
+		env[ev.Name] = ev.Value
+	}
+	if env["GIT_ASKPASS"] != "/usr/local/bin/kocao-git-askpass" {
+		t.Fatalf("expected GIT_ASKPASS to be set, got %q", env["GIT_ASKPASS"])
+	}
+	if env["KOCAO_GIT_TOKEN_FILE"] != "/var/run/secrets/kocao/git/token" {
+		t.Fatalf("expected KOCAO_GIT_TOKEN_FILE to be set, got %q", env["KOCAO_GIT_TOKEN_FILE"])
+	}
+	if env["KOCAO_GIT_USERNAME_FILE"] != "/var/run/secrets/kocao/git/username" {
+		t.Fatalf("expected KOCAO_GIT_USERNAME_FILE to be set, got %q", env["KOCAO_GIT_USERNAME_FILE"])
 	}
 }
 

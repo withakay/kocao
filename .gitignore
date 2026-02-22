@@ -40,6 +40,7 @@ web/.vite/
 # .idea/
 # .vscode/
 .ito/session.json
+.ito/.state/*
 .ito/.state/audit/.session
 !.ito/.state/audit/
 .ito/config.local.json

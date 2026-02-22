@@ -181,14 +181,15 @@ func (a *API) handleSession(w http.ResponseWriter, r *http.Request, id string) {
 }
 
 type runCreateRequest struct {
-	RepoURL                 string                    `json:"repoURL"`
-	RepoRevision            string                    `json:"repoRevision,omitempty"`
-	Image                   string                    `json:"image"`
-	Command                 []string                  `json:"command,omitempty"`
-	Args                    []string                  `json:"args,omitempty"`
-	WorkingDir              string                    `json:"workingDir,omitempty"`
-	Env                     []operatorv1alpha1.EnvVar `json:"env,omitempty"`
-	TTLSecondsAfterFinished *int32                    `json:"ttlSecondsAfterFinished,omitempty"`
+	RepoURL                 string                        `json:"repoURL"`
+	RepoRevision            string                        `json:"repoRevision,omitempty"`
+	Image                   string                        `json:"image"`
+	Command                 []string                      `json:"command,omitempty"`
+	Args                    []string                      `json:"args,omitempty"`
+	WorkingDir              string                        `json:"workingDir,omitempty"`
+	Env                     []operatorv1alpha1.EnvVar     `json:"env,omitempty"`
+	GitAuth                 *operatorv1alpha1.GitAuthSpec `json:"gitAuth,omitempty"`
+	TTLSecondsAfterFinished *int32                        `json:"ttlSecondsAfterFinished,omitempty"`
 }
 
 type runResponse struct {
@@ -256,6 +257,7 @@ func (a *API) handleSessionRuns(w http.ResponseWriter, r *http.Request, sessionI
 				Args:                    req.Args,
 				WorkingDir:              req.WorkingDir,
 				Env:                     req.Env,
+				GitAuth:                 req.GitAuth,
 				TTLSecondsAfterFinished: req.TTLSecondsAfterFinished,
 			},
 		}
@@ -264,7 +266,7 @@ func (a *API) handleSessionRuns(w http.ResponseWriter, r *http.Request, sessionI
 			return
 		}
 
-		// Credential-use audit is derived from env var names only.
+		// Credential-use audit is derived from env var names and gitAuth presence only.
 		var credNames []string
 		for _, ev := range req.Env {
 			name := strings.ToUpper(strings.TrimSpace(ev.Name))
@@ -275,8 +277,16 @@ func (a *API) handleSessionRuns(w http.ResponseWriter, r *http.Request, sessionI
 				credNames = append(credNames, ev.Name)
 			}
 		}
-		if len(credNames) != 0 {
-			a.Audit.Append(r.Context(), principal(r.Context()), "credential.use", "run", run.Name, "allowed", map[string]any{"names": credNames})
+		gitAuthUsed := req.GitAuth != nil && strings.TrimSpace(req.GitAuth.SecretName) != ""
+		if len(credNames) != 0 || gitAuthUsed {
+			meta := map[string]any{}
+			if len(credNames) != 0 {
+				meta["names"] = credNames
+			}
+			if gitAuthUsed {
+				meta["gitAuth"] = true
+			}
+			a.Audit.Append(r.Context(), principal(r.Context()), "credential.use", "run", run.Name, "allowed", meta)
 		}
 
 		writeJSON(w, http.StatusCreated, runToResponse(run))

@@ -61,6 +61,16 @@ spec:
                         minLength: 1
                       value:
                         type: string
+                gitAuth:
+                  type: object
+                  properties:
+                    secretName:
+                      type: string
+                      minLength: 1
+                    tokenKey:
+                      type: string
+                    usernameKey:
+                      type: string
                 ttlSecondsAfterFinished:
                   type: integer
                   format: int32

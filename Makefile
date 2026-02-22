@@ -7,6 +7,7 @@ KIND_CLUSTER_NAME ?= kocao-dev
 
 API_IMAGE ?= kocao/control-plane-api
 OPERATOR_IMAGE ?= kocao/control-plane-operator
+HARNESS_IMAGE ?= kocao/harness-runtime
 IMAGE_TAG ?= dev
 
 .PHONY: help
@@ -23,6 +24,7 @@ help:
 		"  kind-load-images    Load images into kind" \
 		"  deploy              Apply kustomize overlay" \
 		"  undeploy            Delete kustomize overlay" \
+		"  harness-smoke       Build + smoke-test harness image" \
 		"  web-install         Install web deps (pnpm)" \
 		"  web-dev             Run web dev server"
 
@@ -72,11 +74,18 @@ kind-down: tools
 images:
 	docker build -f build/Dockerfile.api -t "$(API_IMAGE):$(IMAGE_TAG)" .
 	docker build -f build/Dockerfile.operator -t "$(OPERATOR_IMAGE):$(IMAGE_TAG)" .
+	docker build -f build/Dockerfile.harness -t "$(HARNESS_IMAGE):$(IMAGE_TAG)" .
 
 .PHONY: kind-load-images
 kind-load-images: tools
 	KIND_CLUSTER_NAME="$(KIND_CLUSTER_NAME)" KIND_BIN="$(KIND)" bash ./hack/kind/load-image.sh "$(API_IMAGE):$(IMAGE_TAG)"
 	KIND_CLUSTER_NAME="$(KIND_CLUSTER_NAME)" KIND_BIN="$(KIND)" bash ./hack/kind/load-image.sh "$(OPERATOR_IMAGE):$(IMAGE_TAG)"
+	KIND_CLUSTER_NAME="$(KIND_CLUSTER_NAME)" KIND_BIN="$(KIND)" bash ./hack/kind/load-image.sh "$(HARNESS_IMAGE):$(IMAGE_TAG)"
+
+.PHONY: harness-smoke
+harness-smoke:
+	docker build -f build/Dockerfile.harness -t "$(HARNESS_IMAGE):$(IMAGE_TAG)" .
+	docker run --rm "$(HARNESS_IMAGE):$(IMAGE_TAG)" /usr/local/bin/kocao-harness-smoke
 
 .PHONY: deploy
 deploy:

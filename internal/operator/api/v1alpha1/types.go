@@ -56,6 +56,20 @@ type EnvVar struct {
 	Value string `json:"value,omitempty"`
 }
 
+// GitAuthSpec configures secure Git credential injection for HTTPS clones.
+// The referenced Secret MUST exist in the same namespace as the HarnessRun.
+//
+// This is intentionally minimal for MVP and supports token-based authentication.
+type GitAuthSpec struct {
+	// SecretName is the name of the Secret holding Git credentials.
+	SecretName string `json:"secretName"`
+	// TokenKey is the secret data key containing the token (defaults to "token").
+	TokenKey string `json:"tokenKey,omitempty"`
+	// UsernameKey is an optional secret data key containing the username.
+	// If omitted, the harness defaults to "x-access-token".
+	UsernameKey string `json:"usernameKey,omitempty"`
+}
+
 // HarnessRun describes a single run execution that is reconciled into a Pod.
 type HarnessRun struct {
 	metav1.TypeMeta   `json:",inline"`
@@ -85,6 +99,9 @@ type HarnessRunSpec struct {
 	WorkingDir string `json:"workingDir,omitempty"`
 	// Env configures container environment variables.
 	Env []EnvVar `json:"env,omitempty"`
+
+	// GitAuth references a Secret used to authenticate Git operations.
+	GitAuth *GitAuthSpec `json:"gitAuth,omitempty"`
 
 	// TTLSecondsAfterFinished controls automatic HarnessRun deletion.
 	TTLSecondsAfterFinished *int32 `json:"ttlSecondsAfterFinished,omitempty"`

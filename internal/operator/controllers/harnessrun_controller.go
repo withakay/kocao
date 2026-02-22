@@ -2,6 +2,7 @@ package controllers
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	operatorv1alpha1 "github.com/withakay/kocao/internal/operator/api/v1alpha1"
@@ -151,6 +152,19 @@ func (r *HarnessRunReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 			Status:             metav1.ConditionTrue,
 			Reason:             "SpecInvalid",
 			Message:            invalidSpecError("image").Error(),
+			LastTransitionTime: now,
+		})
+		updated.Status.ObservedGeneration = updated.Generation
+		updated.Status.Phase = operatorv1alpha1.HarnessRunPhaseFailed
+		changedStatus = true
+	}
+	if updated.Spec.GitAuth != nil && strings.TrimSpace(updated.Spec.GitAuth.SecretName) == "" {
+		now := metav1.NewTime(r.Clock.Now())
+		setCondition(&updated.Status.Conditions, metav1.Condition{
+			Type:               ConditionFailed,
+			Status:             metav1.ConditionTrue,
+			Reason:             "SpecInvalid",
+			Message:            invalidSpecError("gitAuth.secretName").Error(),
 			LastTransitionTime: now,
 		})
 		updated.Status.ObservedGeneration = updated.Generation

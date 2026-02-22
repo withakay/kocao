@@ -10,6 +10,13 @@ import (
 )
 
 func buildHarnessPod(run *operatorv1alpha1.HarnessRun) *corev1.Pod {
+	const (
+		workspaceVolumeName = "workspace"
+		workspaceMountPath  = "/workspace"
+		gitAuthVolumeName   = "git-auth"
+		gitAuthMountPath    = "/var/run/secrets/kocao/git"
+	)
+
 	labels := map[string]string{
 		"app.kubernetes.io/name":        "kocao-harness",
 		"app.kubernetes.io/managed-by":  "kocao-control-plane-operator",
@@ -30,22 +37,60 @@ func buildHarnessPod(run *operatorv1alpha1.HarnessRun) *corev1.Pod {
 	}
 	name += "-pod"
 
-	env := make([]corev1.EnvVar, 0, len(run.Spec.Env)+2)
+	env := make([]corev1.EnvVar, 0, len(run.Spec.Env)+6)
 	env = append(env, corev1.EnvVar{Name: "KOCAO_REPO_URL", Value: run.Spec.RepoURL})
 	if run.Spec.RepoRevision != "" {
 		env = append(env, corev1.EnvVar{Name: "KOCAO_REPO_REVISION", Value: run.Spec.RepoRevision})
 	}
+	env = append(env,
+		corev1.EnvVar{Name: "KOCAO_WORKSPACE_DIR", Value: workspaceMountPath},
+		corev1.EnvVar{Name: "KOCAO_REPO_DIR", Value: workspaceMountPath + "/repo"},
+		corev1.EnvVar{Name: "GIT_TERMINAL_PROMPT", Value: "0"},
+	)
 	for _, e := range run.Spec.Env {
 		env = append(env, corev1.EnvVar{Name: e.Name, Value: e.Value})
 	}
 
+	volumes := []corev1.Volume{{Name: workspaceVolumeName, VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}}}
+	volumeMounts := []corev1.VolumeMount{{Name: workspaceVolumeName, MountPath: workspaceMountPath}}
+
+	if run.Spec.GitAuth != nil && strings.TrimSpace(run.Spec.GitAuth.SecretName) != "" {
+		tokenKey := strings.TrimSpace(run.Spec.GitAuth.TokenKey)
+		if tokenKey == "" {
+			tokenKey = "token"
+		}
+		items := []corev1.KeyToPath{{Key: tokenKey, Path: "token"}}
+		if uk := strings.TrimSpace(run.Spec.GitAuth.UsernameKey); uk != "" {
+			items = append(items, corev1.KeyToPath{Key: uk, Path: "username"})
+		}
+		volumes = append(volumes, corev1.Volume{
+			Name: gitAuthVolumeName,
+			VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{
+				SecretName: run.Spec.GitAuth.SecretName,
+				Items:      items,
+			}},
+		})
+		volumeMounts = append(volumeMounts, corev1.VolumeMount{Name: gitAuthVolumeName, MountPath: gitAuthMountPath, ReadOnly: true})
+		env = append(env,
+			corev1.EnvVar{Name: "GIT_ASKPASS", Value: "/usr/local/bin/kocao-git-askpass"},
+			corev1.EnvVar{Name: "KOCAO_GIT_TOKEN_FILE", Value: gitAuthMountPath + "/token"},
+		)
+		if strings.TrimSpace(run.Spec.GitAuth.UsernameKey) != "" {
+			env = append(env, corev1.EnvVar{Name: "KOCAO_GIT_USERNAME_FILE", Value: gitAuthMountPath + "/username"})
+		}
+	}
+
 	container := corev1.Container{
-		Name:       "harness",
-		Image:      run.Spec.Image,
-		Command:    run.Spec.Command,
-		Args:       run.Spec.Args,
-		WorkingDir: run.Spec.WorkingDir,
-		Env:        env,
+		Name:         "harness",
+		Image:        run.Spec.Image,
+		Command:      run.Spec.Command,
+		Args:         run.Spec.Args,
+		WorkingDir:   run.Spec.WorkingDir,
+		Env:          env,
+		VolumeMounts: volumeMounts,
+	}
+	if container.WorkingDir == "" {
+		container.WorkingDir = workspaceMountPath
 	}
 
 	return &corev1.Pod{
@@ -57,6 +102,7 @@ func buildHarnessPod(run *operatorv1alpha1.HarnessRun) *corev1.Pod {
 		Spec: corev1.PodSpec{
 			RestartPolicy: corev1.RestartPolicyNever,
 			Containers:    []corev1.Container{container},
+			Volumes:       volumes,
 		},
 	}
 }
