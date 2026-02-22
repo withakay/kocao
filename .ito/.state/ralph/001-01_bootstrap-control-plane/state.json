@@ -1,6 +1,6 @@
 {
   "changeId": "001-01_bootstrap-control-plane",
-  "iteration": 18,
+  "iteration": 19,
   "history": [
     {
       "timestamp": 1771718693001,
@@ -107,6 +107,12 @@
     {
       "timestamp": 1771719622370,
       "duration": 38517,
+      "completionPromiseFound": false,
+      "fileChangesCount": 1
+    },
+    {
+      "timestamp": 1771719688063,
+      "duration": 65692,
       "completionPromiseFound": false,
       "fileChangesCount": 1
     }
