@@ -216,22 +216,36 @@ func normalizeRunEgressMode(mode string) (string, bool) {
 }
 
 type runResponse struct {
-	ID        string                           `json:"id"`
-	SessionID string                           `json:"sessionID,omitempty"`
-	RepoURL   string                           `json:"repoURL"`
-	Image     string                           `json:"image"`
-	Phase     operatorv1alpha1.HarnessRunPhase `json:"phase,omitempty"`
-	PodName   string                           `json:"podName,omitempty"`
+	ID           string                           `json:"id"`
+	SessionID    string                           `json:"sessionID,omitempty"`
+	RepoURL      string                           `json:"repoURL"`
+	RepoRevision string                           `json:"repoRevision,omitempty"`
+	Image        string                           `json:"image"`
+	Phase        operatorv1alpha1.HarnessRunPhase `json:"phase,omitempty"`
+	PodName      string                           `json:"podName,omitempty"`
+
+	// GitHub outcome metadata (optional)
+	GitHubBranch      string `json:"gitHubBranch,omitempty"`
+	PullRequestURL    string `json:"pullRequestURL,omitempty"`
+	PullRequestStatus string `json:"pullRequestStatus,omitempty"`
 }
 
 func runToResponse(run *operatorv1alpha1.HarnessRun) runResponse {
+	ann := run.Annotations
+	if ann == nil {
+		ann = map[string]string{}
+	}
 	return runResponse{
-		ID:        run.Name,
-		SessionID: run.Spec.SessionName,
-		RepoURL:   run.Spec.RepoURL,
-		Image:     run.Spec.Image,
-		Phase:     run.Status.Phase,
-		PodName:   run.Status.PodName,
+		ID:                run.Name,
+		SessionID:         run.Spec.SessionName,
+		RepoURL:           run.Spec.RepoURL,
+		RepoRevision:      run.Spec.RepoRevision,
+		Image:             run.Spec.Image,
+		Phase:             run.Status.Phase,
+		PodName:           run.Status.PodName,
+		GitHubBranch:      ann[controllers.AnnotationGitHubBranch],
+		PullRequestURL:    ann[controllers.AnnotationPullRequestURL],
+		PullRequestStatus: ann[controllers.AnnotationPullRequestStatus],
 	}
 }
 

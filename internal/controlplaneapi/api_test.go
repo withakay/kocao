@@ -14,6 +14,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
@@ -164,9 +165,10 @@ func TestLifecycle_SessionRunControlsAndAudit(t *testing.T) {
 	}
 
 	resp, b = doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/sessions/"+sess.ID+"/runs", "full", map[string]any{
-		"repoURL": "https://example.com/repo",
-		"image":   "alpine:3",
-		"env":     []map[string]any{{"name": "GITHUB_TOKEN", "value": "redacted"}},
+		"repoURL":      "https://example.com/repo",
+		"repoRevision": "main",
+		"image":        "alpine:3",
+		"env":          []map[string]any{{"name": "GITHUB_TOKEN", "value": "redacted"}},
 	})
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("start run status = %d, want 201 (body=%s)", resp.StatusCode, string(b))
@@ -175,6 +177,40 @@ func TestLifecycle_SessionRunControlsAndAudit(t *testing.T) {
 	_ = json.Unmarshal(b, &run)
 	if run.ID == "" || run.SessionID != sess.ID {
 		t.Fatalf("unexpected run response: %+v", run)
+	}
+	if run.RepoRevision != "main" {
+		t.Fatalf("repoRevision = %q, want main", run.RepoRevision)
+	}
+
+	// Simulate harness/outcome reporter adding GitHub metadata.
+	var stored operatorv1alpha1.HarnessRun
+	if err := api.K8s.Get(context.Background(), client.ObjectKey{Namespace: api.Namespace, Name: run.ID}, &stored); err != nil {
+		t.Fatalf("get stored run: %v", err)
+	}
+	if stored.Annotations == nil {
+		stored.Annotations = map[string]string{}
+	}
+	stored.Annotations["kocao.withakay.github.com/github-branch"] = "feature/mvp-ui"
+	stored.Annotations["kocao.withakay.github.com/pull-request-url"] = "https://github.com/withakay/kocao/pull/123"
+	stored.Annotations["kocao.withakay.github.com/pull-request-status"] = "merged"
+	if err := api.K8s.Update(context.Background(), &stored); err != nil {
+		t.Fatalf("update stored run: %v", err)
+	}
+
+	resp, b = doJSON(t, srv.Client(), http.MethodGet, srv.URL+"/api/v1/runs/"+run.ID, "full", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("get run status = %d, want 200 (body=%s)", resp.StatusCode, string(b))
+	}
+	var got runResponse
+	_ = json.Unmarshal(b, &got)
+	if got.GitHubBranch != "feature/mvp-ui" {
+		t.Fatalf("gitHubBranch = %q, want feature/mvp-ui", got.GitHubBranch)
+	}
+	if got.PullRequestURL != "https://github.com/withakay/kocao/pull/123" {
+		t.Fatalf("pullRequestURL = %q, want PR url", got.PullRequestURL)
+	}
+	if got.PullRequestStatus != "merged" {
+		t.Fatalf("pullRequestStatus = %q, want merged", got.PullRequestStatus)
 	}
 
 	resp, b = doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/runs/"+run.ID+"/resume", "full", nil)
