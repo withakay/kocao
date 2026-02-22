@@ -71,6 +71,8 @@ spec:
                       type: string
                     usernameKey:
                       type: string
+                egressMode:
+                  type: string
                 ttlSecondsAfterFinished:
                   type: integer
                   format: int32

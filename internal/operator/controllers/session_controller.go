@@ -36,6 +36,9 @@ func (r *SessionReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 			controllerutil.AddFinalizer(updated, FinalizerName)
 			changedMeta = true
 		}
+		if err := ensureSessionWorkspacePVC(ctx, r.Client, r.Scheme, updated); err != nil {
+			return ctrl.Result{}, err
+		}
 		now := metav1.Now()
 		setCondition(&updated.Status.Conditions, metav1.Condition{Type: ConditionReady, Status: metav1.ConditionTrue, Reason: "Ready", Message: "session accepted", LastTransitionTime: now})
 		updated.Status.Phase = operatorv1alpha1.SessionPhaseActive

@@ -184,12 +184,27 @@ type runCreateRequest struct {
 	RepoURL                 string                        `json:"repoURL"`
 	RepoRevision            string                        `json:"repoRevision,omitempty"`
 	Image                   string                        `json:"image"`
+	EgressMode              string                        `json:"egressMode,omitempty"`
 	Command                 []string                      `json:"command,omitempty"`
 	Args                    []string                      `json:"args,omitempty"`
 	WorkingDir              string                        `json:"workingDir,omitempty"`
 	Env                     []operatorv1alpha1.EnvVar     `json:"env,omitempty"`
 	GitAuth                 *operatorv1alpha1.GitAuthSpec `json:"gitAuth,omitempty"`
 	TTLSecondsAfterFinished *int32                        `json:"ttlSecondsAfterFinished,omitempty"`
+}
+
+func normalizeRunEgressMode(mode string) (string, bool) {
+	m := strings.ToLower(strings.TrimSpace(mode))
+	switch m {
+	case "":
+		return "", true
+	case "restricted", "github-only", "github":
+		return "restricted", true
+	case "full", "full-internet", "internet":
+		return "full", true
+	default:
+		return "", false
+	}
 }
 
 type runResponse struct {
@@ -243,6 +258,11 @@ func (a *API) handleSessionRuns(w http.ResponseWriter, r *http.Request, sessionI
 			writeError(w, http.StatusBadRequest, "image required")
 			return
 		}
+		egressMode, ok := normalizeRunEgressMode(req.EgressMode)
+		if !ok {
+			writeError(w, http.StatusBadRequest, "invalid egressMode")
+			return
+		}
 
 		id := newID()
 		run := &operatorv1alpha1.HarnessRun{
@@ -253,6 +273,7 @@ func (a *API) handleSessionRuns(w http.ResponseWriter, r *http.Request, sessionI
 				RepoURL:                 req.RepoURL,
 				RepoRevision:            req.RepoRevision,
 				Image:                   req.Image,
+				EgressMode:              egressMode,
 				Command:                 req.Command,
 				Args:                    req.Args,
 				WorkingDir:              req.WorkingDir,
@@ -264,6 +285,9 @@ func (a *API) handleSessionRuns(w http.ResponseWriter, r *http.Request, sessionI
 		if err := a.K8s.Create(r.Context(), run); err != nil {
 			writeError(w, http.StatusInternalServerError, "create run failed")
 			return
+		}
+		if egressMode == "full" {
+			a.Audit.Append(r.Context(), principal(r.Context()), "run.egress.override", "run", run.Name, "allowed", map[string]any{"mode": egressMode})
 		}
 
 		// Credential-use audit is derived from env var names and gitAuth presence only.

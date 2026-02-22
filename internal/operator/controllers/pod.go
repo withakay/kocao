@@ -9,7 +9,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-func buildHarnessPod(run *operatorv1alpha1.HarnessRun) *corev1.Pod {
+func buildHarnessPod(run *operatorv1alpha1.HarnessRun, workspacePVCName string) *corev1.Pod {
 	const (
 		workspaceVolumeName = "workspace"
 		workspaceMountPath  = "/workspace"
@@ -51,7 +51,11 @@ func buildHarnessPod(run *operatorv1alpha1.HarnessRun) *corev1.Pod {
 		env = append(env, corev1.EnvVar{Name: e.Name, Value: e.Value})
 	}
 
-	volumes := []corev1.Volume{{Name: workspaceVolumeName, VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}}}
+	workspaceVolumeSource := corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}
+	if strings.TrimSpace(workspacePVCName) != "" {
+		workspaceVolumeSource = corev1.VolumeSource{PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: workspacePVCName}}
+	}
+	volumes := []corev1.Volume{{Name: workspaceVolumeName, VolumeSource: workspaceVolumeSource}}
 	volumeMounts := []corev1.VolumeMount{{Name: workspaceVolumeName, MountPath: workspaceMountPath}}
 
 	if run.Spec.GitAuth != nil && strings.TrimSpace(run.Spec.GitAuth.SecretName) != "" {

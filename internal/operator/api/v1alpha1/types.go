@@ -103,6 +103,13 @@ type HarnessRunSpec struct {
 	// GitAuth references a Secret used to authenticate Git operations.
 	GitAuth *GitAuthSpec `json:"gitAuth,omitempty"`
 
+	// EgressMode controls the outbound network policy for the run Pod.
+	//
+	// Supported values (MVP):
+	// - "restricted": default-deny with GitHub-only allowlist (plus DNS)
+	// - "full": allow full internet egress
+	EgressMode string `json:"egressMode,omitempty"`
+
 	// TTLSecondsAfterFinished controls automatic HarnessRun deletion.
 	TTLSecondsAfterFinished *int32 `json:"ttlSecondsAfterFinished,omitempty"`
 }

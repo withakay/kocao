@@ -71,6 +71,7 @@ func (in *HarnessRun) DeepCopyInto(out *HarnessRun) {
 			UsernameKey: in.Spec.GitAuth.UsernameKey,
 		}
 	}
+	out.Spec.EgressMode = in.Spec.EgressMode
 	if in.Spec.TTLSecondsAfterFinished != nil {
 		v := *in.Spec.TTLSecondsAfterFinished
 		out.Spec.TTLSecondsAfterFinished = &v

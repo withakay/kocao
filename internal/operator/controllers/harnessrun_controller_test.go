@@ -7,6 +7,7 @@ import (
 
 	operatorv1alpha1 "github.com/withakay/kocao/internal/operator/api/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	clocktesting "k8s.io/utils/clock/testing"
@@ -19,6 +20,9 @@ func TestHarnessRunReconcile_CreatesPodAndInitializesStatus(t *testing.T) {
 	scheme := runtime.NewScheme()
 	if err := corev1.AddToScheme(scheme); err != nil {
 		t.Fatalf("add core scheme: %v", err)
+	}
+	if err := networkingv1.AddToScheme(scheme); err != nil {
+		t.Fatalf("add networking scheme: %v", err)
 	}
 	if err := operatorv1alpha1.AddToScheme(scheme); err != nil {
 		t.Fatalf("add operator scheme: %v", err)
@@ -114,6 +118,7 @@ func TestHarnessRunReconcile_CreatesPodAndInitializesStatus(t *testing.T) {
 func TestHarnessRunReconcile_GitAuthAddsSecretVolumeAndAskpassEnv(t *testing.T) {
 	scheme := runtime.NewScheme()
 	_ = corev1.AddToScheme(scheme)
+	_ = networkingv1.AddToScheme(scheme)
 	_ = operatorv1alpha1.AddToScheme(scheme)
 
 	run := &operatorv1alpha1.HarnessRun{
@@ -175,6 +180,7 @@ func TestHarnessRunReconcile_GitAuthAddsSecretVolumeAndAskpassEnv(t *testing.T) 
 func TestHarnessRunReconcile_MapsPodRunningToPhaseRunning(t *testing.T) {
 	scheme := runtime.NewScheme()
 	_ = corev1.AddToScheme(scheme)
+	_ = networkingv1.AddToScheme(scheme)
 	_ = operatorv1alpha1.AddToScheme(scheme)
 
 	run := &operatorv1alpha1.HarnessRun{
@@ -236,6 +242,7 @@ func TestHarnessRunReconcile_MapsPodRunningToPhaseRunning(t *testing.T) {
 func TestHarnessRunReconcile_TTLDeletesAfterCompletion(t *testing.T) {
 	scheme := runtime.NewScheme()
 	_ = corev1.AddToScheme(scheme)
+	_ = networkingv1.AddToScheme(scheme)
 	_ = operatorv1alpha1.AddToScheme(scheme)
 
 	ttl := int32(1)
@@ -290,5 +297,76 @@ func TestHarnessRunReconcile_TTLDeletesAfterCompletion(t *testing.T) {
 			t.Fatalf("expected harnessrun to be deleting or gone after TTL")
 		}
 		return
+	}
+}
+
+func TestHarnessRunReconcile_WithSession_CreatesPVCMountAndEgressNetworkPolicy(t *testing.T) {
+	scheme := runtime.NewScheme()
+	_ = corev1.AddToScheme(scheme)
+	_ = networkingv1.AddToScheme(scheme)
+	_ = operatorv1alpha1.AddToScheme(scheme)
+
+	sess := &operatorv1alpha1.Session{
+		TypeMeta:   metav1.TypeMeta{APIVersion: operatorv1alpha1.GroupVersion.String(), Kind: "Session"},
+		ObjectMeta: metav1.ObjectMeta{Name: "s1", Namespace: "default"},
+		Spec:       operatorv1alpha1.SessionSpec{RepoURL: "https://example.com/repo"},
+	}
+	run := &operatorv1alpha1.HarnessRun{
+		TypeMeta:   metav1.TypeMeta{APIVersion: operatorv1alpha1.GroupVersion.String(), Kind: "HarnessRun"},
+		ObjectMeta: metav1.ObjectMeta{Name: "run-sess", Namespace: "default"},
+		Spec: operatorv1alpha1.HarnessRunSpec{
+			SessionName: "s1",
+			RepoURL:     "https://example.com/repo",
+			Image:       "busybox:latest",
+		},
+	}
+
+	cl := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(&operatorv1alpha1.HarnessRun{}, &corev1.Pod{}).Build()
+	if err := cl.Create(context.Background(), sess); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	if err := cl.Create(context.Background(), run); err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+
+	r := &HarnessRunReconciler{Client: cl, Scheme: scheme, Clock: clocktesting.NewFakeClock(time.Unix(1, 0))}
+	_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(run)})
+	if err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	// PVC exists.
+	var pvc corev1.PersistentVolumeClaim
+	if err := cl.Get(context.Background(), client.ObjectKey{Namespace: "default", Name: sessionWorkspacePVCName("s1")}, &pvc); err != nil {
+		t.Fatalf("get pvc: %v", err)
+	}
+
+	// NetworkPolicy exists.
+	var np networkingv1.NetworkPolicy
+	if err := cl.Get(context.Background(), client.ObjectKey{Namespace: "default", Name: runEgressNetworkPolicyName("run-sess")}, &np); err != nil {
+		t.Fatalf("get networkpolicy: %v", err)
+	}
+	if np.Spec.PodSelector.MatchLabels["kocao.withakay.github.com/run"] != "run-sess" {
+		t.Fatalf("expected policy selector to target run-sess")
+	}
+
+	// Pod mounts PVC for workspace.
+	var updated operatorv1alpha1.HarnessRun
+	if err := cl.Get(context.Background(), client.ObjectKeyFromObject(run), &updated); err != nil {
+		t.Fatalf("get run: %v", err)
+	}
+	var pod corev1.Pod
+	if err := cl.Get(context.Background(), client.ObjectKey{Namespace: "default", Name: updated.Status.PodName}, &pod); err != nil {
+		t.Fatalf("get pod: %v", err)
+	}
+	volOK := false
+	for _, v := range pod.Spec.Volumes {
+		if v.Name == "workspace" {
+			volOK = v.PersistentVolumeClaim != nil && v.PersistentVolumeClaim.ClaimName == sessionWorkspacePVCName("s1")
+			break
+		}
+	}
+	if !volOK {
+		t.Fatalf("expected workspace PVC volume, got volumes=%#v", pod.Spec.Volumes)
 	}
 }

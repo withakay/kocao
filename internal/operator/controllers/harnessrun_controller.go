@@ -7,6 +7,7 @@ import (
 
 	operatorv1alpha1 "github.com/withakay/kocao/internal/operator/api/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -56,10 +57,12 @@ func (r *HarnessRunReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		}
 	}
 
+	var sess *operatorv1alpha1.Session
+
 	// Session reference (if provided) must exist.
 	if updated.Spec.SessionName != "" {
-		var sess operatorv1alpha1.Session
-		err := r.Get(ctx, client.ObjectKey{Namespace: updated.Namespace, Name: updated.Spec.SessionName}, &sess)
+		var sessObj operatorv1alpha1.Session
+		err := r.Get(ctx, client.ObjectKey{Namespace: updated.Namespace, Name: updated.Spec.SessionName}, &sessObj)
 		if err != nil {
 			if apierrors.IsNotFound(err) {
 				now := metav1.NewTime(r.Clock.Now())
@@ -98,7 +101,8 @@ func (r *HarnessRunReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 			}
 			return ctrl.Result{}, err
 		}
-		if err := controllerutil.SetControllerReference(&sess, updated, r.Scheme); err == nil {
+		sess = &sessObj
+		if err := controllerutil.SetControllerReference(sess, updated, r.Scheme); err == nil {
 			changedMeta = true
 		}
 		now := metav1.NewTime(r.Clock.Now())
@@ -180,7 +184,25 @@ func (r *HarnessRunReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		}
 
 		if updated.Status.PodName == "" && updated.DeletionTimestamp.IsZero() {
-			pod := buildHarnessPod(updated)
+			if sess != nil {
+				if err := ensureSessionWorkspacePVC(ctx, r.Client, r.Scheme, sess); err != nil {
+					return ctrl.Result{}, err
+				}
+			}
+
+			egressMode := updated.Spec.EgressMode
+			if strings.TrimSpace(egressMode) == "" && sess != nil {
+				egressMode = strings.TrimSpace(sess.Annotations[AnnotationEgressMode])
+			}
+			if err := ensureRunEgressNetworkPolicy(ctx, r.Client, r.Scheme, updated, egressMode); err != nil {
+				return ctrl.Result{}, err
+			}
+
+			workspacePVC := ""
+			if sess != nil {
+				workspacePVC = sessionWorkspacePVCName(sess.Name)
+			}
+			pod := buildHarnessPod(updated, workspacePVC)
 			if err := controllerutil.SetControllerReference(updated, pod, r.Scheme); err != nil {
 				return ctrl.Result{}, err
 			}
@@ -268,6 +290,9 @@ func (r *HarnessRunReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 
 	return ctrl.Result{}, nil
 }
+
+// Ensure networkingv1 is included in the operator scheme (defensive check).
+var _ = networkingv1.NetworkPolicy{}
 
 func updateStatusFromPod(run *operatorv1alpha1.HarnessRun, pod *corev1.Pod, now time.Time) (bool, ctrl.Result, bool) {
 	changed := false
