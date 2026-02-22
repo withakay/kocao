@@ -1,0 +1,13 @@
+{
+  "changeId": "001-01_bootstrap-control-plane",
+  "iteration": 1,
+  "history": [
+    {
+      "timestamp": 1771718693001,
+      "duration": 54504,
+      "completionPromiseFound": false,
+      "fileChangesCount": 15
+    }
+  ],
+  "contextFile": ".ito/.state/ralph/001-01_bootstrap-control-plane/context.md"
+}
