@@ -33,9 +33,12 @@ bootstrap: tools
 .PHONY: tools
 tools:
 	@mkdir -p "$(LOCALBIN)"
-	@if [ -x "$(KIND)" ]; then echo "kind already installed: $(KIND)"; exit 0; fi
-	@echo "installing kind to $(KIND)"
-	GOBIN="$(LOCALBIN)" go install sigs.k8s.io/kind@v0.27.0
+	@if [ -x "$(KIND)" ]; then \
+		echo "kind already installed: $(KIND)"; \
+	else \
+		echo "installing kind to $(KIND)"; \
+		GOBIN="$(LOCALBIN)" go install sigs.k8s.io/kind@v0.27.0; \
+	fi
 
 .PHONY: test
 test:
@@ -59,11 +62,11 @@ build:
 
 .PHONY: kind-up
 kind-up: tools
-	KIND_CLUSTER_NAME="$(KIND_CLUSTER_NAME)" KIND_BIN="$(KIND)" ./hack/kind/up.sh
+	KIND_CLUSTER_NAME="$(KIND_CLUSTER_NAME)" KIND_BIN="$(KIND)" bash ./hack/kind/up.sh
 
 .PHONY: kind-down
 kind-down: tools
-	KIND_CLUSTER_NAME="$(KIND_CLUSTER_NAME)" KIND_BIN="$(KIND)" ./hack/kind/down.sh
+	KIND_CLUSTER_NAME="$(KIND_CLUSTER_NAME)" KIND_BIN="$(KIND)" bash ./hack/kind/down.sh
 
 .PHONY: images
 images:
@@ -72,8 +75,8 @@ images:
 
 .PHONY: kind-load-images
 kind-load-images: tools
-	KIND_CLUSTER_NAME="$(KIND_CLUSTER_NAME)" KIND_BIN="$(KIND)" ./hack/kind/load-image.sh "$(API_IMAGE):$(IMAGE_TAG)"
-	KIND_CLUSTER_NAME="$(KIND_CLUSTER_NAME)" KIND_BIN="$(KIND)" ./hack/kind/load-image.sh "$(OPERATOR_IMAGE):$(IMAGE_TAG)"
+	KIND_CLUSTER_NAME="$(KIND_CLUSTER_NAME)" KIND_BIN="$(KIND)" bash ./hack/kind/load-image.sh "$(API_IMAGE):$(IMAGE_TAG)"
+	KIND_CLUSTER_NAME="$(KIND_CLUSTER_NAME)" KIND_BIN="$(KIND)" bash ./hack/kind/load-image.sh "$(OPERATOR_IMAGE):$(IMAGE_TAG)"
 
 .PHONY: deploy
 deploy:

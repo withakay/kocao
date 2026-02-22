@@ -17,3 +17,8 @@ fi
 
 echo "creating kind cluster: ${KIND_CLUSTER_NAME}"
 "$KIND_BIN" create cluster --name "$KIND_CLUSTER_NAME" --config "$CONFIG_FILE"
+
+if command -v kubectl >/dev/null 2>&1; then
+	echo "waiting for cluster nodes to be Ready"
+	kubectl wait --for=condition=Ready nodes --all --timeout=180s
+fi
