@@ -15,6 +15,7 @@ help:
 	@printf "%s\n" "Targets:" \
 		"  bootstrap           Install tools + download deps" \
 		"  tools               Install kind locally" \
+		"  ci                  Run lint + tests" \
 		"  test                Run Go tests" \
 		"  lint                gofmt (check) + go vet" \
 		"  build               Build Go binaries" \
@@ -45,6 +46,9 @@ tools:
 .PHONY: test
 test:
 	go test ./...
+
+.PHONY: ci
+ci: lint test
 
 .PHONY: lint
 lint:
