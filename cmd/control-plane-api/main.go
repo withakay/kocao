@@ -11,6 +11,14 @@ import (
 	"time"
 
 	"github.com/withakay/kocao/internal/config"
+	"github.com/withakay/kocao/internal/controlplaneapi"
+	operatorv1alpha1 "github.com/withakay/kocao/internal/operator/api/v1alpha1"
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 func main() {
@@ -20,23 +28,31 @@ func main() {
 		os.Exit(1)
 	}
 
-	mux := http.NewServeMux()
-	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("ok"))
-	})
-	mux.HandleFunc("/readyz", func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("ready"))
-	})
-	mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("kocao control-plane api"))
-	})
+	ns := cfg.Namespace
+	if ns == "" {
+		ns = "default"
+	}
+
+	scheme := runtime.NewScheme()
+	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
+	utilruntime.Must(corev1.AddToScheme(scheme))
+	utilruntime.Must(operatorv1alpha1.AddToScheme(scheme))
+
+	k8s, err := client.New(ctrl.GetConfigOrDie(), client.Options{Scheme: scheme})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "k8s client error: %v\n", err)
+		os.Exit(1)
+	}
+
+	api, err := controlplaneapi.New(ns, cfg.DBPath, cfg.BootstrapToken, k8s)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "api init error: %v\n", err)
+		os.Exit(1)
+	}
 
 	srv := &http.Server{
 		Addr:              cfg.HTTPAddr,
-		Handler:           mux,
+		Handler:           api.Handler(),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 

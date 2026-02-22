@@ -12,6 +12,11 @@ import (
 type Runtime struct {
 	Env      string
 	HTTPAddr string
+	DBPath   string
+
+	// BootstrapToken, when set, is inserted (if missing) into the token store with
+	// wildcard scopes. Use this for initial bring-up only.
+	BootstrapToken string
 	// Namespace is required when running in-cluster.
 	Namespace string
 }
@@ -48,10 +53,19 @@ func LoadFrom(getenv func(string) string) (Runtime, error) {
 		return Runtime{}, fmt.Errorf("namespace required in-cluster: set POD_NAMESPACE (recommended) or CP_NAMESPACE")
 	}
 
+	dbPath := strings.TrimSpace(getenv("CP_DB_PATH"))
+	if dbPath == "" {
+		dbPath = "kocao.db"
+	}
+
+	bootstrapToken := strings.TrimSpace(getenv("CP_BOOTSTRAP_TOKEN"))
+
 	return Runtime{
-		Env:       env,
-		HTTPAddr:  httpAddr,
-		Namespace: ns,
+		Env:            env,
+		HTTPAddr:       httpAddr,
+		DBPath:         dbPath,
+		BootstrapToken: bootstrapToken,
+		Namespace:      ns,
 	}, nil
 }
 
