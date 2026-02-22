@@ -16,6 +16,8 @@ var openAPISpec = []byte(`{
     "/api/v1/runs/{runID}/stop": {"post": {"security": [{"bearerAuth": []}] }},
     "/api/v1/runs/{runID}/resume": {"post": {"security": [{"bearerAuth": []}] }},
     "/api/v1/sessions/{sessionID}/attach-control": {"patch": {"security": [{"bearerAuth": []}] }},
+    "/api/v1/sessions/{sessionID}/attach-token": {"post": {"security": [{"bearerAuth": []}] }},
+    "/api/v1/sessions/{sessionID}/attach": {"get": {"security": [{"bearerAuth": []}] }},
     "/api/v1/sessions/{sessionID}/egress-override": {"patch": {"security": [{"bearerAuth": []}] }},
     "/api/v1/audit": {"get": {"security": [{"bearerAuth": []}] }}
   },

@@ -27,7 +27,7 @@ func newTestAPI(t *testing.T) (*API, func()) {
 
 	k8s := fake.NewClientBuilder().WithScheme(scheme).Build()
 
-	api, err := New("test-ns", "", "", k8s)
+	api, err := New("test-ns", "", "", nil, k8s)
 	if err != nil {
 		t.Fatalf("New() error: %v", err)
 	}

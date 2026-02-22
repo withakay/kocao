@@ -7,12 +7,15 @@ import (
 	"errors"
 	"strings"
 	"sync"
+	"time"
 )
 
 type TokenRecord struct {
-	ID     string
-	Hash   string
-	Scopes string
+	ID        string
+	Hash      string
+	Scopes    string
+	ExpiresAt time.Time
+	Claims    map[string]string
 }
 
 type TokenStore struct {
@@ -36,7 +39,11 @@ func (t *TokenStore) EnsureBootstrapToken(_ context.Context, raw string) error {
 	return t.Create(context.Background(), "bootstrap", raw, []string{"*"})
 }
 
-func (t *TokenStore) Create(_ context.Context, id, raw string, scopes []string) error {
+func (t *TokenStore) Create(ctx context.Context, id, raw string, scopes []string) error {
+	return t.CreateWithClaims(ctx, id, raw, scopes, time.Time{}, nil)
+}
+
+func (t *TokenStore) CreateWithClaims(_ context.Context, id, raw string, scopes []string, expiresAt time.Time, claims map[string]string) error {
 	if strings.TrimSpace(id) == "" {
 		return errors.New("token id required")
 	}
@@ -54,7 +61,14 @@ func (t *TokenStore) Create(_ context.Context, id, raw string, scopes []string) 
 	if _, exists := t.byHash[h]; exists {
 		return nil
 	}
-	t.byHash[h] = TokenRecord{ID: id, Hash: h, Scopes: joined}
+	var copied map[string]string
+	if len(claims) != 0 {
+		copied = map[string]string{}
+		for k, v := range claims {
+			copied[k] = v
+		}
+	}
+	t.byHash[h] = TokenRecord{ID: id, Hash: h, Scopes: joined, ExpiresAt: expiresAt, Claims: copied}
 	return nil
 }
 
@@ -67,6 +81,12 @@ func (t *TokenStore) Lookup(_ context.Context, raw string) (*TokenRecord, error)
 	rec, ok := t.byHash[h]
 	t.mu.RUnlock()
 	if !ok {
+		return nil, nil
+	}
+	if !rec.ExpiresAt.IsZero() && time.Now().After(rec.ExpiresAt) {
+		t.mu.Lock()
+		delete(t.byHash, h)
+		t.mu.Unlock()
 		return nil, nil
 	}
 	return &rec, nil

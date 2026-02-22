@@ -7,6 +7,7 @@ import (
 	"github.com/withakay/kocao/internal/operator/controllers"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/rest"
 	"net/http"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"strconv"
@@ -25,6 +26,7 @@ type API struct {
 	Auth      *Authenticator
 	Tokens    *TokenStore
 	Audit     *AuditStore
+	Attach    *AttachService
 }
 
 func (a *API) Handler() http.Handler {
@@ -70,6 +72,12 @@ func (a *API) serveAPI(w http.ResponseWriter, r *http.Request) {
 		return
 	case len(segs) == 3 && segs[0] == "sessions" && segs[2] == "attach-control":
 		a.handleAttachControl(w, r, segs[1])
+		return
+	case len(segs) == 3 && segs[0] == "sessions" && segs[2] == "attach-token":
+		a.handleAttachToken(w, r, segs[1])
+		return
+	case len(segs) == 3 && segs[0] == "sessions" && segs[2] == "attach":
+		a.handleAttachWS(w, r, segs[1])
 		return
 	case len(segs) == 3 && segs[0] == "sessions" && segs[2] == "egress-override":
 		a.handleEgressOverride(w, r, segs[1])
@@ -566,7 +574,7 @@ func validateAPI(a *API) error {
 	return nil
 }
 
-func New(namespace, auditPath, bootstrapToken string, k8s client.Client) (*API, error) {
+func New(namespace, auditPath, bootstrapToken string, restCfg *rest.Config, k8s client.Client) (*API, error) {
 	tokens := newTokenStore()
 	if err := tokens.EnsureBootstrapToken(context.Background(), bootstrapToken); err != nil {
 		return nil, err
@@ -577,6 +585,9 @@ func New(namespace, auditPath, bootstrapToken string, k8s client.Client) (*API, 
 		Auth:      newAuthenticator(tokens),
 		Tokens:    tokens,
 		Audit:     newAuditStore(auditPath),
+	}
+	if restCfg != nil {
+		api.Attach = newAttachService(namespace, restCfg, k8s, tokens, api.Audit)
 	}
 	if err := validateAPI(api); err != nil {
 		return nil, err
