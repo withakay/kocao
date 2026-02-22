@@ -5,7 +5,10 @@ namespace: kocao-system
 
 resources:
   - namespace.yaml
+  - crd-session.yaml
+  - crd-harnessrun.yaml
   - serviceaccount.yaml
+  - operator-rbac.yaml
   - api-deployment.yaml
   - api-service.yaml
   - operator-deployment.yaml
