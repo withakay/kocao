@@ -27,6 +27,15 @@ go.work.sum
 # env file
 .env
 
+# Local tools/output
+.local/
+bin/
+
+# Node
+web/node_modules/
+web/dist/
+web/.vite/
+
 # Editor/IDE
 # .idea/
 # .vscode/

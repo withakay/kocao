@@ -1,0 +1,24 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../../base
+
+configMapGenerator:
+  - name: control-plane-config
+    envs:
+      - config.env
+
+generatorOptions:
+  disableNameSuffixHash: true
+
+images:
+  - name: kocao/control-plane-api
+    newName: kocao/control-plane-api
+    newTag: dev
+  - name: kocao/control-plane-operator
+    newName: kocao/control-plane-operator
+    newTag: dev
+
+patches:
+  - path: patch-use-configmap.yaml
