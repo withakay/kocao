@@ -30,8 +30,8 @@ ______________________________________________________________________
 - **Action**: Introduce `CP_AUDIT_PATH` and rename internal fields so audit storage is not mislabeled as “DB”. Define precedence and (optionally) keep `CP_DB_PATH` as a deprecated alias.
 - **Verify**: `make lint && make test`
 - **Done When**: Audit log path is configured via `CP_AUDIT_PATH` and tests cover precedence/defaulting.
-- **Updated At**: 2026-02-22
-- **Status**: [ ] pending
+- **Updated At**: 2026-02-23
+- **Status**: [>] in-progress
 
 ### Task 1.2: Split service accounts and tighten RBAC (including `pods/exec`)
 
