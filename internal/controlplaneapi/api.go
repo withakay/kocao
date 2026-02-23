@@ -17,7 +17,6 @@ import (
 const (
 	annotationAttachEnabled = "kocao.withakay.github.com/attach-enabled"
 	annotationEgressMode    = "kocao.withakay.github.com/egress-mode"
-	annotationEgressHosts   = "kocao.withakay.github.com/egress-allowed-hosts"
 )
 
 type API struct {
@@ -522,7 +521,15 @@ func (a *API) handleEgressOverridePatch(w http.ResponseWriter, r *http.Request, 
 		writeJSONError(w, err)
 		return
 	}
-	mode := strings.TrimSpace(req.Mode)
+	if len(req.AllowedHosts) != 0 {
+		writeError(w, http.StatusBadRequest, "allowedHosts is not supported: host-based egress allowlisting is not enforced")
+		return
+	}
+	mode, ok := normalizeRunEgressMode(req.Mode)
+	if !ok {
+		writeError(w, http.StatusBadRequest, "invalid mode")
+		return
+	}
 	if mode == "" {
 		writeError(w, http.StatusBadRequest, "mode required")
 		return
@@ -541,16 +548,11 @@ func (a *API) handleEgressOverridePatch(w http.ResponseWriter, r *http.Request, 
 		updated.Annotations = map[string]string{}
 	}
 	updated.Annotations[annotationEgressMode] = mode
-	if len(req.AllowedHosts) != 0 {
-		updated.Annotations[annotationEgressHosts] = strings.Join(req.AllowedHosts, ",")
-	} else {
-		delete(updated.Annotations, annotationEgressHosts)
-	}
 	if err := a.K8s.Patch(r.Context(), updated, client.MergeFrom(&sess)); err != nil {
 		writeError(w, http.StatusInternalServerError, "update egress override failed")
 		return
 	}
-	a.Audit.Append(r.Context(), principal(r.Context()), "egress-override.changed", "session", sessionID, "allowed", map[string]any{"mode": mode, "allowedHosts": req.AllowedHosts})
+	a.Audit.Append(r.Context(), principal(r.Context()), "egress-override.changed", "session", sessionID, "allowed", map[string]any{"mode": mode})
 	writeJSON(w, http.StatusOK, map[string]any{"updated": true})
 }
 

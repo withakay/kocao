@@ -2,6 +2,8 @@ package controllers
 
 import (
 	"context"
+	"errors"
+	"net/netip"
 	"os"
 	"strings"
 
@@ -12,6 +14,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/intstr"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 )
@@ -44,28 +47,35 @@ func runEgressNetworkPolicyName(runName string) string {
 	return base + "-egress"
 }
 
-func githubEgressCIDRs() []string {
-	v := strings.TrimSpace(os.Getenv(envGitHubEgressCIDRs))
+func parseGitHubEgressCIDRs(v string) ([]string, []string) {
+	v = strings.TrimSpace(v)
 	if v == "" {
-		return nil
+		return nil, nil
 	}
 	parts := strings.Split(v, ",")
-	out := make([]string, 0, len(parts))
+	valid := make([]string, 0, len(parts))
+	invalid := make([]string, 0)
 	for _, p := range parts {
 		p = strings.TrimSpace(p)
 		if p == "" {
 			continue
 		}
-		// Very lightweight validation: require a slash.
-		if !strings.Contains(p, "/") {
+		prefix, err := netip.ParsePrefix(p)
+		if err != nil {
+			invalid = append(invalid, p)
 			continue
 		}
-		out = append(out, p)
+		valid = append(valid, prefix.String())
 	}
-	return out
+	return valid, invalid
 }
 
-func desiredRunEgressNetworkPolicy(run *operatorv1alpha1.HarnessRun, mode string) *networkingv1.NetworkPolicy {
+func githubEgressCIDRs() ([]string, []string) {
+	v := os.Getenv(envGitHubEgressCIDRs)
+	return parseGitHubEgressCIDRs(v)
+}
+
+func desiredRunEgressNetworkPolicy(run *operatorv1alpha1.HarnessRun, mode string, githubCIDRs []string) *networkingv1.NetworkPolicy {
 	labels := map[string]string{
 		"app.kubernetes.io/managed-by":  "kocao-control-plane-operator",
 		"app.kubernetes.io/name":        "kocao-harness-egress",
@@ -104,10 +114,9 @@ func desiredRunEgressNetworkPolicy(run *operatorv1alpha1.HarnessRun, mode string
 		{Protocol: protoPtr(corev1.ProtocolTCP), Port: intstrPtr(443)},
 		{Protocol: protoPtr(corev1.ProtocolTCP), Port: intstrPtr(22)},
 	}
-	cidrs := githubEgressCIDRs()
-	if len(cidrs) != 0 {
-		peers := make([]networkingv1.NetworkPolicyPeer, 0, len(cidrs))
-		for _, cidr := range cidrs {
+	if len(githubCIDRs) != 0 {
+		peers := make([]networkingv1.NetworkPolicyPeer, 0, len(githubCIDRs))
+		for _, cidr := range githubCIDRs {
 			c := cidr
 			peers = append(peers, networkingv1.NetworkPolicyPeer{IPBlock: &networkingv1.IPBlock{CIDR: c}})
 		}
@@ -121,7 +130,18 @@ func desiredRunEgressNetworkPolicy(run *operatorv1alpha1.HarnessRun, mode string
 }
 
 func ensureRunEgressNetworkPolicy(ctx context.Context, c client.Client, scheme *runtime.Scheme, run *operatorv1alpha1.HarnessRun, mode string) error {
-	desired := desiredRunEgressNetworkPolicy(run, mode)
+	githubCIDRs, invalid := githubEgressCIDRs()
+	if len(invalid) != 0 {
+		ctrl.LoggerFrom(ctx).WithName("egress-policy").Error(
+			errors.New("invalid GitHub CIDR configuration"),
+			"invalid CP_GITHUB_EGRESS_CIDRS entries; ignoring invalid entries",
+			"envVar", envGitHubEgressCIDRs,
+			"invalid", invalid,
+			"validCount", len(githubCIDRs),
+		)
+	}
+
+	desired := desiredRunEgressNetworkPolicy(run, mode, githubCIDRs)
 	if err := controllerutil.SetControllerReference(run, desired, scheme); err != nil {
 		return err
 	}

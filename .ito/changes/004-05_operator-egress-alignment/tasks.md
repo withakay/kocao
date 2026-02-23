@@ -30,8 +30,8 @@ ______________________________________________________________________
 - **Action**: Update the egress override endpoint to reject `allowedHosts` (or any other unenforced fields) with a clear 400 error.
 - **Verify**: `make lint && make test`
 - **Done When**: API does not accept unenforced egress controls.
-- **Updated At**: 2026-02-22
-- **Status**: [ ] pending
+- **Updated At**: 2026-02-23
+- **Status**: [>] in-progress
 
 ### Task 1.2: Validate GitHub CIDR configuration robustly
 
@@ -40,8 +40,8 @@ ______________________________________________________________________
 - **Action**: Parse `CP_GITHUB_EGRESS_CIDRS` using CIDR parsing, and make invalid entries visible (log/condition/audit).
 - **Verify**: `make lint && make test`
 - **Done When**: Invalid CIDRs are not silently ignored and tests cover parsing behavior.
-- **Updated At**: 2026-02-22
-- **Status**: [ ] pending
+- **Updated At**: 2026-02-23
+- **Status**: [>] in-progress
 
 ______________________________________________________________________
 
