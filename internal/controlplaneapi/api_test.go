@@ -7,14 +7,17 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 
+	"github.com/gorilla/websocket"
 	operatorv1alpha1 "github.com/withakay/kocao/internal/operator/api/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
@@ -29,12 +32,30 @@ func newTestAPI(t *testing.T) (*API, func()) {
 
 	k8s := fake.NewClientBuilder().WithScheme(scheme).Build()
 
-	api, err := New("test-ns", "", "", nil, k8s)
+	api, err := New("test-ns", "", "", nil, k8s, Options{Env: "test"})
 	if err != nil {
 		t.Fatalf("New() error: %v", err)
 	}
 	cleanup := func() {}
 	return api, cleanup
+}
+
+func newTestAPIWithAttachOptions(t *testing.T, opts Options) (*API, func()) {
+	t.Helper()
+
+	scheme := runtime.NewScheme()
+	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
+	utilruntime.Must(corev1.AddToScheme(scheme))
+	utilruntime.Must(operatorv1alpha1.AddToScheme(scheme))
+
+	k8s := fake.NewClientBuilder().WithScheme(scheme).Build()
+	restCfg := &rest.Config{Host: "https://example.invalid"}
+
+	api, err := New("test-ns", "", "", restCfg, k8s, opts)
+	if err != nil {
+		t.Fatalf("New() error: %v", err)
+	}
+	return api, func() {}
 }
 
 func doJSON(t *testing.T, c *http.Client, method, url, token string, body any) (*http.Response, []byte) {
@@ -283,4 +304,59 @@ func TestLifecycle_SessionRunControlsAndAudit(t *testing.T) {
 	if !sawCred {
 		t.Fatalf("expected credential.use audit event")
 	}
+}
+
+func TestAttachWS_OriginAllowlist(t *testing.T) {
+	api, cleanup := newTestAPIWithAttachOptions(t, Options{Env: "prod", AttachWSAllowedOrigins: []string{"https://allowed.example"}})
+	defer cleanup()
+
+	if err := api.Tokens.Create(context.Background(), "t-full", "full", []string{"session:write", "session:read", "run:read", "control:write"}); err != nil {
+		t.Fatalf("create token: %v", err)
+	}
+
+	srv := httptest.NewServer(api.Handler())
+	defer srv.Close()
+
+	resp, b := doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/sessions", "full", map[string]any{"repoURL": "https://example.com/repo"})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create session status = %d (body=%s)", resp.StatusCode, string(b))
+	}
+	var sess sessionResponse
+	_ = json.Unmarshal(b, &sess)
+
+	resp, _ = doJSON(t, srv.Client(), http.MethodPatch, srv.URL+"/api/v1/sessions/"+sess.ID+"/attach-control", "full", map[string]any{"enabled": true})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("attach-control status = %d, want 200", resp.StatusCode)
+	}
+
+	resp, b = doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/sessions/"+sess.ID+"/attach-token", "full", map[string]any{"role": "viewer"})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("attach-token status = %d (body=%s)", resp.StatusCode, string(b))
+	}
+	var tok attachTokenResponse
+	_ = json.Unmarshal(b, &tok)
+
+	ws := wsURL(srv.URL, "/api/v1/sessions/"+sess.ID+"/attach", url.Values{"token": []string{tok.Token}})
+
+	_, respWS, err := websocket.DefaultDialer.Dial(ws, http.Header{"Origin": []string{"https://evil.example"}})
+	if err == nil {
+		_ = respWS.Body.Close()
+		t.Fatalf("expected dial error")
+	}
+	if respWS == nil || respWS.StatusCode != http.StatusForbidden {
+		code := 0
+		if respWS != nil {
+			code = respWS.StatusCode
+			_ = respWS.Body.Close()
+		}
+		t.Fatalf("status=%d, want 403", code)
+	}
+	_ = respWS.Body.Close()
+
+	conn, _, err := websocket.DefaultDialer.Dial(ws, http.Header{"Origin": []string{"https://allowed.example"}})
+	if err != nil {
+		t.Fatalf("dial allowed origin: %v", err)
+	}
+	defer func() { _ = conn.Close() }()
+	_ = readMsgType(t, conn, "hello")
 }

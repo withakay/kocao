@@ -30,8 +30,8 @@ ______________________________________________________________________
 - **Action**: Add websocket `SetReadLimit`, read deadlines, and ping/pong handling. Add tests that prove oversized messages and idle connections are handled safely.
 - **Verify**: `make lint && make test`
 - **Done When**: Attach websocket resists basic abuse patterns and tests cover the limits.
-- **Updated At**: 2026-02-22
-- **Status**: [ ] pending
+- **Updated At**: 2026-02-23
+- **Status**: [x] complete
 
 ### Task 1.2: Enforce websocket Origin allowlist
 
@@ -40,8 +40,8 @@ ______________________________________________________________________
 - **Action**: Add config for allowed Origins and wire Origin validation into the websocket upgrader. Default strict in prod, permissive only where necessary for local dev.
 - **Verify**: `make lint && make test`
 - **Done When**: Unexpected Origins are rejected and tests cover allow/deny behavior.
-- **Updated At**: 2026-02-22
-- **Status**: [ ] pending
+- **Updated At**: 2026-02-23
+- **Status**: [x] complete
 
 ______________________________________________________________________
 
@@ -56,8 +56,8 @@ ______________________________________________________________________
 - **Action**: Add a browser-friendly attach flow (prefer HttpOnly cookie) so the UI can establish a websocket connection without placing tokens in the URL.
 - **Verify**: `make lint && make test && (cd web && pnpm test)`
 - **Done When**: UI attach works without URL tokens, and tests verify the new behavior.
-- **Updated At**: 2026-02-22
-- **Status**: [ ] pending
+- **Updated At**: 2026-02-23
+- **Status**: [x] complete
 
 ### Task 2.2: Expand auditing for attach events
 
@@ -66,8 +66,8 @@ ______________________________________________________________________
 - **Action**: Record attach connect/disconnect, control acquisition, and stdin usage with minimally sensitive metadata.
 - **Verify**: `make lint && make test`
 - **Done When**: Attach activity is visible in audit output and tests cover key events.
-- **Updated At**: 2026-02-22
-- **Status**: [ ] pending
+- **Updated At**: 2026-02-23
+- **Status**: [x] complete
 
 ______________________________________________________________________
 
@@ -79,5 +79,5 @@ ______________________________________________________________________
 - **Dependencies**: All Wave 2 tasks
 - **Action**: Review the implementation before proceeding
 - **Done When**: User confirms implementation is correct
-- **Updated At**: 2026-02-22
-- **Status**: [ ] pending
+- **Updated At**: 2026-02-23
+- **Status**: [x] complete

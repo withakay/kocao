@@ -1,7 +1,7 @@
 import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { http, HttpResponse } from 'msw'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { server } from '../test/server'
 import { App } from './App'
 
@@ -97,5 +97,75 @@ describe('workflow-ui-github', () => {
     expect(prLink).toHaveAttribute('href', 'https://github.com/withakay/kocao/pull/123')
     within(card as HTMLElement).getByText('feature/mvp-ui')
     within(card as HTMLElement).getByText('merged')
+  })
+})
+
+describe('attach-ui', () => {
+  it('establishes websocket without URL token', async () => {
+    localStorage.setItem('kocao.apiToken', 't-full')
+    window.location.hash = '#/sessions/sess-1/attach?role=viewer'
+
+    let cookieCalls = 0
+    server.use(
+      http.get('/api/v1/audit', () => HttpResponse.json({ events: [] })),
+      http.get('/api/v1/runs/:id', () => new HttpResponse('not found', { status: 404 })),
+      http.post('/api/v1/sessions/:id/attach-cookie', (ctx: any) => {
+        cookieCalls += 1
+        return HttpResponse.json(
+          {
+            expiresAt: new Date().toISOString(),
+            sessionID: String(ctx.params.id),
+            clientID: 'cli-1',
+            role: 'viewer'
+          },
+          { status: 201 }
+        )
+      })
+    )
+
+    const urls: string[] = []
+
+    class MockWebSocket {
+      readonly url: string
+      readyState = 1
+      onopen: ((ev: any) => void) | null = null
+      onmessage: ((ev: any) => void) | null = null
+      onerror: ((ev: any) => void) | null = null
+      onclose: ((ev: any) => void) | null = null
+
+      constructor(url: string) {
+        this.url = url
+        urls.push(url)
+        setTimeout(() => {
+          this.onopen?.({})
+        }, 0)
+      }
+
+      send(_data: any) {
+        // no-op
+      }
+
+      close() {
+        this.readyState = 3
+        this.onclose?.({})
+      }
+    }
+
+    vi.stubGlobal('WebSocket', MockWebSocket)
+    try {
+      const { unmount } = render(<App />)
+
+      await screen.findByText('connected')
+      expect(cookieCalls).toBeGreaterThan(0)
+      expect(urls.length).toBeGreaterThan(0)
+      for (const u of urls) {
+        expect(u).not.toContain('token=')
+      }
+      expect(urls[urls.length - 1]).toContain('/api/v1/sessions/sess-1/attach')
+
+      unmount()
+    } finally {
+      vi.unstubAllGlobals()
+    }
   })
 })

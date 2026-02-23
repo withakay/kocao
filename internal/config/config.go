@@ -14,6 +14,11 @@ type Runtime struct {
 	HTTPAddr  string
 	AuditPath string
 
+	// AttachWSAllowedOrigins is a comma-separated allowlist for websocket Origin validation.
+	// Entries MUST be full origins (e.g. "https://kocao.example.com", "http://localhost:5173").
+	// When empty, the control-plane applies environment defaults (strict in prod).
+	AttachWSAllowedOrigins []string
+
 	// BootstrapToken, when set, is inserted (if missing) into the token store with
 	// wildcard scopes. Use this for initial bring-up only.
 	BootstrapToken string
@@ -67,12 +72,24 @@ func LoadFrom(getenv func(string) string) (Runtime, error) {
 		return Runtime{}, fmt.Errorf("CP_BOOTSTRAP_TOKEN is not allowed when CP_ENV=prod")
 	}
 
+	var allowedOrigins []string
+	if raw := strings.TrimSpace(getenv("CP_ATTACH_WS_ALLOWED_ORIGINS")); raw != "" {
+		for _, part := range strings.Split(raw, ",") {
+			p := strings.TrimSpace(part)
+			if p == "" {
+				continue
+			}
+			allowedOrigins = append(allowedOrigins, p)
+		}
+	}
+
 	return Runtime{
-		Env:            env,
-		HTTPAddr:       httpAddr,
-		AuditPath:      auditPath,
-		BootstrapToken: bootstrapToken,
-		Namespace:      ns,
+		Env:                    env,
+		HTTPAddr:               httpAddr,
+		AuditPath:              auditPath,
+		AttachWSAllowedOrigins: allowedOrigins,
+		BootstrapToken:         bootstrapToken,
+		Namespace:              ns,
 	}, nil
 }
 

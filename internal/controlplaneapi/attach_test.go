@@ -2,10 +2,12 @@ package controlplaneapi
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 	"time"
 
@@ -18,6 +20,25 @@ import (
 	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
+
+func waitForAudit(t *testing.T, api *API, action string, outcome string) AuditEvent {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		evs, err := api.Audit.List(context.Background(), 500)
+		if err != nil {
+			t.Fatalf("audit list: %v", err)
+		}
+		for _, e := range evs {
+			if e.Action == action && e.Outcome == outcome {
+				return e
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for audit action=%q outcome=%q", action, outcome)
+	return AuditEvent{}
+}
 
 func newTestAPIWithAttach(t *testing.T) (*API, func()) {
 	t.Helper()
@@ -32,7 +53,7 @@ func newTestAPIWithAttach(t *testing.T) (*API, func()) {
 	// This host is never dialed in tests unless a backend exec is started.
 	restCfg := &rest.Config{Host: "https://example.invalid"}
 
-	api, err := New("test-ns", "", "", restCfg, k8s)
+	api, err := New("test-ns", "", "", restCfg, k8s, Options{Env: "test"})
 	if err != nil {
 		t.Fatalf("New() error: %v", err)
 	}
@@ -232,4 +253,247 @@ func TestAttachToken_RoleEnforcementAndTakeControl(t *testing.T) {
 	if state3.DriverID != driverTok2.ClientID {
 		t.Fatalf("driver after expiry = %q, want %q", state3.DriverID, driverTok2.ClientID)
 	}
+}
+
+func TestAttachWS_ReadLimit_ClosesConnection(t *testing.T) {
+	oldLimit := attachWSReadLimit
+	oldPongWait := attachWSPongWait
+	oldPingPeriod := attachWSPingPeriod
+	oldWriteWait := attachWSWriteWait
+	attachWSReadLimit = 64
+	attachWSPongWait = 500 * time.Millisecond
+	attachWSPingPeriod = 100 * time.Millisecond
+	attachWSWriteWait = 200 * time.Millisecond
+	t.Cleanup(func() {
+		attachWSReadLimit = oldLimit
+		attachWSPongWait = oldPongWait
+		attachWSPingPeriod = oldPingPeriod
+		attachWSWriteWait = oldWriteWait
+	})
+
+	api, cleanup := newTestAPIWithAttach(t)
+	defer cleanup()
+
+	if err := api.Tokens.Create(context.Background(), "t-full", "full", []string{"session:write", "run:read", "control:write", "run:write", "session:read"}); err != nil {
+		t.Fatalf("create token: %v", err)
+	}
+
+	srv := httptest.NewServer(api.Handler())
+	defer srv.Close()
+
+	resp, b := doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/sessions", "full", map[string]any{"repoURL": "https://example.com/repo"})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create session status = %d (body=%s)", resp.StatusCode, string(b))
+	}
+	var sess sessionResponse
+	_ = json.Unmarshal(b, &sess)
+
+	resp, _ = doJSON(t, srv.Client(), http.MethodPatch, srv.URL+"/api/v1/sessions/"+sess.ID+"/attach-control", "full", map[string]any{"enabled": true})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("attach-control status = %d, want 200", resp.StatusCode)
+	}
+
+	resp, b = doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/sessions/"+sess.ID+"/attach-token", "full", map[string]any{"role": "driver"})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("attach-token status = %d (body=%s)", resp.StatusCode, string(b))
+	}
+	var tok attachTokenResponse
+	_ = json.Unmarshal(b, &tok)
+
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL(srv.URL, "/api/v1/sessions/"+sess.ID+"/attach", url.Values{"token": []string{tok.Token}}), nil)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer func() { _ = conn.Close() }()
+	_ = readMsgType(t, conn, "hello")
+
+	big := strings.Repeat("a", int(attachWSReadLimit)+1)
+	if err := conn.WriteMessage(websocket.TextMessage, []byte(big)); err != nil {
+		t.Fatalf("WriteMessage error: %v", err)
+	}
+	_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	_, _, err = conn.ReadMessage()
+	if err == nil {
+		t.Fatalf("expected connection close after oversized message")
+	}
+}
+
+func TestAttachWS_IdleWithoutPong_ClosesConnection(t *testing.T) {
+	oldPongWait := attachWSPongWait
+	oldPingPeriod := attachWSPingPeriod
+	oldWriteWait := attachWSWriteWait
+	attachWSPongWait = 200 * time.Millisecond
+	attachWSPingPeriod = 50 * time.Millisecond
+	attachWSWriteWait = 200 * time.Millisecond
+	t.Cleanup(func() {
+		attachWSPongWait = oldPongWait
+		attachWSPingPeriod = oldPingPeriod
+		attachWSWriteWait = oldWriteWait
+	})
+
+	api, cleanup := newTestAPIWithAttach(t)
+	defer cleanup()
+
+	if err := api.Tokens.Create(context.Background(), "t-full", "full", []string{"session:write", "run:read", "control:write", "run:write", "session:read"}); err != nil {
+		t.Fatalf("create token: %v", err)
+	}
+
+	srv := httptest.NewServer(api.Handler())
+	defer srv.Close()
+
+	resp, b := doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/sessions", "full", map[string]any{"repoURL": "https://example.com/repo"})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create session status = %d (body=%s)", resp.StatusCode, string(b))
+	}
+	var sess sessionResponse
+	_ = json.Unmarshal(b, &sess)
+
+	resp, _ = doJSON(t, srv.Client(), http.MethodPatch, srv.URL+"/api/v1/sessions/"+sess.ID+"/attach-control", "full", map[string]any{"enabled": true})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("attach-control status = %d, want 200", resp.StatusCode)
+	}
+
+	resp, b = doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/sessions/"+sess.ID+"/attach-token", "full", map[string]any{"role": "viewer"})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("attach-token status = %d (body=%s)", resp.StatusCode, string(b))
+	}
+	var tok attachTokenResponse
+	_ = json.Unmarshal(b, &tok)
+
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL(srv.URL, "/api/v1/sessions/"+sess.ID+"/attach", url.Values{"token": []string{tok.Token}}), nil)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer func() { _ = conn.Close() }()
+
+	conn.SetPingHandler(func(string) error { return nil })
+	_ = readMsgType(t, conn, "hello")
+
+	_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	_, _, err = conn.ReadMessage()
+	if err == nil {
+		t.Fatalf("expected connection close when client does not pong")
+	}
+}
+
+func TestAttachCookie_IssuesCookieAndAllowsWSWithoutQueryToken(t *testing.T) {
+	api, cleanup := newTestAPIWithAttach(t)
+	defer cleanup()
+
+	if err := api.Tokens.Create(context.Background(), "t-full", "full", []string{"session:write", "session:read", "run:read", "control:write"}); err != nil {
+		t.Fatalf("create token: %v", err)
+	}
+
+	srv := httptest.NewServer(api.Handler())
+	defer srv.Close()
+
+	resp, b := doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/sessions", "full", map[string]any{"repoURL": "https://example.com/repo"})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create session status = %d (body=%s)", resp.StatusCode, string(b))
+	}
+	var sess sessionResponse
+	_ = json.Unmarshal(b, &sess)
+
+	resp, _ = doJSON(t, srv.Client(), http.MethodPatch, srv.URL+"/api/v1/sessions/"+sess.ID+"/attach-control", "full", map[string]any{"enabled": true})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("attach-control status = %d, want 200", resp.StatusCode)
+	}
+
+	resp, b = doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/sessions/"+sess.ID+"/attach-cookie", "full", map[string]any{"role": "viewer"})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("attach-cookie status = %d (body=%s)", resp.StatusCode, string(b))
+	}
+	if strings.Contains(string(b), "token") {
+		t.Fatalf("expected attach-cookie response to omit token")
+	}
+	var issued *http.Cookie
+	for _, c := range resp.Cookies() {
+		if c.Name == attachCookieName {
+			issued = c
+			break
+		}
+	}
+	if issued == nil {
+		t.Fatalf("expected %s cookie", attachCookieName)
+	}
+	if issued.Value == "" {
+		t.Fatalf("expected cookie value")
+	}
+	if issued.Path == "" {
+		t.Fatalf("expected cookie path")
+	}
+
+	h := http.Header{}
+	h.Add("Cookie", issued.Name+"="+issued.Value)
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL(srv.URL, "/api/v1/sessions/"+sess.ID+"/attach", url.Values{}), h)
+	if err != nil {
+		t.Fatalf("dial with cookie: %v", err)
+	}
+	defer func() { _ = conn.Close() }()
+	_ = readMsgType(t, conn, "hello")
+}
+
+func TestAttachWS_AuditsLifecycleControlAndStdin(t *testing.T) {
+	api, cleanup := newTestAPIWithAttach(t)
+	defer cleanup()
+
+	if err := api.Tokens.Create(context.Background(), "t-full", "full", []string{"session:write", "session:read", "run:read", "control:write"}); err != nil {
+		t.Fatalf("create token: %v", err)
+	}
+
+	srv := httptest.NewServer(api.Handler())
+	defer srv.Close()
+
+	resp, b := doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/sessions", "full", map[string]any{"repoURL": "https://example.com/repo"})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create session status = %d (body=%s)", resp.StatusCode, string(b))
+	}
+	var sess sessionResponse
+	_ = json.Unmarshal(b, &sess)
+
+	resp, _ = doJSON(t, srv.Client(), http.MethodPatch, srv.URL+"/api/v1/sessions/"+sess.ID+"/attach-control", "full", map[string]any{"enabled": true})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("attach-control status = %d, want 200", resp.StatusCode)
+	}
+
+	resp, b = doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/sessions/"+sess.ID+"/attach-token", "full", map[string]any{"role": "driver"})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("attach-token status = %d (body=%s)", resp.StatusCode, string(b))
+	}
+	var tok attachTokenResponse
+	_ = json.Unmarshal(b, &tok)
+
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL(srv.URL, "/api/v1/sessions/"+sess.ID+"/attach", url.Values{"token": []string{tok.Token}}), nil)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	_ = readMsgType(t, conn, "hello")
+
+	connect := waitForAudit(t, api, "attach.connect", "allowed")
+	if connect.Actor != "t-full" {
+		t.Fatalf("connect actor=%q, want t-full", connect.Actor)
+	}
+	var meta map[string]any
+	_ = json.Unmarshal(connect.Metadata, &meta)
+	if meta["clientID"] != tok.ClientID {
+		t.Fatalf("connect clientID=%v, want %q", meta["clientID"], tok.ClientID)
+	}
+
+	_ = conn.WriteJSON(attachMsg{Type: "take_control"})
+	_ = readMsgType(t, conn, "state")
+	ctrl := waitForAudit(t, api, "attach.control.acquired", "allowed")
+	_ = json.Unmarshal(ctrl.Metadata, &meta)
+	if meta["clientID"] != tok.ClientID {
+		t.Fatalf("control clientID=%v, want %q", meta["clientID"], tok.ClientID)
+	}
+
+	_ = conn.WriteJSON(attachMsg{Type: "stdin", Data: base64.StdEncoding.EncodeToString([]byte("echo hi\n"))})
+	stdin := waitForAudit(t, api, "attach.stdin", "allowed")
+	_ = json.Unmarshal(stdin.Metadata, &meta)
+	if meta["clientID"] != tok.ClientID {
+		t.Fatalf("stdin clientID=%v, want %q", meta["clientID"], tok.ClientID)
+	}
+
+	_ = conn.Close()
+	_ = waitForAudit(t, api, "attach.disconnect", "allowed")
 }

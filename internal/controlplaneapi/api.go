@@ -21,12 +21,20 @@ const (
 )
 
 type API struct {
+	Env       string
 	Namespace string
 	K8s       client.Client
 	Auth      *Authenticator
 	Tokens    *TokenStore
 	Audit     *AuditStore
 	Attach    *AttachService
+
+	attachOrigins attachOriginAllowlist
+}
+
+type Options struct {
+	Env                    string
+	AttachWSAllowedOrigins []string
 }
 
 func (a *API) Handler() http.Handler {
@@ -117,6 +125,15 @@ func (a *API) serveAPI(w http.ResponseWriter, r *http.Request) {
 		}, func(w http.ResponseWriter, r *http.Request) { a.handleAttachTokenIssue(w, r, sessionID) })
 		return
 	case len(segs) == 3 && segs[0] == "sessions" && segs[2] == "attach-token":
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	case len(segs) == 3 && segs[0] == "sessions" && segs[2] == "attach-cookie" && r.Method == http.MethodPost:
+		sessionID := segs[1]
+		a.serveAuthz(w, r, []string{"run:read"}, func(_ *http.Request) (string, string, string) {
+			return "attach.cookie.issue", "session", sessionID
+		}, func(w http.ResponseWriter, r *http.Request) { a.handleAttachCookieIssue(w, r, sessionID) })
+		return
+	case len(segs) == 3 && segs[0] == "sessions" && segs[2] == "attach-cookie":
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	case len(segs) == 3 && segs[0] == "sessions" && segs[2] == "attach" && r.Method == http.MethodGet:
@@ -568,20 +585,36 @@ func validateAPI(a *API) error {
 	if strings.TrimSpace(a.Namespace) == "" {
 		return errors.New("namespace required")
 	}
+	switch strings.TrimSpace(a.Env) {
+	case "dev", "test", "prod":
+	default:
+		return errors.New("env must be one of dev|test|prod")
+	}
 	return nil
 }
 
-func New(namespace, auditPath, bootstrapToken string, restCfg *rest.Config, k8s client.Client) (*API, error) {
+func New(namespace, auditPath, bootstrapToken string, restCfg *rest.Config, k8s client.Client, opts Options) (*API, error) {
+	env := strings.TrimSpace(opts.Env)
+	if env == "" {
+		env = "dev"
+	}
+	origins, err := newAttachOriginAllowlist(env, opts.AttachWSAllowedOrigins)
+	if err != nil {
+		return nil, err
+	}
+
 	tokens := newTokenStore()
 	if err := tokens.EnsureBootstrapToken(context.Background(), bootstrapToken); err != nil {
 		return nil, err
 	}
 	api := &API{
-		Namespace: namespace,
-		K8s:       k8s,
-		Auth:      newAuthenticator(tokens),
-		Tokens:    tokens,
-		Audit:     newAuditStore(auditPath),
+		Env:           env,
+		Namespace:     namespace,
+		K8s:           k8s,
+		Auth:          newAuthenticator(tokens),
+		Tokens:        tokens,
+		Audit:         newAuditStore(auditPath),
+		attachOrigins: origins,
 	}
 	if restCfg != nil {
 		api.Attach = newAttachService(namespace, restCfg, k8s, tokens, api.Audit)

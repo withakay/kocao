@@ -44,7 +44,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	api, err := controlplaneapi.New(ns, cfg.AuditPath, cfg.BootstrapToken, ctrl.GetConfigOrDie(), k8s)
+	api, err := controlplaneapi.New(ns, cfg.AuditPath, cfg.BootstrapToken, ctrl.GetConfigOrDie(), k8s, controlplaneapi.Options{Env: cfg.Env, AttachWSAllowedOrigins: cfg.AttachWSAllowedOrigins})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "api init error: %v\n", err)
 		os.Exit(1)

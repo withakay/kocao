@@ -32,6 +32,7 @@ type FetchOptions = {
   method?: string
   body?: unknown
   token?: string
+  credentials?: RequestCredentials
 }
 
 export class APIError extends Error {
@@ -57,7 +58,8 @@ async function apiFetch<T>(path: string, opts: FetchOptions = {}): Promise<T> {
   const res = await fetch(path, {
     method: opts.method ?? 'GET',
     headers,
-    body: opts.body === undefined ? undefined : JSON.stringify(opts.body)
+    body: opts.body === undefined ? undefined : JSON.stringify(opts.body),
+    credentials: opts.credentials
   })
   const text = await res.text()
   if (!res.ok) {
@@ -111,5 +113,11 @@ export const api = {
     apiFetch<{ token: string; expiresAt: string; sessionID: string; clientID: string; role: string }>(
       `/api/v1/sessions/${encodeURIComponent(sessionID)}/attach-token`,
       { method: 'POST', token, body: { role } }
+    ),
+
+  createAttachCookie: (token: string, sessionID: string, role: 'viewer' | 'driver') =>
+    apiFetch<{ expiresAt: string; sessionID: string; clientID: string; role: string }>(
+      `/api/v1/sessions/${encodeURIComponent(sessionID)}/attach-cookie`,
+      { method: 'POST', token, body: { role }, credentials: 'include' }
     )
 }

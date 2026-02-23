@@ -48,16 +48,14 @@ export function AttachPage() {
     }
 
     const run = async () => {
-      setStatus('fetching token')
+      setStatus('setting cookie')
       try {
-        const t = await api.createAttachToken(token, id, role)
+        await api.createAttachCookie(token, id, role)
         if (!alive) return
         setStatus('connecting')
 
         const proto = window.location.protocol === 'https:' ? 'wss' : 'ws'
-        const url = `${proto}://${window.location.host}/api/v1/sessions/${encodeURIComponent(id)}/attach?token=${encodeURIComponent(
-          t.token
-        )}`
+        const url = `${proto}://${window.location.host}/api/v1/sessions/${encodeURIComponent(id)}/attach`
 
         ws = new WebSocket(url)
         wsRef.current = ws
@@ -201,7 +199,7 @@ export function AttachPage() {
             <div className="muted">stdout via websocket</div>
           </div>
 
-          <div className="terminal mono" ref={termRef} aria-label="terminal" />
+          <div className="terminal mono" ref={termRef} />
 
           <div className="rowActions">
             <input

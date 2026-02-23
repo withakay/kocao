@@ -4,8 +4,11 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -26,6 +29,8 @@ const (
 	attachClaimSessionID = "attach.sessionID"
 	attachClaimClientID  = "attach.clientID"
 	attachClaimRole      = "attach.role"
+
+	attachCookieName = "kocao_attach"
 )
 
 var (
@@ -34,6 +39,11 @@ var (
 	attachCleanupGrace           = 5 * time.Second
 	attachInitialTermCols uint16 = 80
 	attachInitialTermRows uint16 = 24
+
+	attachWSReadLimit  int64 = 128 * 1024
+	attachWSWriteWait        = 5 * time.Second
+	attachWSPongWait         = 30 * time.Second
+	attachWSPingPeriod       = 10 * time.Second
 )
 
 type AttachRole string
@@ -62,6 +72,13 @@ type attachTokenRequest struct {
 
 type attachTokenResponse struct {
 	Token     string    `json:"token"`
+	ExpiresAt time.Time `json:"expiresAt"`
+	SessionID string    `json:"sessionID"`
+	ClientID  string    `json:"clientID"`
+	Role      string    `json:"role"`
+}
+
+type attachCookieResponse struct {
 	ExpiresAt time.Time `json:"expiresAt"`
 	SessionID string    `json:"sessionID"`
 	ClientID  string    `json:"clientID"`
@@ -272,21 +289,25 @@ func (s *AttachService) issueToken(ctx context.Context, principalID string, sess
 	return attachTokenResponse{Token: raw, ExpiresAt: exp, SessionID: sessionID, ClientID: clientID, Role: string(role)}, nil
 }
 
-func (s *AttachService) claimsFromToken(ctx context.Context, raw string) (string, string, AttachRole, error) {
+func (s *AttachService) claimsFromToken(ctx context.Context, raw string) (string, string, AttachRole, string, error) {
 	rec, err := s.tokens.Lookup(ctx, raw)
 	if err != nil {
-		return "", "", "", err
+		return "", "", "", "", err
 	}
 	if rec == nil || rec.Claims == nil {
-		return "", "", "", errors.New("invalid token")
+		return "", "", "", "", errors.New("invalid token")
 	}
 	sessionID := strings.TrimSpace(rec.Claims[attachClaimSessionID])
 	clientID := strings.TrimSpace(rec.Claims[attachClaimClientID])
 	role, ok := normalizeAttachRole(rec.Claims[attachClaimRole])
 	if sessionID == "" || clientID == "" || !ok {
-		return "", "", "", errors.New("invalid token claims")
+		return "", "", "", "", errors.New("invalid token claims")
 	}
-	return sessionID, clientID, role, nil
+	actor := strings.TrimPrefix(rec.ID, "attach-")
+	if strings.TrimSpace(actor) == "" {
+		actor = rec.ID
+	}
+	return sessionID, clientID, role, actor, nil
 }
 
 func (s *AttachService) findAttachPod(ctx context.Context, sessionID string) (string, error) {
@@ -313,12 +334,125 @@ func (s *AttachService) findAttachPod(ctx context.Context, sessionID string) (st
 	return "", errors.New("no active run pod")
 }
 
-var wsUpgrader = websocket.Upgrader{
-	ReadBufferSize:  4096,
-	WriteBufferSize: 4096,
-	CheckOrigin: func(_ *http.Request) bool {
+type attachOriginEntry struct {
+	scheme  string
+	host    string
+	port    string
+	anyPort bool
+}
+
+type attachOriginAllowlist struct {
+	allowAll      bool
+	allowDevLocal bool
+	entries       []attachOriginEntry
+}
+
+func newAttachOriginAllowlist(env string, configured []string) (attachOriginAllowlist, error) {
+	l := attachOriginAllowlist{allowDevLocal: env != "prod"}
+	for _, raw := range configured {
+		s := strings.TrimSpace(raw)
+		if s == "" {
+			continue
+		}
+		if s == "*" {
+			l.allowAll = true
+			l.entries = nil
+			return l, nil
+		}
+		if strings.EqualFold(s, "null") {
+			return attachOriginAllowlist{}, fmt.Errorf("invalid attach websocket origin allowlist entry: %q", raw)
+		}
+		u, err := url.Parse(s)
+		if err != nil || u.Scheme == "" || u.Host == "" {
+			return attachOriginAllowlist{}, fmt.Errorf("invalid attach websocket origin allowlist entry: %q", raw)
+		}
+		scheme := strings.ToLower(u.Scheme)
+		if scheme != "http" && scheme != "https" {
+			return attachOriginAllowlist{}, fmt.Errorf("attach websocket allowed origin must be http(s): %q", raw)
+		}
+		host := strings.ToLower(strings.TrimSpace(u.Hostname()))
+		if host == "" {
+			return attachOriginAllowlist{}, fmt.Errorf("invalid attach websocket origin allowlist entry: %q", raw)
+		}
+		port := strings.TrimSpace(u.Port())
+		l.entries = append(l.entries, attachOriginEntry{scheme: scheme, host: host, port: port, anyPort: port == ""})
+	}
+	return l, nil
+}
+
+func (l attachOriginAllowlist) CheckOrigin(r *http.Request) bool {
+	origin := strings.TrimSpace(r.Header.Get("Origin"))
+	if origin == "" {
 		return true
-	},
+	}
+	if l.allowAll {
+		return true
+	}
+	if strings.EqualFold(origin, "null") {
+		return false
+	}
+	parsed, err := url.Parse(origin)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return false
+	}
+	scheme := strings.ToLower(parsed.Scheme)
+	if scheme != "http" && scheme != "https" {
+		return false
+	}
+	host := strings.ToLower(strings.TrimSpace(parsed.Hostname()))
+	port := strings.TrimSpace(parsed.Port())
+	if host == "" {
+		return false
+	}
+
+	// Always allow same-host websocket origins.
+	if host == strings.ToLower(hostOnly(r.Host)) {
+		return true
+	}
+	if l.allowDevLocal && isDevLocalHost(host) {
+		return true
+	}
+	for _, e := range l.entries {
+		if e.scheme != scheme {
+			continue
+		}
+		if e.host != host {
+			continue
+		}
+		if e.anyPort {
+			return true
+		}
+		if e.port == port {
+			return true
+		}
+	}
+	return false
+}
+
+func hostOnly(hostport string) string {
+	hp := strings.TrimSpace(hostport)
+	if hp == "" {
+		return ""
+	}
+	if strings.HasPrefix(hp, "[") {
+		// IPv6 in brackets, possibly with port.
+		if i := strings.Index(hp, "]"); i != -1 {
+			return strings.TrimSpace(hp[1:i])
+		}
+	}
+	if strings.Contains(hp, ":") {
+		h, _, err := net.SplitHostPort(hp)
+		if err == nil {
+			return strings.Trim(h, "[]")
+		}
+	}
+	return strings.Trim(hp, "[]")
+}
+
+func isDevLocalHost(host string) bool {
+	s := strings.TrimSpace(strings.ToLower(host))
+	s = strings.Trim(s, "[]")
+	return s == "localhost" || s == "127.0.0.1" || s == "::1"
 }
 
 func (a *API) handleAttachTokenIssue(w http.ResponseWriter, r *http.Request, sessionID string) {
@@ -371,6 +505,83 @@ func (a *API) handleAttachTokenIssue(w http.ResponseWriter, r *http.Request, ses
 	writeJSON(w, http.StatusCreated, resp)
 }
 
+func (a *API) handleAttachCookieIssue(w http.ResponseWriter, r *http.Request, sessionID string) {
+	if a.Attach == nil {
+		writeError(w, http.StatusInternalServerError, "attach service not configured")
+		return
+	}
+	var sess operatorv1alpha1.Session
+	if err := a.K8s.Get(r.Context(), client.ObjectKey{Namespace: a.Namespace, Name: sessionID}, &sess); err != nil {
+		if apierrors.IsNotFound(err) {
+			writeError(w, http.StatusNotFound, "session not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "get session failed")
+		return
+	}
+	enabled := false
+	if sess.Annotations != nil {
+		v := strings.TrimSpace(sess.Annotations[annotationAttachEnabled])
+		enabled = strings.EqualFold(v, "true")
+	}
+	if !enabled {
+		writeError(w, http.StatusForbidden, "attach disabled")
+		return
+	}
+
+	var req attachTokenRequest
+	if err := readJSON(w, r, &req); err != nil {
+		writeJSONError(w, err)
+		return
+	}
+	role, ok := normalizeAttachRole(req.Role)
+	if !ok {
+		writeError(w, http.StatusBadRequest, "invalid role")
+		return
+	}
+	if role == AttachRoleDriver {
+		p, _ := principalFrom(r.Context())
+		if p == nil || !hasScope(p.Scopes, "control:write") {
+			writeError(w, http.StatusForbidden, "driver role requires control:write")
+			return
+		}
+	}
+	p := principal(r.Context())
+	resp, err := a.Attach.issueToken(r.Context(), p, sessionID, role, req.ClientID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "issue attach token failed")
+		return
+	}
+
+	secure := isHTTPSRequest(r)
+	path := "/api/v1/sessions/" + url.PathEscape(sessionID) + "/attach"
+	maxAge := int(time.Until(resp.ExpiresAt).Seconds())
+	if maxAge < 0 {
+		maxAge = 0
+	}
+	http.SetCookie(w, &http.Cookie{
+		Name:     attachCookieName,
+		Value:    resp.Token,
+		Path:     path,
+		HttpOnly: true,
+		Secure:   secure,
+		SameSite: http.SameSiteStrictMode,
+		MaxAge:   maxAge,
+		Expires:  resp.ExpiresAt,
+	})
+
+	a.Audit.Append(r.Context(), p, "attach.cookie.issued", "session", sessionID, "allowed", map[string]any{"role": resp.Role})
+	writeJSON(w, http.StatusCreated, attachCookieResponse{ExpiresAt: resp.ExpiresAt, SessionID: resp.SessionID, ClientID: resp.ClientID, Role: resp.Role})
+}
+
+func isHTTPSRequest(r *http.Request) bool {
+	if r.TLS != nil {
+		return true
+	}
+	proto := strings.TrimSpace(r.Header.Get("X-Forwarded-Proto"))
+	return strings.EqualFold(proto, "https")
+}
+
 func (a *API) handleAttachWS(w http.ResponseWriter, r *http.Request, sessionID string) {
 	if r.Method != http.MethodGet {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -386,11 +597,16 @@ func (a *API) handleAttachWS(w http.ResponseWriter, r *http.Request, sessionID s
 		tok = bearerToken(r)
 	}
 	if tok == "" {
+		if c, err := r.Cookie(attachCookieName); err == nil {
+			tok = strings.TrimSpace(c.Value)
+		}
+	}
+	if tok == "" {
 		writeError(w, http.StatusUnauthorized, "missing attach token")
 		return
 	}
 
-	claimedSessionID, clientID, role, err := a.Attach.claimsFromToken(r.Context(), tok)
+	claimedSessionID, clientID, role, actor, err := a.Attach.claimsFromToken(r.Context(), tok)
 	if err != nil {
 		writeError(w, http.StatusUnauthorized, "invalid attach token")
 		return
@@ -400,16 +616,24 @@ func (a *API) handleAttachWS(w http.ResponseWriter, r *http.Request, sessionID s
 		return
 	}
 
-	conn, err := wsUpgrader.Upgrade(w, r, nil)
+	upgrader := websocket.Upgrader{ReadBufferSize: 4096, WriteBufferSize: 4096, CheckOrigin: a.attachOrigins.CheckOrigin}
+	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		return
 	}
 
-	a.Attach.handleConn(r.Context(), sessionID, clientID, role, conn)
+	a.Attach.handleConn(r.Context(), actor, sessionID, clientID, role, conn)
 }
 
-func (s *AttachService) handleConn(ctx context.Context, sessionID, clientID string, role AttachRole, conn *websocket.Conn) {
+func (s *AttachService) handleConn(ctx context.Context, actor, sessionID, clientID string, role AttachRole, conn *websocket.Conn) {
 	defer func() { _ = conn.Close() }()
+
+	conn.SetReadLimit(attachWSReadLimit)
+	_ = conn.SetReadDeadline(time.Now().Add(attachWSPongWait))
+	conn.SetPongHandler(func(string) error {
+		_ = conn.SetReadDeadline(time.Now().Add(attachWSPongWait))
+		return nil
+	})
 
 	s.mu.Lock()
 	sess, ok := s.sessions[sessionID]
@@ -430,8 +654,26 @@ func (s *AttachService) handleConn(ctx context.Context, sessionID, clientID stri
 	writeDone := make(chan struct{})
 	go func() {
 		defer close(writeDone)
-		for msg := range cli.send {
-			_ = conn.WriteJSON(msg)
+		ping := time.NewTicker(attachWSPingPeriod)
+		defer ping.Stop()
+		for {
+			select {
+			case msg, ok := <-cli.send:
+				if !ok {
+					_ = conn.SetWriteDeadline(time.Now().Add(attachWSWriteWait))
+					_ = conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
+					return
+				}
+				_ = conn.SetWriteDeadline(time.Now().Add(attachWSWriteWait))
+				if err := conn.WriteJSON(msg); err != nil {
+					return
+				}
+			case <-ping.C:
+				_ = conn.SetWriteDeadline(time.Now().Add(attachWSWriteWait))
+				if err := conn.WriteMessage(websocket.PingMessage, nil); err != nil {
+					return
+				}
+			}
 		}
 	}()
 
@@ -442,14 +684,17 @@ func (s *AttachService) handleConn(ctx context.Context, sessionID, clientID stri
 		sess.cleanupTimer = nil
 	}
 	curDriver, _ := sess.currentDriverLocked(now)
+	roleVia := "join"
 	// Driver reconnect gets the role even if token is viewer.
 	if sess.driverClientID == clientID && curDriver == clientID {
 		cli.role = AttachRoleDriver
 		sess.refreshLeaseLocked(now, clientID)
+		roleVia = "reconnect"
 	} else if cli.maxRole == AttachRoleDriver && curDriver == "" {
 		// No active driver; driver-capable token can claim the lease.
 		cli.role = AttachRoleDriver
 		sess.refreshLeaseLocked(now, clientID)
+		roleVia = "claim"
 	} else {
 		// Active lease held by someone else; join as viewer until lease transfer.
 		cli.role = AttachRoleViewer
@@ -464,6 +709,13 @@ func (s *AttachService) handleConn(ctx context.Context, sessionID, clientID stri
 	driverID, lease := sess.currentDriverLocked(now)
 	sess.broadcastLocked(attachMsg{Type: "state", DriverID: driverID, LeaseMS: lease.Milliseconds()})
 	sess.mu.Unlock()
+
+	if s.audit != nil {
+		s.audit.Append(ctx, actor, "attach.connect", "session", sessionID, "allowed", map[string]any{"clientID": clientID, "role": string(cli.role), "via": roleVia})
+		if cli.role == AttachRoleDriver {
+			s.audit.Append(ctx, actor, "attach.control.acquired", "session", sessionID, "allowed", map[string]any{"clientID": clientID, "via": roleVia})
+		}
+	}
 
 	cli.send <- attachMsg{Type: "hello", SessionID: sessionID, ClientID: clientID, Role: string(cli.role), DriverID: driverID, LeaseMS: lease.Milliseconds()}
 
@@ -493,19 +745,27 @@ func (s *AttachService) handleConn(ctx context.Context, sessionID, clientID stri
 		case "take_control":
 			if cli.maxRole != AttachRoleDriver {
 				cli.send <- attachMsg{Type: "error", Message: "insufficient role"}
+				if s.audit != nil {
+					s.audit.Append(ctx, actor, "attach.control.acquired", "session", sessionID, "denied", map[string]any{"clientID": clientID, "reason": "insufficient_role"})
+				}
 				continue
 			}
 			now := time.Now()
 			sess.mu.Lock()
 			cur, _ := sess.currentDriverLocked(now)
+			changed := false
 			if cur == "" || cur == clientID {
 				sess.refreshLeaseLocked(now, clientID)
 				cli.role = AttachRoleDriver
 				cur = clientID
+				changed = true
 			}
 			lease := time.Until(sess.driverLeaseUntil)
 			sess.broadcastLocked(attachMsg{Type: "state", DriverID: cur, LeaseMS: lease.Milliseconds()})
 			sess.mu.Unlock()
+			if changed && s.audit != nil {
+				s.audit.Append(ctx, actor, "attach.control.acquired", "session", sessionID, "allowed", map[string]any{"clientID": clientID, "via": "take_control"})
+			}
 		case "stdin":
 			payload, err := base64.StdEncoding.DecodeString(m.Data)
 			if err != nil {
@@ -524,7 +784,13 @@ func (s *AttachService) handleConn(ctx context.Context, sessionID, clientID stri
 			sess.mu.Unlock()
 			if cur != clientID {
 				cli.send <- attachMsg{Type: "error", Message: "read-only"}
+				if s.audit != nil {
+					s.audit.Append(ctx, actor, "attach.stdin", "session", sessionID, "denied", map[string]any{"clientID": clientID, "bytes": len(payload), "reason": "read_only"})
+				}
 				continue
+			}
+			if s.audit != nil {
+				s.audit.Append(ctx, actor, "attach.stdin", "session", sessionID, "allowed", map[string]any{"clientID": clientID, "bytes": len(payload)})
 			}
 			if w == nil {
 				podName, err := s.findAttachPod(ctx, sessionID)
@@ -583,6 +849,10 @@ func (s *AttachService) handleConn(ctx context.Context, sessionID, clientID stri
 		})
 	}
 	sess.mu.Unlock()
+
+	if s.audit != nil {
+		s.audit.Append(ctx, actor, "attach.disconnect", "session", sessionID, "allowed", map[string]any{"clientID": clientID, "wasDriver": stillDriver})
+	}
 
 	<-writeDone
 }

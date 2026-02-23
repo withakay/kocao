@@ -79,6 +79,25 @@ func TestLoadFrom_ProdRejectsBootstrapToken(t *testing.T) {
 	}
 }
 
+func TestLoadFrom_AttachAllowedOrigins_ParsesCSV(t *testing.T) {
+	cfg, err := LoadFrom(mapGetenv(map[string]string{"CP_ATTACH_WS_ALLOWED_ORIGINS": " https://a.example ,http://localhost:5173, ,https://b.example "}))
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+	if len(cfg.AttachWSAllowedOrigins) != 3 {
+		t.Fatalf("AttachWSAllowedOrigins len=%d, want 3", len(cfg.AttachWSAllowedOrigins))
+	}
+	if cfg.AttachWSAllowedOrigins[0] != "https://a.example" {
+		t.Fatalf("origin[0]=%q", cfg.AttachWSAllowedOrigins[0])
+	}
+	if cfg.AttachWSAllowedOrigins[1] != "http://localhost:5173" {
+		t.Fatalf("origin[1]=%q", cfg.AttachWSAllowedOrigins[1])
+	}
+	if cfg.AttachWSAllowedOrigins[2] != "https://b.example" {
+		t.Fatalf("origin[2]=%q", cfg.AttachWSAllowedOrigins[2])
+	}
+}
+
 func mapGetenv(m map[string]string) func(string) string {
 	return func(key string) string {
 		return m[key]
