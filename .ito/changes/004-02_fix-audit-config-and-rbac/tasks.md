@@ -31,7 +31,7 @@ ______________________________________________________________________
 - **Verify**: `make lint && make test`
 - **Done When**: Audit log path is configured via `CP_AUDIT_PATH` and tests cover precedence/defaulting.
 - **Updated At**: 2026-02-23
-- **Status**: [>] in-progress
+- **Status**: [x] complete
 
 ### Task 1.2: Split service accounts and tighten RBAC (including `pods/exec`)
 
@@ -40,8 +40,8 @@ ______________________________________________________________________
 - **Action**: Create distinct service accounts for API and operator, assign least-privilege Roles, and ensure the API role includes `pods/exec` as required for attach.
 - **Verify**: `kubectl apply --dry-run=client -k deploy/overlays/dev-kind`
 - **Done When**: Manifests validate cleanly and RBAC is least-privilege with attach exec functional.
-- **Updated At**: 2026-02-22
-- **Status**: [ ] pending
+- **Updated At**: 2026-02-23
+- **Status**: [x] complete
 
 ______________________________________________________________________
 
@@ -56,8 +56,8 @@ ______________________________________________________________________
 - **Action**: Document new env var (`CP_AUDIT_PATH`), deprecated alias behavior (if retained), and required RBAC expectations for attach.
 - **Verify**: `make lint && make test`
 - **Done When**: Docs clearly describe required env/RBAC for real deployments.
-- **Updated At**: 2026-02-22
-- **Status**: [ ] pending
+- **Updated At**: 2026-02-23
+- **Status**: [x] complete
 
 ______________________________________________________________________
 
@@ -69,5 +69,5 @@ ______________________________________________________________________
 - **Dependencies**: All Wave 2 tasks
 - **Action**: Review the implementation before proceeding
 - **Done When**: User confirms implementation is correct
-- **Updated At**: 2026-02-22
-- **Status**: [ ] pending
+- **Updated At**: 2026-02-23
+- **Status**: [-] shelved

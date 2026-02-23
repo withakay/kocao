@@ -59,9 +59,15 @@ This doc translates those requirements into operator-facing guidance and deploym
 - Store tokens in Kubernetes Secrets (not ConfigMaps) and rotate regularly.
 - `CP_BOOTSTRAP_TOKEN` is intended for bring-up only; treat it as a break-glass secret.
 
+### Audit Log
+
+- Configure audit persistence via `CP_AUDIT_PATH` (default: `kocao.audit.jsonl`).
+- `CP_DB_PATH` is a deprecated alias for `CP_AUDIT_PATH` and will be removed.
+
 ### RBAC (Least Privilege)
 
 - The operator and API run with in-cluster credentials.
+- The operator and API MUST use distinct service accounts and Roles to reduce blast radius.
 - RBAC MUST be least-privilege and limited to the namespace where kocao is installed.
 - Any requirement for cluster-scoped permissions MUST be documented with justification.
 
@@ -74,6 +80,7 @@ This doc translates those requirements into operator-facing guidance and deploym
 
 - Attach SHOULD be disabled by default and enabled per-session as needed.
 - Driver role MUST be tightly controlled (requires `control:write`) and its use SHOULD be audited.
+- Attach requires `pods/exec`; grant this only to the control-plane API service account.
 
 ## Current Gaps (Tracked Work)
 

@@ -30,6 +30,7 @@ var openAPISpec = []byte(`{
 
 func openAPIHandler(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(openAPISpec)
 }

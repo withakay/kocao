@@ -10,9 +10,9 @@ import (
 )
 
 type Runtime struct {
-	Env      string
-	HTTPAddr string
-	DBPath   string
+	Env       string
+	HTTPAddr  string
+	AuditPath string
 
 	// BootstrapToken, when set, is inserted (if missing) into the token store with
 	// wildcard scopes. Use this for initial bring-up only.
@@ -53,17 +53,24 @@ func LoadFrom(getenv func(string) string) (Runtime, error) {
 		return Runtime{}, fmt.Errorf("namespace required in-cluster: set POD_NAMESPACE (recommended) or CP_NAMESPACE")
 	}
 
-	dbPath := strings.TrimSpace(getenv("CP_DB_PATH"))
-	if dbPath == "" {
-		dbPath = "kocao.db"
+	auditPath := strings.TrimSpace(getenv("CP_AUDIT_PATH"))
+	if auditPath == "" {
+		// Deprecated alias: CP_DB_PATH historically (mis)configured audit persistence.
+		auditPath = strings.TrimSpace(getenv("CP_DB_PATH"))
+	}
+	if auditPath == "" {
+		auditPath = "kocao.audit.jsonl"
 	}
 
 	bootstrapToken := strings.TrimSpace(getenv("CP_BOOTSTRAP_TOKEN"))
+	if env == "prod" && bootstrapToken != "" {
+		return Runtime{}, fmt.Errorf("CP_BOOTSTRAP_TOKEN is not allowed when CP_ENV=prod")
+	}
 
 	return Runtime{
 		Env:            env,
 		HTTPAddr:       httpAddr,
-		DBPath:         dbPath,
+		AuditPath:      auditPath,
 		BootstrapToken: bootstrapToken,
 		Namespace:      ns,
 	}, nil

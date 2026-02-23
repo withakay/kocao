@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	operatorv1alpha1 "github.com/withakay/kocao/internal/operator/api/v1alpha1"
@@ -130,6 +131,42 @@ func TestRBAC_MissingScope_DeniedAndAudited(t *testing.T) {
 	}
 	if evs[0].Outcome != "denied" {
 		t.Fatalf("audit outcome = %q, want denied", evs[0].Outcome)
+	}
+}
+
+func TestJSON_BodyTooLarge_Returns413(t *testing.T) {
+	api, cleanup := newTestAPI(t)
+	defer cleanup()
+
+	if err := api.Tokens.Create(context.Background(), "t-writer", "writer", []string{"session:write"}); err != nil {
+		t.Fatalf("create token: %v", err)
+	}
+
+	srv := httptest.NewServer(api.Handler())
+	defer srv.Close()
+
+	big := strings.Repeat("a", int(maxJSONBodyBytes)+256)
+	var buf bytes.Buffer
+	buf.Grow(len(big) + 32)
+	buf.WriteString("{\"repoURL\":\"")
+	buf.WriteString(big)
+	buf.WriteString("\"}")
+
+	req, err := http.NewRequest(http.MethodPost, srv.URL+"/api/v1/sessions", &buf)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer writer")
+
+	resp, err := srv.Client().Do(req)
+	if err != nil {
+		t.Fatalf("do request: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusRequestEntityTooLarge {
+		b, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 413 (body=%s)", resp.StatusCode, string(b))
 	}
 }
 

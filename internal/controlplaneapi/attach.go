@@ -321,63 +321,54 @@ var wsUpgrader = websocket.Upgrader{
 	},
 }
 
-func (a *API) handleAttachToken(w http.ResponseWriter, r *http.Request, sessionID string) {
-	if r.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+func (a *API) handleAttachTokenIssue(w http.ResponseWriter, r *http.Request, sessionID string) {
+	if a.Attach == nil {
+		writeError(w, http.StatusInternalServerError, "attach service not configured")
 		return
 	}
-	h := requireScopes([]string{"run:read"}, a.Audit, func(_ *http.Request) (string, string, string) {
-		return "attach.token.issue", "session", sessionID
-	})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if a.Attach == nil {
-			writeError(w, http.StatusInternalServerError, "attach service not configured")
+	var sess operatorv1alpha1.Session
+	if err := a.K8s.Get(r.Context(), client.ObjectKey{Namespace: a.Namespace, Name: sessionID}, &sess); err != nil {
+		if apierrors.IsNotFound(err) {
+			writeError(w, http.StatusNotFound, "session not found")
 			return
 		}
-		var sess operatorv1alpha1.Session
-		if err := a.K8s.Get(r.Context(), client.ObjectKey{Namespace: a.Namespace, Name: sessionID}, &sess); err != nil {
-			if apierrors.IsNotFound(err) {
-				writeError(w, http.StatusNotFound, "session not found")
-				return
-			}
-			writeError(w, http.StatusInternalServerError, "get session failed")
+		writeError(w, http.StatusInternalServerError, "get session failed")
+		return
+	}
+	enabled := false
+	if sess.Annotations != nil {
+		v := strings.TrimSpace(sess.Annotations[annotationAttachEnabled])
+		enabled = strings.EqualFold(v, "true")
+	}
+	if !enabled {
+		writeError(w, http.StatusForbidden, "attach disabled")
+		return
+	}
+	var req attachTokenRequest
+	if err := readJSON(w, r, &req); err != nil {
+		writeJSONError(w, err)
+		return
+	}
+	role, ok := normalizeAttachRole(req.Role)
+	if !ok {
+		writeError(w, http.StatusBadRequest, "invalid role")
+		return
+	}
+	if role == AttachRoleDriver {
+		p, _ := principalFrom(r.Context())
+		if p == nil || !hasScope(p.Scopes, "control:write") {
+			writeError(w, http.StatusForbidden, "driver role requires control:write")
 			return
 		}
-		enabled := false
-		if sess.Annotations != nil {
-			v := strings.TrimSpace(sess.Annotations[annotationAttachEnabled])
-			enabled = strings.EqualFold(v, "true")
-		}
-		if !enabled {
-			writeError(w, http.StatusForbidden, "attach disabled")
-			return
-		}
-		var req attachTokenRequest
-		if err := readJSON(r, &req); err != nil {
-			writeError(w, http.StatusBadRequest, "invalid json")
-			return
-		}
-		role, ok := normalizeAttachRole(req.Role)
-		if !ok {
-			writeError(w, http.StatusBadRequest, "invalid role")
-			return
-		}
-		if role == AttachRoleDriver {
-			p, _ := principalFrom(r.Context())
-			if p == nil || !hasScope(p.Scopes, "control:write") {
-				writeError(w, http.StatusForbidden, "driver role requires control:write")
-				return
-			}
-		}
-		p := principal(r.Context())
-		resp, err := a.Attach.issueToken(r.Context(), p, sessionID, role, req.ClientID)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "issue attach token failed")
-			return
-		}
-		a.Audit.Append(r.Context(), p, "attach.token.issued", "session", sessionID, "allowed", map[string]any{"role": resp.Role})
-		writeJSON(w, http.StatusCreated, resp)
-	}))
-	h.ServeHTTP(w, r)
+	}
+	p := principal(r.Context())
+	resp, err := a.Attach.issueToken(r.Context(), p, sessionID, role, req.ClientID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "issue attach token failed")
+		return
+	}
+	a.Audit.Append(r.Context(), p, "attach.token.issued", "session", sessionID, "allowed", map[string]any{"role": resp.Role})
+	writeJSON(w, http.StatusCreated, resp)
 }
 
 func (a *API) handleAttachWS(w http.ResponseWriter, r *http.Request, sessionID string) {

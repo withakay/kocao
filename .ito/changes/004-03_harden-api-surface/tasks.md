@@ -30,8 +30,8 @@ ______________________________________________________________________
 - **Action**: Introduce a maximum body size (e.g. via `http.MaxBytesReader`) for JSON endpoints and add tests for oversized payload rejection.
 - **Verify**: `make lint && make test`
 - **Done When**: Oversized requests are rejected deterministically and tests cover the behavior.
-- **Updated At**: 2026-02-22
-- **Status**: [ ] pending
+- **Updated At**: 2026-02-23
+- **Status**: [x] complete
 
 ### Task 1.2: Add server timeouts and basic hardening headers
 
@@ -40,8 +40,8 @@ ______________________________________________________________________
 - **Action**: Configure `ReadTimeout`, `WriteTimeout`, and `IdleTimeout` (in addition to `ReadHeaderTimeout`). Add low-risk headers like `X-Content-Type-Options: nosniff` for JSON responses.
 - **Verify**: `make lint && make test`
 - **Done When**: Server timeouts are set and tests still pass.
-- **Updated At**: 2026-02-22
-- **Status**: [ ] pending
+- **Updated At**: 2026-02-23
+- **Status**: [x] complete
 
 ### Task 1.3: Enforce bootstrap-token safety in prod
 
@@ -50,8 +50,8 @@ ______________________________________________________________________
 - **Action**: Ensure `CP_ENV=prod` prevents unsafe bootstrap token usage (startup error or explicit ignore + warning) and add tests.
 - **Verify**: `make lint && make test`
 - **Done When**: Production config path cannot silently enable wildcard access.
-- **Updated At**: 2026-02-22
-- **Status**: [ ] pending
+- **Updated At**: 2026-02-23
+- **Status**: [x] complete
 
 ______________________________________________________________________
 
@@ -66,8 +66,8 @@ ______________________________________________________________________
 - **Action**: Refactor patterns so adding a new `/api/v1/*` handler is unlikely to bypass authorization checks (e.g. centralized scope enforcement wrappers).
 - **Verify**: `make lint && make test`
 - **Done When**: New handlers follow a consistent pattern that fails closed.
-- **Updated At**: 2026-02-22
-- **Status**: [ ] pending
+- **Updated At**: 2026-02-23
+- **Status**: [x] complete
 
 ______________________________________________________________________
 
@@ -79,5 +79,5 @@ ______________________________________________________________________
 - **Dependencies**: All Wave 2 tasks
 - **Action**: Review the implementation before proceeding
 - **Done When**: User confirms implementation is correct
-- **Updated At**: 2026-02-22
-- **Status**: [ ] pending
+- **Updated At**: 2026-02-23
+- **Status**: [x] complete

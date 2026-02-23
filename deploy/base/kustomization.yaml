@@ -8,6 +8,7 @@ resources:
   - crd-session.yaml
   - crd-harnessrun.yaml
   - serviceaccount.yaml
+  - api-rbac.yaml
   - operator-rbac.yaml
   - api-deployment.yaml
   - api-service.yaml

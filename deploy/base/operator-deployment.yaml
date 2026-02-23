@@ -12,7 +12,7 @@ spec:
       labels:
         app: control-plane-operator
     spec:
-      serviceAccountName: control-plane
+      serviceAccountName: control-plane-operator
       containers:
         - name: operator
           image: kocao/control-plane-operator:dev
