@@ -76,113 +76,139 @@ export function RunDetailPage() {
       }
     : null
 
+  const cardClass = 'rounded-lg border border-border bg-card p-4'
+  const headerClass = 'flex items-center justify-between mb-3'
+  const rowClass = 'flex items-start gap-3 mb-3'
+  const labelClass = 'text-xs text-muted-foreground w-28 shrink-0 pt-0.5'
+  const refreshBtnClass =
+    'rounded-md border border-border bg-secondary px-3 py-1.5 text-sm text-secondary-foreground hover:bg-secondary/80 transition-colors cursor-pointer'
+  const errorClass = 'mt-3 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-foreground'
+
   return (
     <>
-      <Topbar title={`Harness Run ${id}`} subtitle="Harness Run Lifecycle, attach entry points, and GitHub outcome metadata." />
+      <Topbar title={`Harness Run ${id}`} subtitle="Run lifecycle, attach entry points, and GitHub outcome." />
 
-      <div className="grid">
-        <section className="card">
-          <div className="cardHeader">
-            <h2>Details</h2>
-            <button className="btn" onClick={runQ.reload} type="button">
+      <div className="mt-4 flex flex-col gap-4">
+        <section className={cardClass}>
+          <div className={headerClass}>
+            <h2 className="text-sm font-semibold tracking-tight">Details</h2>
+            <button className={refreshBtnClass} onClick={runQ.reload} type="button">
               Refresh
             </button>
           </div>
 
           {run ? (
             <>
-              <div className="formRow">
-                <div className="label">Workspace Session</div>
-                <div className="mono">
+              <div className={rowClass}>
+                <div className={labelClass}>Workspace Session</div>
+                <div className="font-mono text-sm">
                   {run.workspaceSessionID ? (
-                    <Link to={`/workspace-sessions/${encodeURIComponent(run.workspaceSessionID)}`}>{run.workspaceSessionID}</Link>
+                    <Link to={`/workspace-sessions/${encodeURIComponent(run.workspaceSessionID)}`} className="text-primary hover:underline">{run.workspaceSessionID}</Link>
                   ) : (
-                    '(none)'
+                    <span className="text-muted-foreground">(none)</span>
                   )}
                 </div>
               </div>
-              <div className="formRow">
-                <div className="label">Repo</div>
-                <div className="mono">{run.repoURL}</div>
+              <div className={rowClass}>
+                <div className={labelClass}>Repo</div>
+                <div className="font-mono text-sm">{run.repoURL}</div>
               </div>
-              <div className="formRow">
-                <div className="label">Revision</div>
-                <div className="mono">{run.repoRevision && run.repoRevision.trim() !== '' ? run.repoRevision : '(none)'}</div>
+              <div className={rowClass}>
+                <div className={labelClass}>Revision</div>
+                <div className="font-mono text-sm">{run.repoRevision && run.repoRevision.trim() !== '' ? run.repoRevision : '(none)'}</div>
               </div>
-              <div className="formRow">
-                <div className="label">Image</div>
-                <div className="mono">{run.image}</div>
+              <div className={rowClass}>
+                <div className={labelClass}>Image</div>
+                <div className="font-mono text-sm">{run.image}</div>
               </div>
-              <div className="formRow">
-                <div className="label">Harness Run Lifecycle</div>
+              <div className={rowClass}>
+                <div className={labelClass}>Phase</div>
                 <div>
                   <StatusPill phase={run.phase} />
                 </div>
               </div>
-              <div className="formRow">
-                <div className="label">Pod</div>
-                <div className="mono">{run.podName && run.podName.trim() !== '' ? run.podName : '(none yet)'}</div>
+              <div className={rowClass}>
+                <div className={labelClass}>Pod</div>
+                <div className="font-mono text-sm">{run.podName && run.podName.trim() !== '' ? run.podName : '(none yet)'}</div>
               </div>
             </>
           ) : (
-            <div className="muted">{runQ.loading ? 'Loading…' : runQ.error ?? 'No data.'}</div>
+            <div className="text-sm text-muted-foreground">{runQ.loading ? 'Loading…' : runQ.error ?? 'No data.'}</div>
           )}
 
-          <div className="rowActions">
-            <button className="btn btnDanger" disabled={acting || token.trim() === ''} onClick={stop} type="button">
+          <div className="flex items-center gap-3 mt-1">
+            <button
+              className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-1.5 text-sm text-foreground hover:bg-destructive/20 transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+              disabled={acting || token.trim() === ''}
+              onClick={stop}
+              type="button"
+            >
               Stop
             </button>
-            <button className="btn" disabled={acting || token.trim() === ''} onClick={resume} type="button">
+            <button
+              className={refreshBtnClass + ' disabled:opacity-40 disabled:cursor-not-allowed'}
+              disabled={acting || token.trim() === ''}
+              onClick={resume}
+              type="button"
+            >
               Resume
             </button>
-            <span className="faint">Needs <span className="mono">harness-run:write</span>.</span>
+            <span className="text-xs text-muted-foreground">
+              Scope: <code className="font-mono text-foreground/80">harness-run:write</code>
+            </span>
           </div>
 
-          {actionErr ? <div className="errorBox">{actionErr}</div> : null}
-          {runQ.error ? <div className="errorBox">{runQ.error}</div> : null}
+          {actionErr ? <div className={errorClass}>{actionErr}</div> : null}
+          {runQ.error ? <div className={errorClass}>{runQ.error}</div> : null}
         </section>
 
-        <section className="card">
-          <div className="cardHeader">
-            <h2>Attach</h2>
-            <div className="muted">Websocket console</div>
+        <section className={cardClass}>
+          <div className={headerClass}>
+            <h2 className="text-sm font-semibold tracking-tight">Attach</h2>
+            <div className="text-xs text-muted-foreground font-mono">websocket attach</div>
           </div>
 
           {attachLinks ? (
             <>
-              <div className="muted">Attach tokens are short-lived; this page fetches a token and opens the websocket.</div>
-              <div className="rowActions">
-                <Link className="btn" to={attachLinks.viewer}>
+              <div className="text-sm text-muted-foreground mb-3">Attach tokens are ephemeral. This page acquires a token and opens the websocket.</div>
+              <div className="flex items-center gap-3">
+                <Link
+                  className={refreshBtnClass}
+                  to={attachLinks.viewer}
+                >
                   Open Viewer
                 </Link>
-                <Link className="btn btnPrimary" to={attachLinks.driver}>
+                <Link
+                  className="rounded-md border border-primary/30 bg-primary/10 px-3 py-1.5 text-sm text-foreground hover:bg-primary/20 transition-colors"
+                  to={attachLinks.driver}
+                >
                   Open Driver
                 </Link>
               </div>
             </>
           ) : (
-            <div className="muted">This harness run is not associated with a workspace session.</div>
+            <div className="text-sm text-muted-foreground">This harness run is not associated with a workspace session.</div>
           )}
         </section>
       </div>
 
-      <div className="grid">
-        <section className="card">
-          <div className="cardHeader">
-            <h2>GitHub Outcome</h2>
-            <div className="muted">From run metadata</div>
+      <div className="mt-4 flex flex-col gap-4">
+        <section className={cardClass}>
+          <div className={headerClass}>
+            <h2 className="text-sm font-semibold tracking-tight">GitHub Outcome</h2>
+            <div className="text-xs text-muted-foreground font-mono">source: run metadata</div>
           </div>
           {run ? (
             <>
-              <div className="formRow">
-                <div className="label">Branch</div>
-                <div className="mono">{run.gitHubBranch && run.gitHubBranch.trim() !== '' ? run.gitHubBranch : '(none reported)'}</div>
+              <div className={rowClass}>
+                <div className={labelClass}>Branch</div>
+                <div className="font-mono text-sm">{run.gitHubBranch && run.gitHubBranch.trim() !== '' ? run.gitHubBranch : '(none reported)'}</div>
               </div>
-              <div className="formRow">
-                <div className="label">PR URL</div>
-                <div className="mono">
+              <div className={rowClass}>
+                <div className={labelClass}>PR URL</div>
+                <div className="font-mono text-sm">
                   {run.pullRequestURL && run.pullRequestURL.trim() !== '' ? (
-                    <a href={run.pullRequestURL} target="_blank" rel="noreferrer">
+                    <a href={run.pullRequestURL} target="_blank" rel="noreferrer" className="text-primary hover:underline">
                       {run.pullRequestURL}
                     </a>
                   ) : (
@@ -190,42 +216,44 @@ export function RunDetailPage() {
                   )}
                 </div>
               </div>
-              <div className="formRow">
-                <div className="label">PR Status</div>
-                <div className="mono">{run.pullRequestStatus && run.pullRequestStatus.trim() !== '' ? run.pullRequestStatus : '(none reported)'}</div>
+              <div className={rowClass}>
+                <div className={labelClass}>PR Status</div>
+                <div className="font-mono text-sm">{run.pullRequestStatus && run.pullRequestStatus.trim() !== '' ? run.pullRequestStatus : '(none reported)'}</div>
               </div>
             </>
           ) : (
-            <div className="muted">No harness run loaded.</div>
+            <div className="text-sm text-muted-foreground">No harness run loaded.</div>
           )}
         </section>
 
-        <section className="card">
-          <div className="cardHeader">
-            <h2>Harness Run Audit (Recent)</h2>
-            <div className="muted">Derived from /api/v1/audit</div>
+        <section className={cardClass}>
+          <div className={headerClass}>
+            <h2 className="text-sm font-semibold tracking-tight">Audit Trail</h2>
+            <div className="text-xs text-muted-foreground font-mono">source: /api/v1/audit</div>
           </div>
           {events.length === 0 ? (
-            <div className="muted">{auditQ.loading ? 'Loading…' : 'No recent audit events for this harness run.'}</div>
+            <div className="text-sm text-muted-foreground">{auditQ.loading ? 'Loading…' : 'No audit events for this run.'}</div>
           ) : (
-            <table className="table" aria-label="audit table">
-              <thead>
-                <tr>
-                  <th>At</th>
-                  <th>Action</th>
-                  <th>Outcome</th>
-                </tr>
-              </thead>
-              <tbody>
-                {events.map((e) => (
-                  <tr key={e.id}>
-                    <td className="mono">{new Date(e.at).toLocaleTimeString()}</td>
-                    <td className="mono">{e.action}</td>
-                    <td className="mono">{e.outcome}</td>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm" aria-label="audit table">
+                <thead>
+                  <tr className="border-b border-border text-left">
+                    <th className="py-2 pr-4 text-xs font-medium text-muted-foreground">At</th>
+                    <th className="py-2 pr-4 text-xs font-medium text-muted-foreground">Action</th>
+                    <th className="py-2 text-xs font-medium text-muted-foreground">Outcome</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {events.map((e) => (
+                    <tr key={e.id} className="border-b border-border/50 last:border-b-0">
+                      <td className="py-2.5 pr-4 font-mono text-sm">{new Date(e.at).toLocaleTimeString()}</td>
+                      <td className="py-2.5 pr-4 font-mono text-sm">{e.action}</td>
+                      <td className="py-2.5 font-mono text-sm">{e.outcome}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           )}
         </section>
       </div>

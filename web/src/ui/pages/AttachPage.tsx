@@ -4,6 +4,7 @@ import { useAuth } from '../auth'
 import { api, isUnauthorizedError } from '../lib/api'
 import { base64DecodeToBytes, base64EncodeBytes } from '../lib/base64'
 import { Topbar } from '../components/Topbar'
+import { cn } from '@/lib/utils'
 
 type AttachMsg = {
   type: string
@@ -159,64 +160,93 @@ export function AttachPage() {
     ws.send(JSON.stringify({ type: 'take_control' }))
   }
 
+  const cardClass = 'rounded-lg border border-border bg-card p-4'
+  const headerClass = 'flex items-center justify-between mb-3'
+  const rowClass = 'flex items-start gap-3 mb-3'
+  const labelClass = 'text-xs text-muted-foreground w-24 shrink-0 pt-0.5'
+  const btnClass =
+    'rounded-md border border-border bg-secondary px-3 py-1.5 text-sm text-secondary-foreground hover:bg-secondary/80 transition-colors cursor-pointer'
+  const errorClass = 'mt-3 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-foreground'
+
   return (
     <>
-      <Topbar title={`Attach ${id}`} subtitle="Interactive attach on the running harness pod (viewer/driver)" />
+      <Topbar title={`Attach ${id}`} subtitle="Live terminal — viewer or driver mode via websocket." />
 
-      <div className="grid">
-        <section className="card">
-          <div className="cardHeader">
-            <h2>Connection</h2>
-            <div className="muted">{status}</div>
+      <div className="mt-4 flex flex-col gap-4">
+        <section className={cardClass}>
+          <div className={headerClass}>
+            <h2 className="text-sm font-semibold tracking-tight">Connection</h2>
+            <div
+              className={cn(
+                'text-xs font-mono px-2 py-0.5 rounded-full border',
+                status === 'connected'
+                  ? 'border-status-ok/30 text-status-ok bg-status-ok/10'
+                  : status === 'error' || status === 'disconnected'
+                    ? 'border-destructive/30 text-destructive bg-destructive/10'
+                    : 'border-border text-muted-foreground bg-muted/50',
+              )}
+            >
+              {status}
+            </div>
           </div>
 
-          <div className="formRow">
-            <div className="label">Role</div>
-            <div className="mono">{role}</div>
+          <div className={rowClass}>
+            <div className={labelClass}>Role</div>
+            <div className={cn(
+              'font-mono text-sm px-2 py-0.5 rounded border',
+              role === 'driver'
+                ? 'border-primary/30 bg-primary/10 text-foreground'
+                : 'border-border bg-muted/50 text-muted-foreground',
+            )}>
+              {role}
+            </div>
           </div>
 
-          <div className="formRow">
-            <div className="label">Client</div>
-            <div className="mono">{hello?.clientID ?? '(pending)'}</div>
+          <div className={rowClass}>
+            <div className={labelClass}>Client</div>
+            <div className="font-mono text-sm">{hello?.clientID ?? '(pending)'}</div>
           </div>
 
-          <div className="formRow">
-            <div className="label">Driver</div>
-            <div className="mono">{driverState?.driverID ?? hello?.driverID ?? '(none)'}</div>
+          <div className={rowClass}>
+            <div className={labelClass}>Driver</div>
+            <div className="font-mono text-sm">{driverState?.driverID ?? hello?.driverID ?? '(none)'}</div>
           </div>
 
-          <div className="formRow">
-            <div className="label">Lease</div>
-            <div className="mono">{String(driverState?.leaseMS ?? hello?.leaseMS ?? 0)}ms</div>
+          <div className={rowClass}>
+            <div className={labelClass}>Lease</div>
+            <div className="font-mono text-sm">{String(driverState?.leaseMS ?? hello?.leaseMS ?? 0)}ms</div>
           </div>
 
-          <div className="rowActions">
-            <button className="btn" onClick={takeControl} type="button">
-              Take Control
+          <div className="flex items-center gap-3 mt-1">
+            <button className={btnClass} onClick={takeControl} type="button">
+              Seize Control
             </button>
-            <Link className="btn" to={`/workspace-sessions/${encodeURIComponent(id)}`}>
-              Back to Workspace Session
+            <Link className={btnClass} to={`/workspace-sessions/${encodeURIComponent(id)}`}>
+              ← Session
             </Link>
           </div>
 
-          {err ? <div className="errorBox">{err}</div> : null}
-          {token.trim() === '' ? <div className="errorBox">Set a bearer token in the top bar.</div> : null}
+          {err ? <div className={errorClass}>{err}</div> : null}
+          {token.trim() === '' ? <div className={errorClass}>No bearer token set. Auth required.</div> : null}
         </section>
 
-        <section className="card">
-          <div className="cardHeader">
-            <h2>Terminal</h2>
-            <div className="muted">stdout via websocket</div>
+        <section className={cardClass}>
+          <div className={headerClass}>
+            <h2 className="text-sm font-semibold tracking-tight">Terminal</h2>
+            <div className="text-xs text-muted-foreground">stdout stream via websocket</div>
           </div>
 
-          <div className="terminal mono" ref={termRef} />
+          <div
+            className="min-h-[320px] max-h-[600px] overflow-auto rounded-md border border-border bg-background p-3 font-mono text-sm text-foreground whitespace-pre-wrap"
+            ref={termRef}
+          />
 
-          <div className="rowActions">
+          <div className="flex items-center gap-3 mt-3">
             <input
-              className="input"
+              className="flex-1 rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground font-mono placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring/40 focus:border-ring disabled:opacity-40 disabled:cursor-not-allowed"
               value={input}
               onChange={(e) => setInput(e.target.value)}
-              placeholder={role === 'driver' ? 'Type a command and press Enter' : 'Read-only'}
+              placeholder={role === 'driver' ? 'stdin → enter to send' : 'read-only (viewer)'}
               disabled={role !== 'driver'}
               onKeyDown={(e) => {
                 if (e.key === 'Enter') {
@@ -225,7 +255,12 @@ export function AttachPage() {
                 }
               }}
             />
-            <button className="btn btnPrimary" onClick={sendLine} type="button" disabled={role !== 'driver'}>
+            <button
+              className="rounded-md border border-primary/30 bg-primary/10 px-4 py-2 text-sm text-foreground hover:bg-primary/20 transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+              onClick={sendLine}
+              type="button"
+              disabled={role !== 'driver'}
+            >
               Send
             </button>
           </div>
