@@ -9,6 +9,6 @@ Establish the control-plane baseline for orchestrating coding-agent sessions in 
 - control-plane-api
 
 ## Changes
-- [ ] 001-01_bootstrap-control-plane
-- [ ] 001-02_define-crds-and-operator-reconcile
-- [ ] 001-03_build-api-rbac-and-audit
+- [x] 001-01_bootstrap-control-plane
+- [x] 001-02_define-crds-and-operator-reconcile
+- [x] 001-03_build-api-rbac-and-audit

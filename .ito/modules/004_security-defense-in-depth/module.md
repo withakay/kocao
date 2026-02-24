@@ -17,10 +17,10 @@ in the control-plane API, hardened attach/websocket handling, and user-facing gu
 - harness-runtime
 
 ## Changes
-- [ ] 004-01_baseline-security-review
+- [x] 004-01_baseline-security-review
 - [ ] 004-02_fix-audit-config-and-rbac
-- [ ] 004-03_harden-api-surface
-- [ ] 004-04_harden-attach-websocket
+- [x] 004-03_harden-api-surface
+- [x] 004-04_harden-attach-websocket
 - [ ] 004-05_operator-egress-alignment
 - [ ] 004-06_web-ui-security-hardening
 - [ ] 004-07_harden-harness-runtime

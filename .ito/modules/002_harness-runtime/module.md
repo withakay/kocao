@@ -8,5 +8,6 @@ Define and harden the runtime environment used by ephemeral harness pods and dur
 - session-durability
 
 ## Changes
-- [ ] 002-01_create-harness-image-and-runtime-contract
-- [ ] 002-02_enforce-egress-and-session-artifacts
+- [x] 002-01_create-harness-image-and-runtime-contract
+- [x] 002-02_enforce-egress-and-session-artifacts
+- [ ] 002-03_clarify-harness-run-and-session-terminology
