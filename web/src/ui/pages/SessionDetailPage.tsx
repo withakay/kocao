@@ -40,6 +40,8 @@ export function SessionDetailPage() {
 
   const [repoURL, setRepoURL] = useState('')
   const [repoRevision, setRepoRevision] = useState('')
+  const [task, setTask] = useState('')
+  const [advancedArgs, setAdvancedArgs] = useState('')
   const [image, setImage] = useState('kocao/harness-runtime:dev')
   const [egressMode, setEgressMode] = useState<'restricted' | 'full'>('restricted')
   const [starting, setStarting] = useState(false)
@@ -49,11 +51,30 @@ export function SessionDetailPage() {
     setStarting(true)
     setStartErr(null)
     try {
+      const trimmedTask = task.trim()
+      const trimmedAdvancedArgs = advancedArgs.trim()
+      let args: string[] | undefined
+      if (trimmedTask !== '') {
+        args = ['bash', '-lc', trimmedTask]
+      } else if (trimmedAdvancedArgs !== '') {
+        let parsed: unknown
+        try {
+          parsed = JSON.parse(trimmedAdvancedArgs)
+        } catch {
+          throw new Error('Advanced args must be valid JSON (array of strings).')
+        }
+        if (!Array.isArray(parsed) || parsed.some((v) => typeof v !== 'string')) {
+          throw new Error('Advanced args must be a JSON array of strings.')
+        }
+        args = parsed as string[]
+      }
+
       const out = await api.startHarnessRun(token, id, {
         repoURL: repoURL.trim() !== '' ? repoURL.trim() : sessQ.data?.repoURL ?? '',
         repoRevision: repoRevision.trim() !== '' ? repoRevision.trim() : undefined,
         image: image.trim(),
-        egressMode
+        egressMode,
+        args
       })
       nav(`/harness-runs/${encodeURIComponent(out.id)}`)
     } catch (e) {
@@ -65,7 +86,7 @@ export function SessionDetailPage() {
     } finally {
       setStarting(false)
     }
-  }, [token, id, repoURL, repoRevision, image, egressMode, nav, sessQ.data, onUnauthorized])
+  }, [token, id, repoURL, repoRevision, task, advancedArgs, image, egressMode, nav, sessQ.data, onUnauthorized])
 
   const sess = sessQ.data
   const effectiveRepo = repoURL.trim() !== '' ? repoURL.trim() : sess?.repoURL ?? ''
@@ -120,6 +141,28 @@ export function SessionDetailPage() {
           <div className="formRow">
             <div className="label">Revision</div>
             <input className="input" value={repoRevision} onChange={(e) => setRepoRevision(e.target.value)} placeholder="main (optional)" />
+          </div>
+          <div className="formRow">
+            <div className="label">Task</div>
+            <textarea
+              className="input"
+              rows={3}
+              value={task}
+              onChange={(e) => setTask(e.target.value)}
+              placeholder="make ci"
+            />
+            <div className="faint">Runs as <span className="mono">bash -lc "&lt;task&gt;"</span>. Do not put secrets in Task text.</div>
+          </div>
+          <div className="formRow">
+            <div className="label">Advanced args (JSON)</div>
+            <textarea
+              className="input"
+              rows={3}
+              value={advancedArgs}
+              onChange={(e) => setAdvancedArgs(e.target.value)}
+              placeholder='["go", "test", "./..."]'
+            />
+            <div className="faint">Used only when Task is empty.</div>
           </div>
           <div className="formRow">
             <div className="label">Image</div>

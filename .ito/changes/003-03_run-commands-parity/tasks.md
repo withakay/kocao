@@ -31,7 +31,7 @@ ______________________________________________________________________
 - **Verify**: `cd web && pnpm test`
 - **Done When**: UI can start a run that executes a provided task; UI can start an interactive run when Task is empty; tests pass.
 - **Updated At**: 2026-02-24
-- **Status**: [ ] pending
+- **Status**: [x] complete
 
 ### Task 1.2: Add tests for Task->args mapping
 
@@ -41,7 +41,7 @@ ______________________________________________________________________
 - **Verify**: `cd web && pnpm test`
 - **Done When**: Tests fail before implementation and pass after; start-run behavior is covered.
 - **Updated At**: 2026-02-24
-- **Status**: [ ] pending
+- **Status**: [x] complete
 
 ### Task 1.3: Add API test for args pass-through
 
@@ -51,7 +51,7 @@ ______________________________________________________________________
 - **Verify**: `make test`
 - **Done When**: API run-create behavior with args is covered by a test.
 - **Updated At**: 2026-02-24
-- **Status**: [ ] pending
+- **Status**: [x] complete
 
 ______________________________________________________________________
 
@@ -64,4 +64,4 @@ ______________________________________________________________________
 - **Action**: Review the implementation before proceeding
 - **Done When**: User confirms implementation is correct
 - **Updated At**: 2026-02-24
-- **Status**: [ ] pending
+- **Status**: [x] complete

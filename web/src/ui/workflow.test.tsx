@@ -60,6 +60,7 @@ describe('workflow-ui-github', () => {
 
     const workspaceSessions: WorkspaceSession[] = []
     const harnessRuns: HarnessRun[] = []
+    let lastStartBody: any = null
 
     server.use(
       http.get('/api/v1/workspace-sessions', () => HttpResponse.json({ workspaceSessions })),
@@ -86,7 +87,8 @@ describe('workflow-ui-github', () => {
         return HttpResponse.json(r)
       }),
       http.post('/api/v1/workspace-sessions/:id/harness-runs', async (ctx: any) => {
-        const b = (await ctx.request.json()) as { repoURL: string; repoRevision?: string; image: string }
+        const b = (await ctx.request.json()) as { repoURL: string; repoRevision?: string; image: string; args?: string[] }
+        lastStartBody = b
         const r: HarnessRun = {
           id: 'run-1',
           workspaceSessionID: String(ctx.params.id),
@@ -121,6 +123,7 @@ describe('workflow-ui-github', () => {
     await userEvent.click(start)
 
     await screen.findByRole('heading', { name: /Harness Run run-1/ })
+    expect(lastStartBody?.args).toBeUndefined()
     await screen.findByText('Succeeded')
 
     const outcome = await screen.findByRole('heading', { name: 'GitHub Outcome' })
@@ -131,6 +134,53 @@ describe('workflow-ui-github', () => {
     expect(prLink).toHaveAttribute('href', 'https://github.com/withakay/kocao/pull/123')
     within(card as HTMLElement).getByText('feature/mvp-ui')
     within(card as HTMLElement).getByText('merged')
+
+    unmount()
+  })
+
+  it('maps Task to args when starting a run', async () => {
+    sessionStorage.setItem('kocao.apiToken', 't-full')
+    window.location.hash = '#/workspace-sessions/sess-1'
+
+    const harnessRuns: HarnessRun[] = []
+    let lastStartBody: any = null
+
+    server.use(
+      http.get('/api/v1/workspace-sessions/sess-1', () =>
+        HttpResponse.json({ id: 'sess-1', repoURL: 'https://example.com/repo', phase: 'Active' })
+      ),
+      http.get('/api/v1/harness-runs', () => HttpResponse.json({ harnessRuns })),
+      http.get('/api/v1/audit', () => HttpResponse.json({ events: [] })),
+      http.post('/api/v1/workspace-sessions/:id/harness-runs', async (ctx: any) => {
+        const b = (await ctx.request.json()) as { repoURL: string; repoRevision?: string; image: string; args?: string[] }
+        lastStartBody = b
+        const r: HarnessRun = {
+          id: 'run-task',
+          workspaceSessionID: String(ctx.params.id),
+          repoURL: b.repoURL,
+          repoRevision: b.repoRevision ?? 'main',
+          image: b.image,
+          phase: 'Running',
+          podName: 'pod-task'
+        }
+        harnessRuns.unshift(r)
+        return HttpResponse.json(r, { status: 201 })
+      }),
+      http.get('/api/v1/harness-runs/:id', () =>
+        HttpResponse.json({ id: 'run-task', workspaceSessionID: 'sess-1', repoURL: 'https://example.com/repo', image: 'kocao/harness-runtime:dev', phase: 'Running' })
+      )
+    )
+
+    const { unmount } = render(<App />)
+
+    const taskInput = await screen.findByPlaceholderText('make ci')
+    await userEvent.type(taskInput, 'make ci')
+
+    const start = await screen.findByRole('button', { name: 'Start Harness Run' })
+    await userEvent.click(start)
+
+    await screen.findByRole('heading', { name: /Harness Run run-task/ })
+    expect(lastStartBody?.args).toEqual(['bash', '-lc', 'make ci'])
 
     unmount()
   })

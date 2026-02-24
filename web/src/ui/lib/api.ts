@@ -93,6 +93,7 @@ export const api = {
       repoRevision?: string
       image: string
       egressMode?: string
+      args?: string[]
       ttlSecondsAfterFinished?: number
     }
   ) =>
@@ -104,6 +105,7 @@ export const api = {
         repoRevision: input.repoRevision,
         image: input.image,
         egressMode: input.egressMode,
+        args: input.args,
         ttlSecondsAfterFinished: input.ttlSecondsAfterFinished
       }
     }),

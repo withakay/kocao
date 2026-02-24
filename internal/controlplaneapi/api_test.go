@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -100,6 +102,28 @@ func TestOpenAPI_Unauthenticated(t *testing.T) {
 	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+}
+
+func TestCaddyEdgeConfig_HasScalarAndProxyRoutes(t *testing.T) {
+	b, err := os.ReadFile(filepath.Join("..", "..", "deploy", "base", "caddy", "Caddyfile"))
+	if err != nil {
+		t.Fatalf("read Caddyfile: %v", err)
+	}
+	content := string(b)
+	required := []string{
+		":8081",
+		"/scalar",
+		"/openapi.json",
+		"/api/v1/*",
+		"path_regexp attach ^/api/v1/workspace-sessions/[^/]+/attach$",
+		"header Upgrade websocket",
+		"reverse_proxy @api 127.0.0.1:8080",
+	}
+	for _, token := range required {
+		if !strings.Contains(content, token) {
+			t.Fatalf("Caddyfile missing %q", token)
+		}
 	}
 }
 
@@ -226,6 +250,7 @@ func TestLifecycle_SessionRunControlsAndAudit(t *testing.T) {
 		"repoURL":      "https://example.com/repo",
 		"repoRevision": "main",
 		"image":        "alpine:3",
+		"args":         []string{"bash", "-lc", "make ci"},
 		"env":          []map[string]any{{"name": "GITHUB_TOKEN", "value": "redacted"}},
 	})
 	if resp.StatusCode != http.StatusCreated {
@@ -247,6 +272,9 @@ func TestLifecycle_SessionRunControlsAndAudit(t *testing.T) {
 	}
 	if stored.Annotations == nil {
 		stored.Annotations = map[string]string{}
+	}
+	if len(stored.Spec.Args) != 3 || stored.Spec.Args[0] != "bash" || stored.Spec.Args[1] != "-lc" || stored.Spec.Args[2] != "make ci" {
+		t.Fatalf("run args not persisted: %#v", stored.Spec.Args)
 	}
 	stored.Annotations["kocao.withakay.github.com/github-branch"] = "feature/mvp-ui"
 	stored.Annotations["kocao.withakay.github.com/pull-request-url"] = "https://github.com/withakay/kocao/pull/123"
