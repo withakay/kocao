@@ -34,10 +34,40 @@ Use `ito path ...` to get absolute paths at runtime (do not hardcode absolute pa
 ## Worktree Workflow
 
 
-Worktrees are not configured for this project.
+**Strategy:** `bare_control_siblings`
+**Directory name:** `ito-worktrees`
+**Default branch:** `main`
+**Integration mode:** `merge_parent`
 
-- Do NOT create git worktrees by default.
-- Work in the current checkout unless the user explicitly requests a worktree workflow.
+
+This project uses a bare/control repo layout with worktrees as siblings:
+
+```bash
+../                              # bare/control repo
+|-- .bare/                              # git object store
+|-- .git                                # gitdir pointer
+|-- main/               # main branch worktree
+`-- ito-worktrees/              # change worktrees
+    `-- <change-name>/
+```
+
+To create a worktree for a change:
+
+```bash
+mkdir -p "../ito-worktrees"
+git worktree add "../ito-worktrees/<change-name>" -b <change-name>
+```
+
+
+Do NOT ask the user where to create worktrees. Use the configured locations above.
+
+After the change branch is merged, clean up:
+
+```bash
+git worktree remove <worktree-path> 2>/dev/null || true
+git branch -d <change-name> 2>/dev/null || true
+git worktree prune
+```
 
 
 <!-- ITO:END -->

@@ -12,11 +12,57 @@ description: Use when starting feature work that needs isolation from current wo
 Git worktrees create isolated workspaces that share the same repository, allowing work on multiple branches simultaneously.
 
 
-Worktrees are not configured for this project.
+**Configured strategy:** `bare_control_siblings`
+**Directory name:** `ito-worktrees`
+**Default branch:** `main`
+**Integration mode:** `merge_parent`
 
-- Do NOT create git worktrees by default.
-- Work in the current checkout.
-- Only use worktrees when the user explicitly requests that workflow.
+## Worktree Location
+
+
+Worktrees live under the bare/control layout:
+
+```bash
+../
+|-- main/
+`-- ito-worktrees/<change-name>/
+```
+
+Create a worktree:
+
+```bash
+mkdir -p "../ito-worktrees"
+git worktree add "../ito-worktrees/<change-name>" -b <change-name>
+```
+
+
+Do NOT ask the user where to create worktrees.
+
+## Path Helpers
+
+If you need absolute paths (for logs, scripts, or agent instructions), use:
+
+- `ito path project-root`
+- `ito path worktree-root`
+- `ito path worktrees-root`
+- `ito path worktree --main|--branch <name>|--change <id>`
+
+## Safety Checks
+
+- Ensure the parent directory for the worktree exists (create it if needed).
+- Run a clean baseline build/test in the new worktree so new failures are attributable.
+- Do not proceed if baseline tests fail without explicitly calling that out.
+
+## Cleanup
+
+After the branch is merged:
+
+```bash
+git worktree remove "<worktree-path>" 2>/dev/null || true
+git branch -d "<branch-name>" 2>/dev/null || true
+git worktree prune
+```
+
 
 
 ## Integration
