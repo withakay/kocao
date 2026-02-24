@@ -26,7 +26,7 @@ ______________________________________________________________________
 - **Verify**: `cd web && pnpm test`
 - **Done When**: Attach transport/input/output path is decoupled from concrete renderer and existing attach behavior still works.
 - **Updated At**: 2026-02-24
-- **Status**: [ ] pending
+- **Status**: [>] in-progress
 
 ### Task 1.2: Integrate xterm and ghostty engines with per-session toggle
 
