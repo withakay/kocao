@@ -14,3 +14,4 @@ Deliver the interactive attach and UI workflow that turns orchestrated runs into
 - [ ] 003-04_add-scalar-and-cluster-ui-serving
 - [x] 003-05_refresh-monochrome-kibo-ui
 - [ ] 003-06_terminal-engine-toggle-ghostty-xterm
+- [ ] 003-07_migrate-tanstack-router
