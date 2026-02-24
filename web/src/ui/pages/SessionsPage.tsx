@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useState } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { Link, useNavigate } from '@tanstack/react-router'
 import { useAuth } from '../auth'
 import { api, isUnauthorizedError, WorkspaceSession } from '../lib/api'
 import { usePollingQuery } from '../lib/usePolling'
@@ -34,7 +34,7 @@ export function SessionsPage() {
     setCreateErr(null)
     try {
       const sess = await api.createWorkspaceSession(token, repoURL)
-      nav(`/workspace-sessions/${encodeURIComponent(sess.id)}`)
+      nav({ to: '/workspace-sessions/$workspaceSessionID', params: { workspaceSessionID: sess.id } })
     } catch (e) {
       if (isUnauthorizedError(e)) {
         onUnauthorized()
@@ -122,7 +122,7 @@ export function SessionsPage() {
                   sessions.map((s) => (
                     <tr key={s.id} className="border-b border-border/50 last:border-b-0">
                       <td className="py-2.5 pr-4 font-mono text-sm">
-                        <Link to={`/workspace-sessions/${encodeURIComponent(s.id)}`} className="text-primary hover:underline">{s.id}</Link>
+                        <Link to="/workspace-sessions/$workspaceSessionID" params={{ workspaceSessionID: s.id }} className="text-primary hover:underline">{s.id}</Link>
                       </td>
                       <td className="py-2.5 pr-4 font-mono text-sm text-muted-foreground" title={cellRepo(s)}>
                         {cellRepo(s)}

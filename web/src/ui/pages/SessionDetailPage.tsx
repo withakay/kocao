@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useState } from 'react'
-import { Link, useNavigate, useParams } from 'react-router-dom'
+import { Link, useNavigate, useParams } from '@tanstack/react-router'
 import { useAuth } from '../auth'
 import { api, isUnauthorizedError } from '../lib/api'
 import { usePollingQuery } from '../lib/usePolling'
@@ -7,7 +7,7 @@ import { StatusPill } from '../components/StatusPill'
 import { Topbar } from '../components/Topbar'
 
 export function SessionDetailPage() {
-  const { workspaceSessionID } = useParams()
+  const { workspaceSessionID } = useParams({ strict: false })
   const id = workspaceSessionID ?? ''
   const { token, invalidateToken } = useAuth()
   const nav = useNavigate()
@@ -76,7 +76,7 @@ export function SessionDetailPage() {
         egressMode,
         args
       })
-      nav(`/harness-runs/${encodeURIComponent(out.id)}`)
+      nav({ to: '/harness-runs/$harnessRunID', params: { harnessRunID: out.id } })
     } catch (e) {
       if (isUnauthorizedError(e)) {
         onUnauthorized()
@@ -239,7 +239,7 @@ export function SessionDetailPage() {
                   runs.map((r) => (
                     <tr key={r.id} className="border-b border-border/50 last:border-b-0">
                       <td className="py-2.5 pr-4 font-mono text-sm">
-                        <Link to={`/harness-runs/${encodeURIComponent(r.id)}`} className="text-primary hover:underline">{r.id}</Link>
+                        <Link to="/harness-runs/$harnessRunID" params={{ harnessRunID: r.id }} className="text-primary hover:underline">{r.id}</Link>
                       </td>
                       <td className="py-2.5 pr-4 font-mono text-sm text-muted-foreground">{r.repoURL}</td>
                       <td className="py-2.5">

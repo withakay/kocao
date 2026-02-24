@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Link, useParams, useSearchParams } from 'react-router-dom'
+import { Link, useParams, useSearch } from '@tanstack/react-router'
 import { useAuth } from '../auth'
 import { api, isUnauthorizedError } from '../lib/api'
 import { base64DecodeToBytes, base64EncodeBytes } from '../lib/base64'
@@ -20,11 +20,10 @@ type AttachMsg = {
 }
 
 export function AttachPage() {
-  const { workspaceSessionID } = useParams()
+  const { workspaceSessionID } = useParams({ strict: false })
   const id = workspaceSessionID ?? ''
   const { token, invalidateToken } = useAuth()
-  const [sp] = useSearchParams()
-  const role = (sp.get('role') === 'driver' ? 'driver' : 'viewer') as 'viewer' | 'driver'
+  const { role } = useSearch({ strict: false }) as { role: 'viewer' | 'driver' }
 
   const onUnauthorized = useCallback(() => {
     invalidateToken('Bearer token rejected (401). Please re-enter a valid token in the top bar.')
@@ -221,7 +220,7 @@ export function AttachPage() {
             <button className={btnClass} onClick={takeControl} type="button">
               Seize Control
             </button>
-            <Link className={btnClass} to={`/workspace-sessions/${encodeURIComponent(id)}`}>
+            <Link className={btnClass} to="/workspace-sessions/$workspaceSessionID" params={{ workspaceSessionID: id }}>
               ← Session
             </Link>
           </div>

@@ -1,20 +1,20 @@
 export type WorkspaceSession = {
   id: string
-  repoURL?: string
-  phase?: string
+  repoURL?: string | undefined
+  phase?: string | undefined
 }
 
 export type HarnessRun = {
   id: string
-  workspaceSessionID?: string
+  workspaceSessionID?: string | undefined
   repoURL: string
-  repoRevision?: string
+  repoRevision?: string | undefined
   image: string
-  phase?: string
-  podName?: string
-  gitHubBranch?: string
-  pullRequestURL?: string
-  pullRequestStatus?: string
+  phase?: string | undefined
+  podName?: string | undefined
+  gitHubBranch?: string | undefined
+  pullRequestURL?: string | undefined
+  pullRequestStatus?: string | undefined
 }
 
 export type AuditEvent = {
@@ -25,14 +25,14 @@ export type AuditEvent = {
   resourceType: string
   resourceID: string
   outcome: string
-  metadata?: unknown
+  metadata?: unknown | undefined
 }
 
 type FetchOptions = {
-  method?: string
-  body?: unknown
-  token?: string
-  credentials?: RequestCredentials
+  method?: string | undefined
+  body?: unknown | undefined
+  token?: string | undefined
+  credentials?: RequestCredentials | undefined
 }
 
 export class APIError extends Error {
@@ -59,12 +59,17 @@ async function apiFetch<T>(path: string, opts: FetchOptions = {}): Promise<T> {
   if (opts.token && opts.token.trim() !== '') {
     headers['Authorization'] = `Bearer ${opts.token.trim()}`
   }
-  const res = await fetch(path, {
+  const init: RequestInit = {
     method: opts.method ?? 'GET',
     headers,
-    body: opts.body === undefined ? undefined : JSON.stringify(opts.body),
-    credentials: opts.credentials
-  })
+  }
+  if (opts.body !== undefined) {
+    init.body = JSON.stringify(opts.body)
+  }
+  if (opts.credentials !== undefined) {
+    init.credentials = opts.credentials
+  }
+  const res = await fetch(path, init)
   const text = await res.text()
   if (!res.ok) {
     throw new APIError(`Request failed: ${res.status}`, res.status, text)
@@ -90,11 +95,11 @@ export const api = {
     workspaceSessionID: string,
     input: {
       repoURL: string
-      repoRevision?: string
+      repoRevision?: string | undefined
       image: string
-      egressMode?: string
-      args?: string[]
-      ttlSecondsAfterFinished?: number
+      egressMode?: string | undefined
+      args?: string[] | undefined
+      ttlSecondsAfterFinished?: number | undefined
     }
   ) =>
     apiFetch<HarnessRun>(`/api/v1/workspace-sessions/${encodeURIComponent(workspaceSessionID)}/harness-runs`, {

@@ -1,36 +1,44 @@
 import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { RouterProvider } from '@tanstack/react-router'
+import { createMemoryHistory } from '@tanstack/react-router'
 import { http, HttpResponse } from 'msw'
 import { describe, expect, it, vi } from 'vitest'
 import { server } from '../test/server'
-import { App } from './App'
+import { createAppRouter } from './App'
 
-type WorkspaceSession = { id: string; repoURL?: string; phase?: string }
+type WorkspaceSession = { id: string; repoURL?: string | undefined; phase?: string | undefined }
 type HarnessRun = {
   id: string
-  workspaceSessionID?: string
+  workspaceSessionID?: string | undefined
   repoURL: string
-  repoRevision?: string
+  repoRevision?: string | undefined
   image: string
-  phase?: string
-  podName?: string
-  gitHubBranch?: string
-  pullRequestURL?: string
-  pullRequestStatus?: string
+  phase?: string | undefined
+  podName?: string | undefined
+  gitHubBranch?: string | undefined
+  pullRequestURL?: string | undefined
+  pullRequestStatus?: string | undefined
+}
+
+function renderApp(path: string) {
+  const history = createMemoryHistory({ initialEntries: [path] })
+  const router = createAppRouter(history)
+  const result = render(<RouterProvider router={router} />)
+  return result
 }
 
 describe('workflow-ui-github', () => {
   it('stores token in session storage by default and local storage when remembered', async () => {
     localStorage.removeItem('kocao.apiToken')
     sessionStorage.removeItem('kocao.apiToken')
-    window.location.hash = '#/workspace-sessions'
 
     server.use(
       http.get('/api/v1/audit', () => HttpResponse.json({ events: [] })),
       http.get('/api/v1/workspace-sessions', () => HttpResponse.json({ workspaceSessions: [] }))
     )
 
-    const { unmount } = render(<App />)
+    const { unmount } = renderApp('/workspace-sessions')
 
     const input = await screen.findByLabelText('API token')
     await userEvent.clear(input)
@@ -56,7 +64,6 @@ describe('workflow-ui-github', () => {
 
   it('creates a session, starts a run, and shows PR outcome metadata', async () => {
     sessionStorage.setItem('kocao.apiToken', 't-full')
-    window.location.hash = '#/workspace-sessions'
 
     const workspaceSessions: WorkspaceSession[] = []
     const harnessRuns: HarnessRun[] = []
@@ -71,7 +78,7 @@ describe('workflow-ui-github', () => {
         return HttpResponse.json(s, { status: 201 })
       }),
       http.get('/api/v1/workspace-sessions/:id', (ctx: any) => {
-        const s = workspaceSessions.find((x) => x.id === ctx.params.id)
+        const s = workspaceSessions.find((x) => x.id === ctx.params['id'])
         if (!s) return new HttpResponse('not found', { status: 404 })
         return HttpResponse.json(s)
       }),
@@ -82,7 +89,7 @@ describe('workflow-ui-github', () => {
         return HttpResponse.json({ harnessRuns: out })
       }),
       http.get('/api/v1/harness-runs/:id', (ctx: any) => {
-        const r = harnessRuns.find((x) => x.id === ctx.params.id)
+        const r = harnessRuns.find((x) => x.id === ctx.params['id'])
         if (!r) return new HttpResponse('not found', { status: 404 })
         return HttpResponse.json(r)
       }),
@@ -91,7 +98,7 @@ describe('workflow-ui-github', () => {
         lastStartBody = b
         const r: HarnessRun = {
           id: 'run-1',
-          workspaceSessionID: String(ctx.params.id),
+          workspaceSessionID: String(ctx.params['id']),
           repoURL: b.repoURL,
           repoRevision: b.repoRevision ?? 'main',
           image: b.image,
@@ -107,7 +114,7 @@ describe('workflow-ui-github', () => {
       http.get('/api/v1/audit', () => HttpResponse.json({ events: [] }))
     )
 
-    const { unmount } = render(<App />)
+    const { unmount } = renderApp('/workspace-sessions')
 
     const create = await screen.findByRole('button', { name: 'Provision' })
     await userEvent.click(create)
@@ -140,7 +147,6 @@ describe('workflow-ui-github', () => {
 
   it('maps Task to args when starting a run', async () => {
     sessionStorage.setItem('kocao.apiToken', 't-full')
-    window.location.hash = '#/workspace-sessions/sess-1'
 
     const harnessRuns: HarnessRun[] = []
     let lastStartBody: any = null
@@ -156,7 +162,7 @@ describe('workflow-ui-github', () => {
         lastStartBody = b
         const r: HarnessRun = {
           id: 'run-task',
-          workspaceSessionID: String(ctx.params.id),
+          workspaceSessionID: String(ctx.params['id']),
           repoURL: b.repoURL,
           repoRevision: b.repoRevision ?? 'main',
           image: b.image,
@@ -171,7 +177,7 @@ describe('workflow-ui-github', () => {
       )
     )
 
-    const { unmount } = render(<App />)
+    const { unmount } = renderApp('/workspace-sessions/sess-1')
 
     const taskInput = await screen.findByPlaceholderText('make ci')
     await userEvent.type(taskInput, 'make ci')
@@ -187,7 +193,6 @@ describe('workflow-ui-github', () => {
 
   it('uses Advanced args when provided, even when Task is set', async () => {
     sessionStorage.setItem('kocao.apiToken', 't-full')
-    window.location.hash = '#/workspace-sessions/sess-1'
 
     const harnessRuns: HarnessRun[] = []
     let lastStartBody: any = null
@@ -203,7 +208,7 @@ describe('workflow-ui-github', () => {
         lastStartBody = b
         const r: HarnessRun = {
           id: 'run-advanced',
-          workspaceSessionID: String(ctx.params.id),
+          workspaceSessionID: String(ctx.params['id']),
           repoURL: b.repoURL,
           repoRevision: b.repoRevision ?? 'main',
           image: b.image,
@@ -218,7 +223,7 @@ describe('workflow-ui-github', () => {
       )
     )
 
-    const { unmount } = render(<App />)
+    const { unmount } = renderApp('/workspace-sessions/sess-1')
 
     const taskInput = await screen.findByPlaceholderText('make ci')
     await userEvent.type(taskInput, 'make ci')
@@ -241,14 +246,13 @@ describe('auth-failures', () => {
   it('clears token on 401 and prompts to re-enter credentials', async () => {
     sessionStorage.setItem('kocao.apiToken', 't-bad')
     localStorage.removeItem('kocao.apiToken')
-    window.location.hash = '#/workspace-sessions'
 
     server.use(
       http.get('/api/v1/workspace-sessions', () => new HttpResponse('unauthorized', { status: 401 })),
       http.get('/api/v1/audit', () => HttpResponse.json({ events: [] }))
     )
 
-    const { unmount } = render(<App />)
+    const { unmount } = renderApp('/workspace-sessions')
 
     await screen.findByText(/Bearer token rejected \(401\)/)
     expect(sessionStorage.getItem('kocao.apiToken')).toBeNull()
@@ -263,7 +267,6 @@ describe('auth-failures', () => {
 describe('attach-ui', () => {
   it('establishes websocket without URL token', async () => {
     sessionStorage.setItem('kocao.apiToken', 't-full')
-    window.location.hash = '#/workspace-sessions/sess-1/attach?role=viewer'
 
     let cookieCalls = 0
     server.use(
@@ -274,7 +277,7 @@ describe('attach-ui', () => {
         return HttpResponse.json(
           {
             expiresAt: new Date().toISOString(),
-            workspaceSessionID: String(ctx.params.id),
+            workspaceSessionID: String(ctx.params['id']),
             clientID: 'cli-1',
             role: 'viewer'
           },
@@ -313,7 +316,7 @@ describe('attach-ui', () => {
 
     vi.stubGlobal('WebSocket', MockWebSocket)
     try {
-      const { unmount } = render(<App />)
+      const { unmount } = renderApp('/workspace-sessions/sess-1/attach?role=viewer')
 
       await screen.findByText('connected')
       expect(cookieCalls).toBeGreaterThan(0)

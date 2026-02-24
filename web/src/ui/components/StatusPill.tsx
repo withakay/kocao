@@ -1,7 +1,7 @@
 import { phaseTone } from '../lib/phases'
 import { cn } from '@/lib/utils'
 
-export function StatusPill({ phase }: { phase?: string }) {
+export function StatusPill({ phase }: { phase?: string | undefined }) {
   const t = phaseTone(phase)
   return (
     <span

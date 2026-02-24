@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link } from '@tanstack/react-router'
 import { useAuth } from '../auth'
 import { api } from '../lib/api'
 import { usePollingQuery } from '../lib/usePolling'
@@ -82,11 +82,11 @@ export function RunsPage() {
                   runs.map((r) => (
                     <tr key={r.id} className="border-b border-border/50 last:border-b-0">
                       <td className="py-2.5 pr-4 font-mono text-sm">
-                        <Link to={`/harness-runs/${encodeURIComponent(r.id)}`} className="text-primary hover:underline">{r.id}</Link>
+                        <Link to="/harness-runs/$harnessRunID" params={{ harnessRunID: r.id }} className="text-primary hover:underline">{r.id}</Link>
                       </td>
                       <td className="py-2.5 pr-4 font-mono text-sm">
                         {r.workspaceSessionID ? (
-                          <Link to={`/workspace-sessions/${encodeURIComponent(r.workspaceSessionID)}`} className="text-primary hover:underline">{r.workspaceSessionID}</Link>
+                          <Link to="/workspace-sessions/$workspaceSessionID" params={{ workspaceSessionID: r.workspaceSessionID }} className="text-primary hover:underline">{r.workspaceSessionID}</Link>
                         ) : (
                           <span className="text-muted-foreground">(none)</span>
                         )}

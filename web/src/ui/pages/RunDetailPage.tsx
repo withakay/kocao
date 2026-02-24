@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useState } from 'react'
-import { Link, useNavigate, useParams } from 'react-router-dom'
+import { Link, useNavigate, useParams } from '@tanstack/react-router'
 import { useAuth } from '../auth'
 import { api, isUnauthorizedError } from '../lib/api'
 import { usePollingQuery } from '../lib/usePolling'
@@ -7,7 +7,7 @@ import { StatusPill } from '../components/StatusPill'
 import { Topbar } from '../components/Topbar'
 
 export function RunDetailPage() {
-  const { harnessRunID } = useParams()
+  const { harnessRunID } = useParams({ strict: false })
   const id = harnessRunID ?? ''
   const { token, invalidateToken } = useAuth()
   const nav = useNavigate()
@@ -57,7 +57,7 @@ export function RunDetailPage() {
     setActionErr(null)
     try {
       const out = await api.resumeHarnessRun(token, id)
-      nav(`/harness-runs/${encodeURIComponent(out.id)}`)
+      nav({ to: '/harness-runs/$harnessRunID', params: { harnessRunID: out.id } })
     } catch (e) {
       if (isUnauthorizedError(e)) {
         onUnauthorized()
@@ -69,12 +69,7 @@ export function RunDetailPage() {
     }
   }, [token, id, nav, onUnauthorized])
 
-  const attachLinks = run?.workspaceSessionID
-    ? {
-        viewer: `/workspace-sessions/${encodeURIComponent(run.workspaceSessionID)}/attach?role=viewer`,
-        driver: `/workspace-sessions/${encodeURIComponent(run.workspaceSessionID)}/attach?role=driver`
-      }
-    : null
+  const attachSessionID = run?.workspaceSessionID ?? null
 
   const cardClass = 'rounded-lg border border-border bg-card p-4'
   const headerClass = 'flex items-center justify-between mb-3'
@@ -103,7 +98,7 @@ export function RunDetailPage() {
                 <div className={labelClass}>Workspace Session</div>
                 <div className="font-mono text-sm">
                   {run.workspaceSessionID ? (
-                    <Link to={`/workspace-sessions/${encodeURIComponent(run.workspaceSessionID)}`} className="text-primary hover:underline">{run.workspaceSessionID}</Link>
+                    <Link to="/workspace-sessions/$workspaceSessionID" params={{ workspaceSessionID: run.workspaceSessionID }} className="text-primary hover:underline">{run.workspaceSessionID}</Link>
                   ) : (
                     <span className="text-muted-foreground">(none)</span>
                   )}
@@ -168,19 +163,23 @@ export function RunDetailPage() {
             <div className="text-xs text-muted-foreground font-mono">websocket attach</div>
           </div>
 
-          {attachLinks ? (
+          {attachSessionID ? (
             <>
               <div className="text-sm text-muted-foreground mb-3">Attach tokens are ephemeral. This page acquires a token and opens the websocket.</div>
               <div className="flex items-center gap-3">
                 <Link
                   className={refreshBtnClass}
-                  to={attachLinks.viewer}
+                  to="/workspace-sessions/$workspaceSessionID/attach"
+                  params={{ workspaceSessionID: attachSessionID }}
+                  search={{ role: 'viewer' }}
                 >
                   Open Viewer
                 </Link>
                 <Link
                   className="rounded-md border border-primary/30 bg-primary/10 px-3 py-1.5 text-sm text-foreground hover:bg-primary/20 transition-colors"
-                  to={attachLinks.driver}
+                  to="/workspace-sessions/$workspaceSessionID/attach"
+                  params={{ workspaceSessionID: attachSessionID }}
+                  search={{ role: 'driver' }}
                 >
                   Open Driver
                 </Link>
