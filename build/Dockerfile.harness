@@ -1,42 +1,99 @@
-FROM golang:1.23.2-bookworm AS go
-
-FROM node:22.11.0-bookworm-slim
+FROM ubuntu:24.04
 
 ARG DEBIAN_FRONTEND=noninteractive
 
-COPY --from=go /usr/local/go /usr/local/go
-
-ENV PATH=/usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-ENV GOTOOLCHAIN=local
-
+# ── System packages: compilation prerequisites, dev utilities, base tools ──
 RUN apt-get update \
   && apt-get install -y --no-install-recommends \
     bash \
+    build-essential \
     ca-certificates \
+    clang \
+    cmake \
     curl \
+    fd-find \
+    g++ \
+    gcc \
     git \
+    gnupg \
     jq \
+    libssl-dev \
     openssh-client \
-    python3 \
-    python3-pip \
-    python3-venv \
+    pkg-config \
     ripgrep \
+    software-properties-common \
     tini \
+    tmux \
+    unzip \
+    wget \
+    xz-utils \
   && rm -rf /var/lib/apt/lists/*
 
+# ── Install neovim (latest stable PPA) ──
+RUN add-apt-repository -y ppa:neovim-ppa/stable \
+  && apt-get update \
+  && apt-get install -y --no-install-recommends neovim \
+  && rm -rf /var/lib/apt/lists/*
+
+# ── Install GitHub CLI from official repo ──
+RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+      -o /usr/share/keyrings/githubcli-archive-keyring.gpg \
+  && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+      > /etc/apt/sources.list.d/github-cli.list \
+  && apt-get update \
+  && apt-get install -y --no-install-recommends gh \
+  && rm -rf /var/lib/apt/lists/*
+
+# ── Install yq (binary download) ──
+ARG YQ_VERSION=v4.44.6
+RUN curl -fsSL "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_$(dpkg --print-architecture)" \
+      -o /usr/local/bin/yq \
+  && chmod 0755 /usr/local/bin/yq
+
+# ── Create kocao user and workspace ──
+RUN addgroup --system --gid 10001 kocao \
+  && adduser --system --uid 10001 --ingroup kocao --home /home/kocao --disabled-password kocao \
+  && mkdir -p /workspace /var/run/secrets/kocao/git \
+  && chown -R 10001:10001 /workspace /var/run/secrets/kocao /home/kocao \
+  && chmod 0755 /workspace /var/run/secrets/kocao /var/run/secrets/kocao/git
+
+# ── Install mise (as kocao user) ──
+USER 10001:10001
+ENV HOME=/home/kocao
+ENV MISE_DATA_DIR=/home/kocao/.local/share/mise
+ENV MISE_CONFIG_DIR=/home/kocao/.config/mise
+ENV MISE_CACHE_DIR=/home/kocao/.cache/mise
+ENV PATH=/home/kocao/.local/share/mise/shims:/home/kocao/.local/bin:${PATH}
+
+RUN curl -fsSL https://mise.run | sh
+
+# ── Copy mise.toml and install all runtimes ──
+COPY --chown=10001:10001 build/harness/mise.toml /home/kocao/.config/mise/config.toml
+
+ENV MISE_NODE_VERIFY=false
+RUN mise install --yes \
+  && mise reshim
+
+# ── Install Rust toolchain components for each version ──
+RUN for v in 1.93.1 1.92.0 1.91.1; do \
+      mise exec rust@${v} -- rustup component add rustfmt clippy rust-analyzer 2>/dev/null || true; \
+    done
+
+# ── Create symlink for fd (Ubuntu packages it as fdfind) ──
+USER root
+RUN ln -sf "$(which fdfind)" /usr/local/bin/fd 2>/dev/null || true
+
+# ── Copy harness scripts ──
 COPY build/harness/runtime-matrix.json /etc/kocao/runtime-matrix.json
 COPY build/harness/kocao-harness-entrypoint.sh /usr/local/bin/kocao-harness-entrypoint
 COPY build/harness/kocao-git-askpass.sh /usr/local/bin/kocao-git-askpass
 COPY build/harness/smoke.sh /usr/local/bin/kocao-harness-smoke
 
-RUN chmod 0555 /usr/local/bin/kocao-harness-entrypoint /usr/local/bin/kocao-git-askpass /usr/local/bin/kocao-harness-smoke \
-  && addgroup --system --gid 10001 kocao \
-  && adduser --system --uid 10001 --ingroup kocao --home /home/kocao --disabled-password kocao \
-  && mkdir -p /workspace /var/run/secrets/kocao/git \
-  && chown -R 10001:10001 /workspace /var/run/secrets/kocao \
-  && chmod 0755 /workspace /var/run/secrets/kocao /var/run/secrets/kocao/git
+RUN chmod 0555 /usr/local/bin/kocao-harness-entrypoint /usr/local/bin/kocao-git-askpass /usr/local/bin/kocao-harness-smoke
 
+# ── Run smoke test (build fails fast if anything is missing) ──
 USER 10001:10001
+RUN /usr/local/bin/kocao-harness-smoke
 
 WORKDIR /workspace
 
