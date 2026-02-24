@@ -17,13 +17,21 @@ func buildHarnessPod(run *operatorv1alpha1.HarnessRun, workspacePVCName string) 
 		gitAuthMountPath    = "/var/run/secrets/kocao/git"
 	)
 
+	// Hardened defaults: run as non-root with a restrictive security context.
+	// Keep IDs in sync with build/Dockerfile.harness.
+	runAsNonRoot := true
+	allowPrivilegeEscalation := false
+	uid := int64(10001)
+	gid := int64(10001)
+	seccompProfile := corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault}
+
 	labels := map[string]string{
 		"app.kubernetes.io/name":        "kocao-harness",
 		"app.kubernetes.io/managed-by":  "kocao-control-plane-operator",
 		"kocao.withakay.github.com/run": run.Name,
 	}
-	if run.Spec.SessionName != "" {
-		labels[LabelSessionName] = run.Spec.SessionName
+	if run.Spec.WorkspaceSessionName != "" {
+		labels[LabelWorkspaceSessionName] = run.Spec.WorkspaceSessionName
 	}
 
 	namePrefix := sanitizeDNSLabel(run.Name)
@@ -48,6 +56,10 @@ func buildHarnessPod(run *operatorv1alpha1.HarnessRun, workspacePVCName string) 
 		corev1.EnvVar{Name: "GIT_TERMINAL_PROMPT", Value: "0"},
 	)
 	for _, e := range run.Spec.Env {
+		if strings.HasPrefix(strings.TrimSpace(e.Name), "KOCAO_") {
+			// Reserved for operator/harness contract; do not allow user overrides.
+			continue
+		}
 		env = append(env, corev1.EnvVar{Name: e.Name, Value: e.Value})
 	}
 
@@ -92,6 +104,14 @@ func buildHarnessPod(run *operatorv1alpha1.HarnessRun, workspacePVCName string) 
 		WorkingDir:   run.Spec.WorkingDir,
 		Env:          env,
 		VolumeMounts: volumeMounts,
+		SecurityContext: &corev1.SecurityContext{
+			RunAsNonRoot:             &runAsNonRoot,
+			RunAsUser:                &uid,
+			RunAsGroup:               &gid,
+			AllowPrivilegeEscalation: &allowPrivilegeEscalation,
+			Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
+			SeccompProfile:           &seccompProfile,
+		},
 	}
 	if container.WorkingDir == "" {
 		container.WorkingDir = workspaceMountPath
@@ -104,6 +124,11 @@ func buildHarnessPod(run *operatorv1alpha1.HarnessRun, workspacePVCName string) 
 			Labels:    labels,
 		},
 		Spec: corev1.PodSpec{
+			SecurityContext: &corev1.PodSecurityContext{
+				RunAsNonRoot:   &runAsNonRoot,
+				FSGroup:        &gid,
+				SeccompProfile: &seccompProfile,
+			},
 			RestartPolicy: corev1.RestartPolicyNever,
 			Containers:    []corev1.Container{container},
 			Volumes:       volumes,

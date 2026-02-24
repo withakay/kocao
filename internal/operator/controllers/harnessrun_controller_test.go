@@ -88,6 +88,43 @@ func TestHarnessRunReconcile_CreatesPodAndInitializesStatus(t *testing.T) {
 		t.Fatalf("expected workspace mount at /workspace, got mounts=%#v", pod.Spec.Containers[0].VolumeMounts)
 	}
 
+	// Hardened security context defaults.
+	if pod.Spec.SecurityContext == nil {
+		t.Fatalf("expected pod security context")
+	}
+	if pod.Spec.SecurityContext.RunAsNonRoot == nil || *pod.Spec.SecurityContext.RunAsNonRoot != true {
+		t.Fatalf("expected pod runAsNonRoot=true, got %#v", pod.Spec.SecurityContext.RunAsNonRoot)
+	}
+	if pod.Spec.SecurityContext.FSGroup == nil || *pod.Spec.SecurityContext.FSGroup != 10001 {
+		t.Fatalf("expected pod fsGroup=10001, got %#v", pod.Spec.SecurityContext.FSGroup)
+	}
+	if pod.Spec.SecurityContext.SeccompProfile == nil || pod.Spec.SecurityContext.SeccompProfile.Type != corev1.SeccompProfileTypeRuntimeDefault {
+		t.Fatalf("expected pod seccomp runtime/default, got %#v", pod.Spec.SecurityContext.SeccompProfile)
+	}
+
+	cs := pod.Spec.Containers[0].SecurityContext
+	if cs == nil {
+		t.Fatalf("expected container security context")
+	}
+	if cs.RunAsNonRoot == nil || *cs.RunAsNonRoot != true {
+		t.Fatalf("expected container runAsNonRoot=true, got %#v", cs.RunAsNonRoot)
+	}
+	if cs.RunAsUser == nil || *cs.RunAsUser != 10001 {
+		t.Fatalf("expected container runAsUser=10001, got %#v", cs.RunAsUser)
+	}
+	if cs.RunAsGroup == nil || *cs.RunAsGroup != 10001 {
+		t.Fatalf("expected container runAsGroup=10001, got %#v", cs.RunAsGroup)
+	}
+	if cs.AllowPrivilegeEscalation == nil || *cs.AllowPrivilegeEscalation != false {
+		t.Fatalf("expected container allowPrivilegeEscalation=false, got %#v", cs.AllowPrivilegeEscalation)
+	}
+	if cs.Capabilities == nil || len(cs.Capabilities.Drop) == 0 || cs.Capabilities.Drop[0] != "ALL" {
+		t.Fatalf("expected container capabilities drop ALL, got %#v", cs.Capabilities)
+	}
+	if cs.SeccompProfile == nil || cs.SeccompProfile.Type != corev1.SeccompProfileTypeRuntimeDefault {
+		t.Fatalf("expected container seccomp runtime/default, got %#v", cs.SeccompProfile)
+	}
+
 	env := map[string]string{}
 	for _, ev := range pod.Spec.Containers[0].Env {
 		env[ev.Name] = ev.Value
@@ -174,6 +211,62 @@ func TestHarnessRunReconcile_GitAuthAddsSecretVolumeAndAskpassEnv(t *testing.T) 
 	}
 	if env["KOCAO_GIT_USERNAME_FILE"] != "/var/run/secrets/kocao/git/username" {
 		t.Fatalf("expected KOCAO_GIT_USERNAME_FILE to be set, got %q", env["KOCAO_GIT_USERNAME_FILE"])
+	}
+}
+
+func TestHarnessRunReconcile_ReservedEnvVarsFailSpec(t *testing.T) {
+	scheme := runtime.NewScheme()
+	_ = corev1.AddToScheme(scheme)
+	_ = networkingv1.AddToScheme(scheme)
+	_ = operatorv1alpha1.AddToScheme(scheme)
+
+	run := &operatorv1alpha1.HarnessRun{
+		TypeMeta:   metav1.TypeMeta{APIVersion: operatorv1alpha1.GroupVersion.String(), Kind: "HarnessRun"},
+		ObjectMeta: metav1.ObjectMeta{Name: "run-bad-env", Namespace: "default"},
+		Spec: operatorv1alpha1.HarnessRunSpec{
+			RepoURL: "https://example.com/repo",
+			Image:   "busybox",
+			Env: []operatorv1alpha1.EnvVar{
+				{Name: "KOCAO_REPO_DIR", Value: "/tmp/evil"},
+			},
+		},
+	}
+
+	cl := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(&operatorv1alpha1.HarnessRun{}, &corev1.Pod{}).Build()
+	if err := cl.Create(context.Background(), run); err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	r := &HarnessRunReconciler{Client: cl, Scheme: scheme, Clock: clocktesting.NewFakeClock(time.Unix(1, 0))}
+
+	_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(run)})
+	if err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	var updated operatorv1alpha1.HarnessRun
+	if err := cl.Get(context.Background(), client.ObjectKeyFromObject(run), &updated); err != nil {
+		t.Fatalf("get run: %v", err)
+	}
+	if updated.Status.Phase != operatorv1alpha1.HarnessRunPhaseFailed {
+		t.Fatalf("expected phase Failed, got %q", updated.Status.Phase)
+	}
+	condOK := false
+	for _, c := range updated.Status.Conditions {
+		if c.Type == ConditionFailed && c.Status == metav1.ConditionTrue && c.Reason == "SpecInvalid" {
+			condOK = true
+			break
+		}
+	}
+	if !condOK {
+		t.Fatalf("expected failed condition with SpecInvalid, got %#v", updated.Status.Conditions)
+	}
+
+	var pods corev1.PodList
+	if err := cl.List(context.Background(), &pods, client.InNamespace("default")); err != nil {
+		t.Fatalf("list pods: %v", err)
+	}
+	if len(pods.Items) != 0 {
+		t.Fatalf("expected no pods created, got %d", len(pods.Items))
 	}
 }
 
@@ -315,9 +408,9 @@ func TestHarnessRunReconcile_WithSession_CreatesPVCMountAndEgressNetworkPolicy(t
 		TypeMeta:   metav1.TypeMeta{APIVersion: operatorv1alpha1.GroupVersion.String(), Kind: "HarnessRun"},
 		ObjectMeta: metav1.ObjectMeta{Name: "run-sess", Namespace: "default"},
 		Spec: operatorv1alpha1.HarnessRunSpec{
-			SessionName: "s1",
-			RepoURL:     "https://example.com/repo",
-			Image:       "busybox:latest",
+			WorkspaceSessionName: "s1",
+			RepoURL:              "https://example.com/repo",
+			Image:                "busybox:latest",
 		},
 	}
 

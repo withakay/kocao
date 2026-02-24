@@ -13,13 +13,13 @@ export function App() {
       <HashRouter>
         <Routes>
           <Route element={<Shell />}>
-            <Route path="/" element={<Navigate to="/sessions" replace />} />
-            <Route path="/sessions" element={<SessionsPage />} />
-            <Route path="/sessions/:sessionID" element={<SessionDetailPage />} />
-            <Route path="/sessions/:sessionID/attach" element={<AttachPage />} />
-            <Route path="/runs" element={<RunsPage />} />
-            <Route path="/runs/:runID" element={<RunDetailPage />} />
-            <Route path="*" element={<Navigate to="/sessions" replace />} />
+            <Route path="/" element={<Navigate to="/workspace-sessions" replace />} />
+            <Route path="/workspace-sessions" element={<SessionsPage />} />
+            <Route path="/workspace-sessions/:workspaceSessionID" element={<SessionDetailPage />} />
+            <Route path="/workspace-sessions/:workspaceSessionID/attach" element={<AttachPage />} />
+            <Route path="/harness-runs" element={<RunsPage />} />
+            <Route path="/harness-runs/:harnessRunID" element={<RunDetailPage />} />
+            <Route path="*" element={<Navigate to="/workspace-sessions" replace />} />
           </Route>
         </Routes>
       </HashRouter>

@@ -120,21 +120,21 @@ func TestAttachToken_DisabledForbidden(t *testing.T) {
 	api, cleanup := newTestAPIWithAttach(t)
 	defer cleanup()
 
-	if err := api.Tokens.Create(context.Background(), "t-full", "full", []string{"session:write", "session:read", "run:write", "run:read", "control:write"}); err != nil {
+	if err := api.Tokens.Create(context.Background(), "t-full", "full", []string{"workspace-session:write", "workspace-session:read", "harness-run:write", "harness-run:read", "control:write"}); err != nil {
 		t.Fatalf("create token: %v", err)
 	}
 
 	srv := httptest.NewServer(api.Handler())
 	defer srv.Close()
 
-	resp, b := doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/sessions", "full", map[string]any{"repoURL": "https://example.com/repo"})
+	resp, b := doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/workspace-sessions", "full", map[string]any{"repoURL": "https://example.com/repo"})
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("create session status = %d (body=%s)", resp.StatusCode, string(b))
 	}
 	var sess sessionResponse
 	_ = json.Unmarshal(b, &sess)
 
-	resp, _ = doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/sessions/"+sess.ID+"/attach-token", "full", map[string]any{"role": "viewer"})
+	resp, _ = doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/workspace-sessions/"+sess.ID+"/attach-token", "full", map[string]any{"role": "viewer"})
 	if resp.StatusCode != http.StatusForbidden {
 		t.Fatalf("attach-token status = %d, want 403", resp.StatusCode)
 	}
@@ -156,10 +156,10 @@ func TestAttachToken_RoleEnforcementAndTakeControl(t *testing.T) {
 	api, cleanup := newTestAPIWithAttach(t)
 	defer cleanup()
 
-	if err := api.Tokens.Create(context.Background(), "t-full", "full", []string{"session:write", "session:read", "run:write", "run:read", "control:write"}); err != nil {
+	if err := api.Tokens.Create(context.Background(), "t-full", "full", []string{"workspace-session:write", "workspace-session:read", "harness-run:write", "harness-run:read", "control:write"}); err != nil {
 		t.Fatalf("create token: %v", err)
 	}
-	if err := api.Tokens.Create(context.Background(), "t-run", "run", []string{"run:read"}); err != nil {
+	if err := api.Tokens.Create(context.Background(), "t-run", "run", []string{"harness-run:read"}); err != nil {
 		t.Fatalf("create token: %v", err)
 	}
 
@@ -167,26 +167,26 @@ func TestAttachToken_RoleEnforcementAndTakeControl(t *testing.T) {
 	defer srv.Close()
 
 	// Create session and enable attach.
-	resp, b := doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/sessions", "full", map[string]any{"repoURL": "https://example.com/repo"})
+	resp, b := doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/workspace-sessions", "full", map[string]any{"repoURL": "https://example.com/repo"})
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("create session status = %d (body=%s)", resp.StatusCode, string(b))
 	}
 	var sess sessionResponse
 	_ = json.Unmarshal(b, &sess)
 
-	resp, _ = doJSON(t, srv.Client(), http.MethodPatch, srv.URL+"/api/v1/sessions/"+sess.ID+"/attach-control", "full", map[string]any{"enabled": true})
+	resp, _ = doJSON(t, srv.Client(), http.MethodPatch, srv.URL+"/api/v1/workspace-sessions/"+sess.ID+"/attach-control", "full", map[string]any{"enabled": true})
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("attach-control status = %d, want 200", resp.StatusCode)
 	}
 
 	// Driver token requires control:write.
-	resp, _ = doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/sessions/"+sess.ID+"/attach-token", "run", map[string]any{"role": "driver"})
+	resp, _ = doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/workspace-sessions/"+sess.ID+"/attach-token", "run", map[string]any{"role": "driver"})
 	if resp.StatusCode != http.StatusForbidden {
 		t.Fatalf("attach-token(driver) status = %d, want 403", resp.StatusCode)
 	}
 
 	// Viewer token.
-	resp, b = doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/sessions/"+sess.ID+"/attach-token", "full", map[string]any{"role": "viewer"})
+	resp, b = doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/workspace-sessions/"+sess.ID+"/attach-token", "full", map[string]any{"role": "viewer"})
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("attach-token(viewer) status = %d (body=%s)", resp.StatusCode, string(b))
 	}
@@ -194,14 +194,14 @@ func TestAttachToken_RoleEnforcementAndTakeControl(t *testing.T) {
 	_ = json.Unmarshal(b, &viewerTok)
 
 	// Driver token.
-	resp, b = doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/sessions/"+sess.ID+"/attach-token", "full", map[string]any{"role": "driver"})
+	resp, b = doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/workspace-sessions/"+sess.ID+"/attach-token", "full", map[string]any{"role": "driver"})
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("attach-token(driver) status = %d (body=%s)", resp.StatusCode, string(b))
 	}
 	var driverTok1 attachTokenResponse
 	_ = json.Unmarshal(b, &driverTok1)
 
-	resp, b = doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/sessions/"+sess.ID+"/attach-token", "full", map[string]any{"role": "driver"})
+	resp, b = doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/workspace-sessions/"+sess.ID+"/attach-token", "full", map[string]any{"role": "driver"})
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("attach-token(driver2) status = %d (body=%s)", resp.StatusCode, string(b))
 	}
@@ -209,7 +209,7 @@ func TestAttachToken_RoleEnforcementAndTakeControl(t *testing.T) {
 	_ = json.Unmarshal(b, &driverTok2)
 
 	// Viewer cannot take control.
-	viewerConn, _, err := websocket.DefaultDialer.Dial(wsURL(srv.URL, "/api/v1/sessions/"+sess.ID+"/attach", url.Values{"token": []string{viewerTok.Token}}), nil)
+	viewerConn, _, err := websocket.DefaultDialer.Dial(wsURL(srv.URL, "/api/v1/workspace-sessions/"+sess.ID+"/attach", url.Values{"token": []string{viewerTok.Token}}), nil)
 	if err != nil {
 		t.Fatalf("dial viewer: %v", err)
 	}
@@ -222,7 +222,7 @@ func TestAttachToken_RoleEnforcementAndTakeControl(t *testing.T) {
 	}
 
 	// Driver lease blocks other drivers until expiry.
-	d1, _, err := websocket.DefaultDialer.Dial(wsURL(srv.URL, "/api/v1/sessions/"+sess.ID+"/attach", url.Values{"token": []string{driverTok1.Token}}), nil)
+	d1, _, err := websocket.DefaultDialer.Dial(wsURL(srv.URL, "/api/v1/workspace-sessions/"+sess.ID+"/attach", url.Values{"token": []string{driverTok1.Token}}), nil)
 	if err != nil {
 		t.Fatalf("dial driver1: %v", err)
 	}
@@ -234,7 +234,7 @@ func TestAttachToken_RoleEnforcementAndTakeControl(t *testing.T) {
 		t.Fatalf("driver after take_control = %q, want %q", state.DriverID, driverTok1.ClientID)
 	}
 
-	d2, _, err := websocket.DefaultDialer.Dial(wsURL(srv.URL, "/api/v1/sessions/"+sess.ID+"/attach", url.Values{"token": []string{driverTok2.Token}}), nil)
+	d2, _, err := websocket.DefaultDialer.Dial(wsURL(srv.URL, "/api/v1/workspace-sessions/"+sess.ID+"/attach", url.Values{"token": []string{driverTok2.Token}}), nil)
 	if err != nil {
 		t.Fatalf("dial driver2: %v", err)
 	}
@@ -274,33 +274,33 @@ func TestAttachWS_ReadLimit_ClosesConnection(t *testing.T) {
 	api, cleanup := newTestAPIWithAttach(t)
 	defer cleanup()
 
-	if err := api.Tokens.Create(context.Background(), "t-full", "full", []string{"session:write", "run:read", "control:write", "run:write", "session:read"}); err != nil {
+	if err := api.Tokens.Create(context.Background(), "t-full", "full", []string{"workspace-session:write", "harness-run:read", "control:write", "harness-run:write", "workspace-session:read"}); err != nil {
 		t.Fatalf("create token: %v", err)
 	}
 
 	srv := httptest.NewServer(api.Handler())
 	defer srv.Close()
 
-	resp, b := doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/sessions", "full", map[string]any{"repoURL": "https://example.com/repo"})
+	resp, b := doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/workspace-sessions", "full", map[string]any{"repoURL": "https://example.com/repo"})
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("create session status = %d (body=%s)", resp.StatusCode, string(b))
 	}
 	var sess sessionResponse
 	_ = json.Unmarshal(b, &sess)
 
-	resp, _ = doJSON(t, srv.Client(), http.MethodPatch, srv.URL+"/api/v1/sessions/"+sess.ID+"/attach-control", "full", map[string]any{"enabled": true})
+	resp, _ = doJSON(t, srv.Client(), http.MethodPatch, srv.URL+"/api/v1/workspace-sessions/"+sess.ID+"/attach-control", "full", map[string]any{"enabled": true})
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("attach-control status = %d, want 200", resp.StatusCode)
 	}
 
-	resp, b = doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/sessions/"+sess.ID+"/attach-token", "full", map[string]any{"role": "driver"})
+	resp, b = doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/workspace-sessions/"+sess.ID+"/attach-token", "full", map[string]any{"role": "driver"})
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("attach-token status = %d (body=%s)", resp.StatusCode, string(b))
 	}
 	var tok attachTokenResponse
 	_ = json.Unmarshal(b, &tok)
 
-	conn, _, err := websocket.DefaultDialer.Dial(wsURL(srv.URL, "/api/v1/sessions/"+sess.ID+"/attach", url.Values{"token": []string{tok.Token}}), nil)
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL(srv.URL, "/api/v1/workspace-sessions/"+sess.ID+"/attach", url.Values{"token": []string{tok.Token}}), nil)
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
@@ -334,33 +334,33 @@ func TestAttachWS_IdleWithoutPong_ClosesConnection(t *testing.T) {
 	api, cleanup := newTestAPIWithAttach(t)
 	defer cleanup()
 
-	if err := api.Tokens.Create(context.Background(), "t-full", "full", []string{"session:write", "run:read", "control:write", "run:write", "session:read"}); err != nil {
+	if err := api.Tokens.Create(context.Background(), "t-full", "full", []string{"workspace-session:write", "harness-run:read", "control:write", "harness-run:write", "workspace-session:read"}); err != nil {
 		t.Fatalf("create token: %v", err)
 	}
 
 	srv := httptest.NewServer(api.Handler())
 	defer srv.Close()
 
-	resp, b := doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/sessions", "full", map[string]any{"repoURL": "https://example.com/repo"})
+	resp, b := doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/workspace-sessions", "full", map[string]any{"repoURL": "https://example.com/repo"})
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("create session status = %d (body=%s)", resp.StatusCode, string(b))
 	}
 	var sess sessionResponse
 	_ = json.Unmarshal(b, &sess)
 
-	resp, _ = doJSON(t, srv.Client(), http.MethodPatch, srv.URL+"/api/v1/sessions/"+sess.ID+"/attach-control", "full", map[string]any{"enabled": true})
+	resp, _ = doJSON(t, srv.Client(), http.MethodPatch, srv.URL+"/api/v1/workspace-sessions/"+sess.ID+"/attach-control", "full", map[string]any{"enabled": true})
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("attach-control status = %d, want 200", resp.StatusCode)
 	}
 
-	resp, b = doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/sessions/"+sess.ID+"/attach-token", "full", map[string]any{"role": "viewer"})
+	resp, b = doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/workspace-sessions/"+sess.ID+"/attach-token", "full", map[string]any{"role": "viewer"})
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("attach-token status = %d (body=%s)", resp.StatusCode, string(b))
 	}
 	var tok attachTokenResponse
 	_ = json.Unmarshal(b, &tok)
 
-	conn, _, err := websocket.DefaultDialer.Dial(wsURL(srv.URL, "/api/v1/sessions/"+sess.ID+"/attach", url.Values{"token": []string{tok.Token}}), nil)
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL(srv.URL, "/api/v1/workspace-sessions/"+sess.ID+"/attach", url.Values{"token": []string{tok.Token}}), nil)
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
@@ -380,26 +380,26 @@ func TestAttachCookie_IssuesCookieAndAllowsWSWithoutQueryToken(t *testing.T) {
 	api, cleanup := newTestAPIWithAttach(t)
 	defer cleanup()
 
-	if err := api.Tokens.Create(context.Background(), "t-full", "full", []string{"session:write", "session:read", "run:read", "control:write"}); err != nil {
+	if err := api.Tokens.Create(context.Background(), "t-full", "full", []string{"workspace-session:write", "workspace-session:read", "harness-run:read", "control:write"}); err != nil {
 		t.Fatalf("create token: %v", err)
 	}
 
 	srv := httptest.NewServer(api.Handler())
 	defer srv.Close()
 
-	resp, b := doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/sessions", "full", map[string]any{"repoURL": "https://example.com/repo"})
+	resp, b := doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/workspace-sessions", "full", map[string]any{"repoURL": "https://example.com/repo"})
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("create session status = %d (body=%s)", resp.StatusCode, string(b))
 	}
 	var sess sessionResponse
 	_ = json.Unmarshal(b, &sess)
 
-	resp, _ = doJSON(t, srv.Client(), http.MethodPatch, srv.URL+"/api/v1/sessions/"+sess.ID+"/attach-control", "full", map[string]any{"enabled": true})
+	resp, _ = doJSON(t, srv.Client(), http.MethodPatch, srv.URL+"/api/v1/workspace-sessions/"+sess.ID+"/attach-control", "full", map[string]any{"enabled": true})
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("attach-control status = %d, want 200", resp.StatusCode)
 	}
 
-	resp, b = doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/sessions/"+sess.ID+"/attach-cookie", "full", map[string]any{"role": "viewer"})
+	resp, b = doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/workspace-sessions/"+sess.ID+"/attach-cookie", "full", map[string]any{"role": "viewer"})
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("attach-cookie status = %d (body=%s)", resp.StatusCode, string(b))
 	}
@@ -425,7 +425,7 @@ func TestAttachCookie_IssuesCookieAndAllowsWSWithoutQueryToken(t *testing.T) {
 
 	h := http.Header{}
 	h.Add("Cookie", issued.Name+"="+issued.Value)
-	conn, _, err := websocket.DefaultDialer.Dial(wsURL(srv.URL, "/api/v1/sessions/"+sess.ID+"/attach", url.Values{}), h)
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL(srv.URL, "/api/v1/workspace-sessions/"+sess.ID+"/attach", url.Values{}), h)
 	if err != nil {
 		t.Fatalf("dial with cookie: %v", err)
 	}
@@ -437,33 +437,33 @@ func TestAttachWS_AuditsLifecycleControlAndStdin(t *testing.T) {
 	api, cleanup := newTestAPIWithAttach(t)
 	defer cleanup()
 
-	if err := api.Tokens.Create(context.Background(), "t-full", "full", []string{"session:write", "session:read", "run:read", "control:write"}); err != nil {
+	if err := api.Tokens.Create(context.Background(), "t-full", "full", []string{"workspace-session:write", "workspace-session:read", "harness-run:read", "control:write"}); err != nil {
 		t.Fatalf("create token: %v", err)
 	}
 
 	srv := httptest.NewServer(api.Handler())
 	defer srv.Close()
 
-	resp, b := doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/sessions", "full", map[string]any{"repoURL": "https://example.com/repo"})
+	resp, b := doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/workspace-sessions", "full", map[string]any{"repoURL": "https://example.com/repo"})
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("create session status = %d (body=%s)", resp.StatusCode, string(b))
 	}
 	var sess sessionResponse
 	_ = json.Unmarshal(b, &sess)
 
-	resp, _ = doJSON(t, srv.Client(), http.MethodPatch, srv.URL+"/api/v1/sessions/"+sess.ID+"/attach-control", "full", map[string]any{"enabled": true})
+	resp, _ = doJSON(t, srv.Client(), http.MethodPatch, srv.URL+"/api/v1/workspace-sessions/"+sess.ID+"/attach-control", "full", map[string]any{"enabled": true})
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("attach-control status = %d, want 200", resp.StatusCode)
 	}
 
-	resp, b = doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/sessions/"+sess.ID+"/attach-token", "full", map[string]any{"role": "driver"})
+	resp, b = doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/workspace-sessions/"+sess.ID+"/attach-token", "full", map[string]any{"role": "driver"})
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("attach-token status = %d (body=%s)", resp.StatusCode, string(b))
 	}
 	var tok attachTokenResponse
 	_ = json.Unmarshal(b, &tok)
 
-	conn, _, err := websocket.DefaultDialer.Dial(wsURL(srv.URL, "/api/v1/sessions/"+sess.ID+"/attach", url.Values{"token": []string{tok.Token}}), nil)
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL(srv.URL, "/api/v1/workspace-sessions/"+sess.ID+"/attach", url.Values{"token": []string{tok.Token}}), nil)
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}

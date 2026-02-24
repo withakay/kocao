@@ -8,6 +8,19 @@ rules:
     resources:
       - pods
       - pods/status
+      - persistentvolumeclaims
+    verbs:
+      - get
+      - list
+      - watch
+      - create
+      - delete
+      - patch
+      - update
+  - apiGroups:
+      - networking.k8s.io
+    resources:
+      - networkpolicies
     verbs:
       - get
       - list

@@ -44,8 +44,8 @@ func (r *HarnessRunReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	if updated.Labels == nil {
 		updated.Labels = map[string]string{}
 	}
-	if run.Spec.SessionName != "" && updated.Labels[LabelSessionName] != run.Spec.SessionName {
-		updated.Labels[LabelSessionName] = run.Spec.SessionName
+	if run.Spec.WorkspaceSessionName != "" && updated.Labels[LabelWorkspaceSessionName] != run.Spec.WorkspaceSessionName {
+		updated.Labels[LabelWorkspaceSessionName] = run.Spec.WorkspaceSessionName
 		changedMeta = true
 	}
 
@@ -59,18 +59,18 @@ func (r *HarnessRunReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 
 	var sess *operatorv1alpha1.Session
 
-	// Session reference (if provided) must exist.
-	if updated.Spec.SessionName != "" {
+	// Workspace session reference (if provided) must exist.
+	if updated.Spec.WorkspaceSessionName != "" {
 		var sessObj operatorv1alpha1.Session
-		err := r.Get(ctx, client.ObjectKey{Namespace: updated.Namespace, Name: updated.Spec.SessionName}, &sessObj)
+		err := r.Get(ctx, client.ObjectKey{Namespace: updated.Namespace, Name: updated.Spec.WorkspaceSessionName}, &sessObj)
 		if err != nil {
 			if apierrors.IsNotFound(err) {
 				now := metav1.NewTime(r.Clock.Now())
 				setCondition(&updated.Status.Conditions, metav1.Condition{
 					Type:               ConditionSession,
 					Status:             metav1.ConditionFalse,
-					Reason:             "SessionNotFound",
-					Message:            "referenced session does not exist",
+					Reason:             "WorkspaceSessionNotFound",
+					Message:            "referenced workspace session does not exist",
 					LastTransitionTime: now,
 				})
 				updated.Status.ObservedGeneration = updated.Generation
@@ -109,8 +109,8 @@ func (r *HarnessRunReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		setCondition(&updated.Status.Conditions, metav1.Condition{
 			Type:               ConditionSession,
 			Status:             metav1.ConditionTrue,
-			Reason:             "SessionFound",
-			Message:            "referenced session exists",
+			Reason:             "WorkspaceSessionFound",
+			Message:            "referenced workspace session exists",
 			LastTransitionTime: now,
 		})
 		changedStatus = true
@@ -174,6 +174,22 @@ func (r *HarnessRunReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		updated.Status.ObservedGeneration = updated.Generation
 		updated.Status.Phase = operatorv1alpha1.HarnessRunPhaseFailed
 		changedStatus = true
+	}
+	for _, e := range updated.Spec.Env {
+		if strings.HasPrefix(strings.TrimSpace(e.Name), "KOCAO_") {
+			now := metav1.NewTime(r.Clock.Now())
+			setCondition(&updated.Status.Conditions, metav1.Condition{
+				Type:               ConditionFailed,
+				Status:             metav1.ConditionTrue,
+				Reason:             "SpecInvalid",
+				Message:            invalidSpecError("env.reserved").Error(),
+				LastTransitionTime: now,
+			})
+			updated.Status.ObservedGeneration = updated.Generation
+			updated.Status.Phase = operatorv1alpha1.HarnessRunPhaseFailed
+			changedStatus = true
+			break
+		}
 	}
 
 	// Create/observe pod if not terminal.

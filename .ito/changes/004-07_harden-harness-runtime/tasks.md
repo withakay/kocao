@@ -30,8 +30,8 @@ ______________________________________________________________________
 - **Action**: Validate `KOCAO_WORKSPACE_DIR` and `KOCAO_REPO_DIR` are non-empty, absolute (or normalized), and ensure repo dir is within workspace before performing `rm -rf` or `git clone`.
 - **Verify**: `make harness-smoke`
 - **Done When**: The entrypoint fails fast on unsafe paths and cannot delete outside workspace.
-- **Updated At**: 2026-02-22
-- **Status**: [ ] pending
+- **Updated At**: 2026-02-23
+- **Status**: [x] complete
 
 ### Task 1.2: Harden git invocation (option injection + revision safety)
 
@@ -40,8 +40,8 @@ ______________________________________________________________________
 - **Action**: Ensure git operations use `--` separators where appropriate and handle edge-case repo URLs/revisions safely.
 - **Verify**: `make harness-smoke`
 - **Done When**: Entrypoint cannot treat user-provided repo/revision values as flags.
-- **Updated At**: 2026-02-22
-- **Status**: [ ] pending
+- **Updated At**: 2026-02-23
+- **Status**: [x] complete
 
 ______________________________________________________________________
 
@@ -56,8 +56,8 @@ ______________________________________________________________________
 - **Action**: Prevent `run.Spec.Env` from overriding reserved `KOCAO_*` variables (reject spec or drop overrides deterministically) and add tests.
 - **Verify**: `make lint && make test`
 - **Done When**: Reserved env variables cannot be overridden by user input.
-- **Updated At**: 2026-02-22
-- **Status**: [ ] pending
+- **Updated At**: 2026-02-23
+- **Status**: [x] complete
 
 ### Task 2.2: Harden harness pod security context
 
@@ -66,8 +66,8 @@ ______________________________________________________________________
 - **Action**: Add a reasonable default security context (run as non-root if feasible, drop capabilities, restrict privilege escalation). Update harness image/user setup to support it.
 - **Verify**: `make lint && make test && make harness-smoke`
 - **Done When**: Harness pods run with a restrictive security context without breaking normal workflows.
-- **Updated At**: 2026-02-22
-- **Status**: [ ] pending
+- **Updated At**: 2026-02-23
+- **Status**: [x] complete
 
 ______________________________________________________________________
 
@@ -79,5 +79,5 @@ ______________________________________________________________________
 - **Dependencies**: All Wave 2 tasks
 - **Action**: Review the implementation before proceeding
 - **Done When**: User confirms implementation is correct
-- **Updated At**: 2026-02-22
-- **Status**: [ ] pending
+- **Updated At**: 2026-02-23
+- **Status**: [-] shelved

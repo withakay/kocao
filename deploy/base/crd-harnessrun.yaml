@@ -29,7 +29,7 @@ spec:
                 - repoURL
                 - image
               properties:
-                sessionName:
+                workspaceSessionName:
                   type: string
                 repoURL:
                   type: string

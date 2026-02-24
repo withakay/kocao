@@ -1,12 +1,12 @@
-export type Session = {
+export type WorkspaceSession = {
   id: string
   repoURL?: string
   phase?: string
 }
 
-export type Run = {
+export type HarnessRun = {
   id: string
-  sessionID?: string
+  workspaceSessionID?: string
   repoURL: string
   repoRevision?: string
   image: string
@@ -47,6 +47,10 @@ export class APIError extends Error {
   }
 }
 
+export function isUnauthorizedError(e: unknown): e is APIError {
+  return e instanceof APIError && e.status === 401
+}
+
 async function apiFetch<T>(path: string, opts: FetchOptions = {}): Promise<T> {
   const headers: Record<string, string> = {}
   if (opts.body !== undefined) {
@@ -69,19 +73,21 @@ async function apiFetch<T>(path: string, opts: FetchOptions = {}): Promise<T> {
 }
 
 export const api = {
-  listSessions: (token: string) => apiFetch<{ sessions: Session[] }>('/api/v1/sessions', { token }),
-  getSession: (token: string, id: string) => apiFetch<Session>(`/api/v1/sessions/${encodeURIComponent(id)}`, { token }),
-  createSession: (token: string, repoURL: string) =>
-    apiFetch<Session>('/api/v1/sessions', { method: 'POST', body: { repoURL }, token }),
+  listWorkspaceSessions: (token: string) =>
+    apiFetch<{ workspaceSessions: WorkspaceSession[] }>('/api/v1/workspace-sessions', { token }),
+  getWorkspaceSession: (token: string, id: string) =>
+    apiFetch<WorkspaceSession>(`/api/v1/workspace-sessions/${encodeURIComponent(id)}`, { token }),
+  createWorkspaceSession: (token: string, repoURL: string) =>
+    apiFetch<WorkspaceSession>('/api/v1/workspace-sessions', { method: 'POST', body: { repoURL }, token }),
 
-  listRuns: (token: string, sessionID?: string) => {
-    const q = sessionID ? `?sessionID=${encodeURIComponent(sessionID)}` : ''
-    return apiFetch<{ runs: Run[] }>(`/api/v1/runs${q}`, { token })
+  listHarnessRuns: (token: string, workspaceSessionID?: string) => {
+    const q = workspaceSessionID ? `?workspaceSessionID=${encodeURIComponent(workspaceSessionID)}` : ''
+    return apiFetch<{ harnessRuns: HarnessRun[] }>(`/api/v1/harness-runs${q}`, { token })
   },
-  getRun: (token: string, id: string) => apiFetch<Run>(`/api/v1/runs/${encodeURIComponent(id)}`, { token }),
-  startRun: (
+  getHarnessRun: (token: string, id: string) => apiFetch<HarnessRun>(`/api/v1/harness-runs/${encodeURIComponent(id)}`, { token }),
+  startHarnessRun: (
     token: string,
-    sessionID: string,
+    workspaceSessionID: string,
     input: {
       repoURL: string
       repoRevision?: string
@@ -90,7 +96,7 @@ export const api = {
       ttlSecondsAfterFinished?: number
     }
   ) =>
-    apiFetch<Run>(`/api/v1/sessions/${encodeURIComponent(sessionID)}/runs`, {
+    apiFetch<HarnessRun>(`/api/v1/workspace-sessions/${encodeURIComponent(workspaceSessionID)}/harness-runs`, {
       method: 'POST',
       token,
       body: {
@@ -101,23 +107,23 @@ export const api = {
         ttlSecondsAfterFinished: input.ttlSecondsAfterFinished
       }
     }),
-  stopRun: (token: string, runID: string) =>
-    apiFetch<{ stopped: boolean }>(`/api/v1/runs/${encodeURIComponent(runID)}/stop`, { method: 'POST', token }),
-  resumeRun: (token: string, runID: string) =>
-    apiFetch<Run>(`/api/v1/runs/${encodeURIComponent(runID)}/resume`, { method: 'POST', token }),
+  stopHarnessRun: (token: string, harnessRunID: string) =>
+    apiFetch<{ stopped: boolean }>(`/api/v1/harness-runs/${encodeURIComponent(harnessRunID)}/stop`, { method: 'POST', token }),
+  resumeHarnessRun: (token: string, harnessRunID: string) =>
+    apiFetch<HarnessRun>(`/api/v1/harness-runs/${encodeURIComponent(harnessRunID)}/resume`, { method: 'POST', token }),
 
   listAudit: (token: string, limit = 100) =>
     apiFetch<{ events: AuditEvent[] }>(`/api/v1/audit?limit=${encodeURIComponent(String(limit))}`, { token }),
 
-  createAttachToken: (token: string, sessionID: string, role: 'viewer' | 'driver') =>
-    apiFetch<{ token: string; expiresAt: string; sessionID: string; clientID: string; role: string }>(
-      `/api/v1/sessions/${encodeURIComponent(sessionID)}/attach-token`,
+  createAttachToken: (token: string, workspaceSessionID: string, role: 'viewer' | 'driver') =>
+    apiFetch<{ token: string; expiresAt: string; workspaceSessionID: string; clientID: string; role: string }>(
+      `/api/v1/workspace-sessions/${encodeURIComponent(workspaceSessionID)}/attach-token`,
       { method: 'POST', token, body: { role } }
     ),
 
-  createAttachCookie: (token: string, sessionID: string, role: 'viewer' | 'driver') =>
-    apiFetch<{ expiresAt: string; sessionID: string; clientID: string; role: string }>(
-      `/api/v1/sessions/${encodeURIComponent(sessionID)}/attach-cookie`,
+  createAttachCookie: (token: string, workspaceSessionID: string, role: 'viewer' | 'driver') =>
+    apiFetch<{ expiresAt: string; workspaceSessionID: string; clientID: string; role: string }>(
+      `/api/v1/workspace-sessions/${encodeURIComponent(workspaceSessionID)}/attach-cookie`,
       { method: 'POST', token, body: { role }, credentials: 'include' }
     )
 }

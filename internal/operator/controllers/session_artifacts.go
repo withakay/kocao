@@ -55,7 +55,7 @@ func desiredSessionWorkspacePVC(sess *operatorv1alpha1.Session) *corev1.Persiste
 	storageClassName := sessionWorkspacePVCStorageClass()
 
 	labels := map[string]string{
-		LabelSessionName:               sess.Name,
+		LabelWorkspaceSessionName:      sess.Name,
 		"app.kubernetes.io/managed-by": "kocao-control-plane-operator",
 		"app.kubernetes.io/name":       "kocao-session",
 	}

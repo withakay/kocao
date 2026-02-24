@@ -1,28 +1,32 @@
 import { useCallback, useMemo, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { useAuth } from '../auth'
-import { api } from '../lib/api'
+import { api, isUnauthorizedError } from '../lib/api'
 import { usePollingQuery } from '../lib/usePolling'
 import { StatusPill } from '../components/StatusPill'
 import { Topbar } from '../components/Topbar'
 
 export function RunDetailPage() {
-  const { runID } = useParams()
-  const id = runID ?? ''
-  const { token } = useAuth()
+  const { harnessRunID } = useParams()
+  const id = harnessRunID ?? ''
+  const { token, invalidateToken } = useAuth()
   const nav = useNavigate()
   const [actionErr, setActionErr] = useState<string | null>(null)
   const [acting, setActing] = useState(false)
 
+  const onUnauthorized = useCallback(() => {
+    invalidateToken('Bearer token rejected (401). Please re-enter a valid token in the top bar.')
+  }, [invalidateToken])
+
   const runQ = usePollingQuery(
-    `run:${id}:${token}`,
-    () => api.getRun(token, id),
-    { intervalMs: 2000, enabled: token.trim() !== '' && id !== '' }
+    `harness-run:${id}:${token}`,
+    () => api.getHarnessRun(token, id),
+    { intervalMs: 2000, enabled: token.trim() !== '' && id !== '', onUnauthorized }
   )
   const auditQ = usePollingQuery(
     `audit:${token}`,
     () => api.listAudit(token, 250),
-    { intervalMs: 3000, enabled: token.trim() !== '' }
+    { intervalMs: 3000, enabled: token.trim() !== '', onUnauthorized }
   )
 
   const run = runQ.data
@@ -35,38 +39,46 @@ export function RunDetailPage() {
     setActing(true)
     setActionErr(null)
     try {
-      await api.stopRun(token, id)
+      await api.stopHarnessRun(token, id)
       runQ.reload()
     } catch (e) {
+      if (isUnauthorizedError(e)) {
+        onUnauthorized()
+        return
+      }
       setActionErr(e instanceof Error ? e.message : String(e))
     } finally {
       setActing(false)
     }
-  }, [token, id, runQ])
+  }, [token, id, runQ, onUnauthorized])
 
   const resume = useCallback(async () => {
     setActing(true)
     setActionErr(null)
     try {
-      const out = await api.resumeRun(token, id)
-      nav(`/runs/${encodeURIComponent(out.id)}`)
+      const out = await api.resumeHarnessRun(token, id)
+      nav(`/harness-runs/${encodeURIComponent(out.id)}`)
     } catch (e) {
+      if (isUnauthorizedError(e)) {
+        onUnauthorized()
+        return
+      }
       setActionErr(e instanceof Error ? e.message : String(e))
     } finally {
       setActing(false)
     }
-  }, [token, id, nav])
+  }, [token, id, nav, onUnauthorized])
 
-  const attachLinks = run?.sessionID
+  const attachLinks = run?.workspaceSessionID
     ? {
-        viewer: `/sessions/${encodeURIComponent(run.sessionID)}/attach?role=viewer`,
-        driver: `/sessions/${encodeURIComponent(run.sessionID)}/attach?role=driver`
+        viewer: `/workspace-sessions/${encodeURIComponent(run.workspaceSessionID)}/attach?role=viewer`,
+        driver: `/workspace-sessions/${encodeURIComponent(run.workspaceSessionID)}/attach?role=driver`
       }
     : null
 
   return (
     <>
-      <Topbar title={`Run ${id}`} subtitle="Lifecycle, attach entry points, and GitHub outcome metadata." />
+      <Topbar title={`Harness Run ${id}`} subtitle="Harness Run Lifecycle, attach entry points, and GitHub outcome metadata." />
 
       <div className="grid">
         <section className="card">
@@ -80,8 +92,14 @@ export function RunDetailPage() {
           {run ? (
             <>
               <div className="formRow">
-                <div className="label">Session</div>
-                <div className="mono">{run.sessionID ? <Link to={`/sessions/${encodeURIComponent(run.sessionID)}`}>{run.sessionID}</Link> : '(none)'}</div>
+                <div className="label">Workspace Session</div>
+                <div className="mono">
+                  {run.workspaceSessionID ? (
+                    <Link to={`/workspace-sessions/${encodeURIComponent(run.workspaceSessionID)}`}>{run.workspaceSessionID}</Link>
+                  ) : (
+                    '(none)'
+                  )}
+                </div>
               </div>
               <div className="formRow">
                 <div className="label">Repo</div>
@@ -96,7 +114,7 @@ export function RunDetailPage() {
                 <div className="mono">{run.image}</div>
               </div>
               <div className="formRow">
-                <div className="label">Phase</div>
+                <div className="label">Harness Run Lifecycle</div>
                 <div>
                   <StatusPill phase={run.phase} />
                 </div>
@@ -117,7 +135,7 @@ export function RunDetailPage() {
             <button className="btn" disabled={acting || token.trim() === ''} onClick={resume} type="button">
               Resume
             </button>
-            <span className="faint">Needs <span className="mono">run:write</span>.</span>
+            <span className="faint">Needs <span className="mono">harness-run:write</span>.</span>
           </div>
 
           {actionErr ? <div className="errorBox">{actionErr}</div> : null}
@@ -143,7 +161,7 @@ export function RunDetailPage() {
               </div>
             </>
           ) : (
-            <div className="muted">This run is not associated with a session.</div>
+            <div className="muted">This harness run is not associated with a workspace session.</div>
           )}
         </section>
       </div>
@@ -178,17 +196,17 @@ export function RunDetailPage() {
               </div>
             </>
           ) : (
-            <div className="muted">No run loaded.</div>
+            <div className="muted">No harness run loaded.</div>
           )}
         </section>
 
         <section className="card">
           <div className="cardHeader">
-            <h2>Run Audit (Recent)</h2>
+            <h2>Harness Run Audit (Recent)</h2>
             <div className="muted">Derived from /api/v1/audit</div>
           </div>
           {events.length === 0 ? (
-            <div className="muted">{auditQ.loading ? 'Loading…' : 'No recent audit events for this run.'}</div>
+            <div className="muted">{auditQ.loading ? 'Loading…' : 'No recent audit events for this harness run.'}</div>
           ) : (
             <table className="table" aria-label="audit table">
               <thead>

@@ -30,7 +30,13 @@ COPY build/harness/kocao-git-askpass.sh /usr/local/bin/kocao-git-askpass
 COPY build/harness/smoke.sh /usr/local/bin/kocao-harness-smoke
 
 RUN chmod 0555 /usr/local/bin/kocao-harness-entrypoint /usr/local/bin/kocao-git-askpass /usr/local/bin/kocao-harness-smoke \
-  && mkdir -p /workspace /var/run/secrets/kocao/git
+  && addgroup --system --gid 10001 kocao \
+  && adduser --system --uid 10001 --ingroup kocao --home /home/kocao --disabled-password kocao \
+  && mkdir -p /workspace /var/run/secrets/kocao/git \
+  && chown -R 10001:10001 /workspace /var/run/secrets/kocao \
+  && chmod 0755 /workspace /var/run/secrets/kocao /var/run/secrets/kocao/git
+
+USER 10001:10001
 
 WORKDIR /workspace
 

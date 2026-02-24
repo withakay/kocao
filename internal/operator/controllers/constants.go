@@ -3,7 +3,7 @@ package controllers
 const (
 	FinalizerName = "kocao.withakay.github.com/finalizer"
 
-	LabelSessionName = "kocao.withakay.github.com/session"
+	LabelWorkspaceSessionName = "kocao.withakay.github.com/workspace-session"
 )
 
 const (
@@ -23,5 +23,5 @@ const (
 	ConditionRunning   = "Running"
 	ConditionSucceeded = "Succeeded"
 	ConditionFailed    = "Failed"
-	ConditionSession   = "SessionReady"
+	ConditionSession   = "WorkspaceSessionReady"
 )

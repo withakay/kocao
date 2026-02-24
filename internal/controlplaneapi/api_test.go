@@ -110,7 +110,7 @@ func TestAuth_MissingToken_DeniedAndAudited(t *testing.T) {
 	srv := httptest.NewServer(api.Handler())
 	defer srv.Close()
 
-	resp, _ := doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/sessions", "", map[string]any{"repoURL": "https://example.com/repo"})
+	resp, _ := doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/workspace-sessions", "", map[string]any{"repoURL": "https://example.com/repo"})
 	if resp.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want 401", resp.StatusCode)
 	}
@@ -131,14 +131,14 @@ func TestRBAC_MissingScope_DeniedAndAudited(t *testing.T) {
 	api, cleanup := newTestAPI(t)
 	defer cleanup()
 
-	if err := api.Tokens.Create(context.Background(), "t-readonly", "readonly", []string{"session:read"}); err != nil {
+	if err := api.Tokens.Create(context.Background(), "t-readonly", "readonly", []string{"workspace-session:read"}); err != nil {
 		t.Fatalf("create token: %v", err)
 	}
 
 	srv := httptest.NewServer(api.Handler())
 	defer srv.Close()
 
-	resp, _ := doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/sessions", "readonly", map[string]any{"repoURL": "https://example.com/repo"})
+	resp, _ := doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/workspace-sessions", "readonly", map[string]any{"repoURL": "https://example.com/repo"})
 	if resp.StatusCode != http.StatusForbidden {
 		t.Fatalf("status = %d, want 403", resp.StatusCode)
 	}
@@ -159,7 +159,7 @@ func TestJSON_BodyTooLarge_Returns413(t *testing.T) {
 	api, cleanup := newTestAPI(t)
 	defer cleanup()
 
-	if err := api.Tokens.Create(context.Background(), "t-writer", "writer", []string{"session:write"}); err != nil {
+	if err := api.Tokens.Create(context.Background(), "t-writer", "writer", []string{"workspace-session:write", "control:write"}); err != nil {
 		t.Fatalf("create token: %v", err)
 	}
 
@@ -173,7 +173,7 @@ func TestJSON_BodyTooLarge_Returns413(t *testing.T) {
 	buf.WriteString(big)
 	buf.WriteString("\"}")
 
-	req, err := http.NewRequest(http.MethodPost, srv.URL+"/api/v1/sessions", &buf)
+	req, err := http.NewRequest(http.MethodPost, srv.URL+"/api/v1/workspace-sessions", &buf)
 	if err != nil {
 		t.Fatalf("new request: %v", err)
 	}
@@ -195,14 +195,14 @@ func TestLifecycle_SessionRunControlsAndAudit(t *testing.T) {
 	api, cleanup := newTestAPI(t)
 	defer cleanup()
 
-	if err := api.Tokens.Create(context.Background(), "t-full", "full", []string{"session:write", "session:read", "run:write", "run:read", "control:write", "audit:read"}); err != nil {
+	if err := api.Tokens.Create(context.Background(), "t-full", "full", []string{"workspace-session:write", "workspace-session:read", "harness-run:write", "harness-run:read", "control:write", "audit:read"}); err != nil {
 		t.Fatalf("create token: %v", err)
 	}
 
 	srv := httptest.NewServer(api.Handler())
 	defer srv.Close()
 
-	resp, b := doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/sessions", "full", map[string]any{"repoURL": "https://example.com/repo"})
+	resp, b := doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/workspace-sessions", "full", map[string]any{"repoURL": "https://example.com/repo"})
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("create session status = %d, want 201 (body=%s)", resp.StatusCode, string(b))
 	}
@@ -212,17 +212,17 @@ func TestLifecycle_SessionRunControlsAndAudit(t *testing.T) {
 		t.Fatalf("expected session id")
 	}
 
-	resp, _ = doJSON(t, srv.Client(), http.MethodPatch, srv.URL+"/api/v1/sessions/"+sess.ID+"/attach-control", "full", map[string]any{"enabled": true})
+	resp, _ = doJSON(t, srv.Client(), http.MethodPatch, srv.URL+"/api/v1/workspace-sessions/"+sess.ID+"/attach-control", "full", map[string]any{"enabled": true})
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("attach control status = %d, want 200", resp.StatusCode)
 	}
 
-	resp, _ = doJSON(t, srv.Client(), http.MethodPatch, srv.URL+"/api/v1/sessions/"+sess.ID+"/egress-override", "full", map[string]any{"mode": "allowlist", "allowedHosts": []string{"github.com"}})
+	resp, _ = doJSON(t, srv.Client(), http.MethodPatch, srv.URL+"/api/v1/workspace-sessions/"+sess.ID+"/egress-override", "full", map[string]any{"mode": "restricted"})
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("egress override status = %d, want 200", resp.StatusCode)
 	}
 
-	resp, b = doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/sessions/"+sess.ID+"/runs", "full", map[string]any{
+	resp, b = doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/workspace-sessions/"+sess.ID+"/harness-runs", "full", map[string]any{
 		"repoURL":      "https://example.com/repo",
 		"repoRevision": "main",
 		"image":        "alpine:3",
@@ -233,7 +233,7 @@ func TestLifecycle_SessionRunControlsAndAudit(t *testing.T) {
 	}
 	var run runResponse
 	_ = json.Unmarshal(b, &run)
-	if run.ID == "" || run.SessionID != sess.ID {
+	if run.ID == "" || run.WorkspaceSessionID != sess.ID {
 		t.Fatalf("unexpected run response: %+v", run)
 	}
 	if run.RepoRevision != "main" {
@@ -255,7 +255,7 @@ func TestLifecycle_SessionRunControlsAndAudit(t *testing.T) {
 		t.Fatalf("update stored run: %v", err)
 	}
 
-	resp, b = doJSON(t, srv.Client(), http.MethodGet, srv.URL+"/api/v1/runs/"+run.ID, "full", nil)
+	resp, b = doJSON(t, srv.Client(), http.MethodGet, srv.URL+"/api/v1/harness-runs/"+run.ID, "full", nil)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("get run status = %d, want 200 (body=%s)", resp.StatusCode, string(b))
 	}
@@ -271,7 +271,7 @@ func TestLifecycle_SessionRunControlsAndAudit(t *testing.T) {
 		t.Fatalf("pullRequestStatus = %q, want merged", got.PullRequestStatus)
 	}
 
-	resp, b = doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/runs/"+run.ID+"/resume", "full", nil)
+	resp, b = doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/harness-runs/"+run.ID+"/resume", "full", nil)
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("resume run status = %d, want 201 (body=%s)", resp.StatusCode, string(b))
 	}
@@ -281,11 +281,11 @@ func TestLifecycle_SessionRunControlsAndAudit(t *testing.T) {
 		t.Fatalf("expected new run id")
 	}
 
-	resp, _ = doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/runs/"+run.ID+"/stop", "full", nil)
+	resp, _ = doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/harness-runs/"+run.ID+"/stop", "full", nil)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("stop run status = %d, want 200", resp.StatusCode)
 	}
-	resp, _ = doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/runs/"+resumed.ID+"/stop", "full", nil)
+	resp, _ = doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/harness-runs/"+resumed.ID+"/stop", "full", nil)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("stop resumed run status = %d, want 200", resp.StatusCode)
 	}
@@ -306,37 +306,67 @@ func TestLifecycle_SessionRunControlsAndAudit(t *testing.T) {
 	}
 }
 
-func TestAttachWS_OriginAllowlist(t *testing.T) {
-	api, cleanup := newTestAPIWithAttachOptions(t, Options{Env: "prod", AttachWSAllowedOrigins: []string{"https://allowed.example"}})
+func TestEgressOverride_RejectsAllowedHosts(t *testing.T) {
+	api, cleanup := newTestAPI(t)
 	defer cleanup()
 
-	if err := api.Tokens.Create(context.Background(), "t-full", "full", []string{"session:write", "session:read", "run:read", "control:write"}); err != nil {
+	if err := api.Tokens.Create(context.Background(), "t-writer", "writer", []string{"workspace-session:write", "control:write"}); err != nil {
 		t.Fatalf("create token: %v", err)
 	}
 
 	srv := httptest.NewServer(api.Handler())
 	defer srv.Close()
 
-	resp, b := doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/sessions", "full", map[string]any{"repoURL": "https://example.com/repo"})
+	resp, b := doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/workspace-sessions", "writer", map[string]any{"repoURL": "https://example.com/repo"})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create session status = %d, want 201 (body=%s)", resp.StatusCode, string(b))
+	}
+	var sess sessionResponse
+	_ = json.Unmarshal(b, &sess)
+	if sess.ID == "" {
+		t.Fatalf("expected session id")
+	}
+
+	resp, b = doJSON(t, srv.Client(), http.MethodPatch, srv.URL+"/api/v1/workspace-sessions/"+sess.ID+"/egress-override", "writer", map[string]any{"mode": "restricted", "allowedHosts": []string{"github.com"}})
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("egress override status = %d, want 400 (body=%s)", resp.StatusCode, string(b))
+	}
+	if !strings.Contains(string(b), "allowedHosts is not supported") {
+		t.Fatalf("expected error to mention allowedHosts not supported (body=%s)", string(b))
+	}
+}
+
+func TestAttachWS_OriginAllowlist(t *testing.T) {
+	api, cleanup := newTestAPIWithAttachOptions(t, Options{Env: "prod", AttachWSAllowedOrigins: []string{"https://allowed.example"}})
+	defer cleanup()
+
+	if err := api.Tokens.Create(context.Background(), "t-full", "full", []string{"workspace-session:write", "workspace-session:read", "harness-run:read", "control:write"}); err != nil {
+		t.Fatalf("create token: %v", err)
+	}
+
+	srv := httptest.NewServer(api.Handler())
+	defer srv.Close()
+
+	resp, b := doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/workspace-sessions", "full", map[string]any{"repoURL": "https://example.com/repo"})
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("create session status = %d (body=%s)", resp.StatusCode, string(b))
 	}
 	var sess sessionResponse
 	_ = json.Unmarshal(b, &sess)
 
-	resp, _ = doJSON(t, srv.Client(), http.MethodPatch, srv.URL+"/api/v1/sessions/"+sess.ID+"/attach-control", "full", map[string]any{"enabled": true})
+	resp, _ = doJSON(t, srv.Client(), http.MethodPatch, srv.URL+"/api/v1/workspace-sessions/"+sess.ID+"/attach-control", "full", map[string]any{"enabled": true})
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("attach-control status = %d, want 200", resp.StatusCode)
 	}
 
-	resp, b = doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/sessions/"+sess.ID+"/attach-token", "full", map[string]any{"role": "viewer"})
+	resp, b = doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/workspace-sessions/"+sess.ID+"/attach-token", "full", map[string]any{"role": "viewer"})
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("attach-token status = %d (body=%s)", resp.StatusCode, string(b))
 	}
 	var tok attachTokenResponse
 	_ = json.Unmarshal(b, &tok)
 
-	ws := wsURL(srv.URL, "/api/v1/sessions/"+sess.ID+"/attach", url.Values{"token": []string{tok.Token}})
+	ws := wsURL(srv.URL, "/api/v1/workspace-sessions/"+sess.ID+"/attach", url.Values{"token": []string{tok.Token}})
 
 	_, respWS, err := websocket.DefaultDialer.Dial(ws, http.Header{"Origin": []string{"https://evil.example"}})
 	if err == nil {

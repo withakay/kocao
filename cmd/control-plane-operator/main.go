@@ -14,6 +14,7 @@ import (
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 )
@@ -25,7 +26,8 @@ func main() {
 	flag.Parse()
 
 	// Validate runtime configuration early.
-	if _, err := config.Load(); err != nil {
+	cfg, err := config.Load()
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "config error: %v\n", err)
 		os.Exit(1)
 	}
@@ -36,8 +38,14 @@ func main() {
 	utilruntime.Must(networkingv1.AddToScheme(scheme))
 	utilruntime.Must(operatorv1alpha1.AddToScheme(scheme))
 
+	cacheOpts := cache.Options{}
+	if cfg.Namespace != "" {
+		cacheOpts.DefaultNamespaces = map[string]cache.Config{cfg.Namespace: {}}
+	}
+
 	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
 		Scheme:                 scheme,
+		Cache:                  cacheOpts,
 		Metrics:                metricsserver.Options{BindAddress: *metricsAddr},
 		HealthProbeBindAddress: *probeAddr,
 		LeaderElection:         *leaderElect,

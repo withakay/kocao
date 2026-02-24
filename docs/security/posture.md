@@ -17,7 +17,7 @@ This doc translates those requirements into operator-facing guidance and deploym
 
 - All `/api/v1/*` endpoints MUST require authentication (bearer token), except explicit health endpoints and
   the OpenAPI document.
-- Authorization is scope-based (e.g., `session:read`, `run:write`, `control:write`) and MUST be enforced on every
+- Authorization is scope-based (e.g., `workspace-session:read`, `harness-run:write`, `control:write`) and MUST be enforced on every
   mutating operation.
 
 2) Attach safety
@@ -30,7 +30,7 @@ This doc translates those requirements into operator-facing guidance and deploym
 
 - Security-relevant actions MUST produce append-only audit events:
   - authorization allow/deny
-  - session/run control changes
+  - workspace session/harness run control changes
   - attach token issuance and attach usage
   - egress mode overrides
 
@@ -74,11 +74,19 @@ This doc translates those requirements into operator-facing guidance and deploym
 ### Egress Policy Configuration
 
 - In restricted mode, runs are expected to have deny-by-default egress with explicit allow rules.
-- GitHub allowlists are configured via `CP_GITHUB_EGRESS_CIDRS` (comma-separated CIDRs) for HTTPS/SSH.
+- GitHub allowlists are configured via `CP_GITHUB_EGRESS_CIDRS` (comma-separated CIDR prefixes) for HTTPS/SSH.
+- Invalid `CP_GITHUB_EGRESS_CIDRS` entries are logged and ignored.
+- Hostname allowlisting is not enforced by NetworkPolicy; only IP/CIDR-based allowlists apply.
+
+Example:
+
+```bash
+CP_GITHUB_EGRESS_CIDRS=192.30.252.0/22,185.199.108.0/22
+```
 
 ### Attach Controls
 
-- Attach SHOULD be disabled by default and enabled per-session as needed.
+- Attach SHOULD be disabled by default and enabled per-workspace-session as needed.
 - Driver role MUST be tightly controlled (requires `control:write`) and its use SHOULD be audited.
 - Attach requires `pods/exec`; grant this only to the control-plane API service account.
 

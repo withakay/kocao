@@ -31,7 +31,7 @@ ______________________________________________________________________
 - **Verify**: `make lint && make test`
 - **Done When**: API does not accept unenforced egress controls.
 - **Updated At**: 2026-02-23
-- **Status**: [>] in-progress
+- **Status**: [x] complete
 
 ### Task 1.2: Validate GitHub CIDR configuration robustly
 
@@ -41,7 +41,7 @@ ______________________________________________________________________
 - **Verify**: `make lint && make test`
 - **Done When**: Invalid CIDRs are not silently ignored and tests cover parsing behavior.
 - **Updated At**: 2026-02-23
-- **Status**: [>] in-progress
+- **Status**: [x] complete
 
 ______________________________________________________________________
 
@@ -56,8 +56,8 @@ ______________________________________________________________________
 - **Action**: Document how to configure GitHub CIDRs and explain restricted vs full mode behavior.
 - **Verify**: `make lint && make test`
 - **Done When**: Operators can configure egress correctly without trial-and-error.
-- **Updated At**: 2026-02-22
-- **Status**: [ ] pending
+- **Updated At**: 2026-02-23
+- **Status**: [x] complete
 
 ______________________________________________________________________
 
@@ -69,5 +69,5 @@ ______________________________________________________________________
 - **Dependencies**: All Wave 2 tasks
 - **Action**: Review the implementation before proceeding
 - **Done When**: User confirms implementation is correct
-- **Updated At**: 2026-02-22
-- **Status**: [ ] pending
+- **Updated At**: 2026-02-23
+- **Status**: [-] shelved

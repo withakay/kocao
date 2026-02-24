@@ -30,8 +30,8 @@ ______________________________________________________________________
 - **Action**: Change auth state to use session-scoped storage by default; add an explicit “remember” toggle for persistent storage.
 - **Verify**: `cd web && pnpm test`
 - **Done When**: Token does not persist across restarts by default; tests cover the UX.
-- **Updated At**: 2026-02-22
-- **Status**: [ ] pending
+- **Updated At**: 2026-02-23
+- **Status**: [x] complete
 
 ### Task 1.2: Clear token and guide user on auth failures
 
@@ -40,8 +40,8 @@ ______________________________________________________________________
 - **Action**: On 401 responses, clear stored token and render a clear prompt to re-enter credentials.
 - **Verify**: `cd web && pnpm test`
 - **Done When**: Auth failures do not repeatedly spam failing requests; user can recover easily.
-- **Updated At**: 2026-02-22
-- **Status**: [ ] pending
+- **Updated At**: 2026-02-23
+- **Status**: [x] complete
 
 ______________________________________________________________________
 
@@ -56,8 +56,8 @@ ______________________________________________________________________
 - **Action**: Update attach flow to use the backend-supported non-URL token transport (expected from change `004-04_harden-attach-websocket`).
 - **Verify**: `cd web && pnpm test`
 - **Done When**: Attach works without URL query tokens and tests cover the path.
-- **Updated At**: 2026-02-22
-- **Status**: [ ] pending
+- **Updated At**: 2026-02-23
+- **Status**: [x] complete
 
 ______________________________________________________________________
 
@@ -69,5 +69,5 @@ ______________________________________________________________________
 - **Dependencies**: All Wave 2 tasks
 - **Action**: Review the implementation before proceeding
 - **Done When**: User confirms implementation is correct
-- **Updated At**: 2026-02-22
-- **Status**: [ ] pending
+- **Updated At**: 2026-02-23
+- **Status**: [-] shelved

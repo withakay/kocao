@@ -80,8 +80,8 @@ type HarnessRun struct {
 }
 
 type HarnessRunSpec struct {
-	// SessionName associates this run to a Session in the same namespace.
-	SessionName string `json:"sessionName,omitempty"`
+	// WorkspaceSessionName associates this run to a Workspace Session in the same namespace.
+	WorkspaceSessionName string `json:"workspaceSessionName,omitempty"`
 
 	// RepoURL is the repository to run against.
 	RepoURL string `json:"repoURL"`

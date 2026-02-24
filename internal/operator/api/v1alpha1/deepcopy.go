@@ -49,7 +49,7 @@ func (in *HarnessRun) DeepCopyInto(out *HarnessRun) {
 	*out = *in
 	out.TypeMeta = in.TypeMeta
 	in.ObjectMeta.DeepCopyInto(&out.ObjectMeta)
-	out.Spec.SessionName = in.Spec.SessionName
+	out.Spec.WorkspaceSessionName = in.Spec.WorkspaceSessionName
 	out.Spec.RepoURL = in.Spec.RepoURL
 	out.Spec.RepoRevision = in.Spec.RepoRevision
 	out.Spec.Image = in.Spec.Image

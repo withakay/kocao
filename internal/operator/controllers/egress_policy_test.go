@@ -57,8 +57,6 @@ func TestParseGitHubEgressCIDRs(t *testing.T) {
 }
 
 func TestGitHubEgressCIDRs_UsesEnv(t *testing.T) {
-	t.Parallel()
-
 	t.Setenv(envGitHubEgressCIDRs, "192.30.252.0/22, not-a-cidr")
 	valid, invalid := githubEgressCIDRs()
 

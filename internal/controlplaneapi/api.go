@@ -77,112 +77,112 @@ func (a *API) serveAPI(w http.ResponseWriter, r *http.Request) {
 	segs = segs[2:]
 
 	switch {
-	case len(segs) == 1 && segs[0] == "sessions" && r.Method == http.MethodGet:
-		a.serveAuthz(w, r, []string{"session:read"}, func(_ *http.Request) (string, string, string) {
-			return "session.list", "session", "*"
+	case len(segs) == 1 && segs[0] == "workspace-sessions" && r.Method == http.MethodGet:
+		a.serveAuthz(w, r, []string{"workspace-session:read"}, func(_ *http.Request) (string, string, string) {
+			return "workspace-session.list", "workspace-session", "*"
 		}, a.handleSessionsList)
 		return
-	case len(segs) == 1 && segs[0] == "sessions" && r.Method == http.MethodPost:
-		a.serveAuthz(w, r, []string{"session:write"}, func(_ *http.Request) (string, string, string) {
-			return "session.create", "session", "(new)"
+	case len(segs) == 1 && segs[0] == "workspace-sessions" && r.Method == http.MethodPost:
+		a.serveAuthz(w, r, []string{"workspace-session:write"}, func(_ *http.Request) (string, string, string) {
+			return "workspace-session.create", "workspace-session", "(new)"
 		}, a.handleSessionsCreate)
 		return
-	case len(segs) == 1 && segs[0] == "sessions":
+	case len(segs) == 1 && segs[0] == "workspace-sessions":
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
-	case len(segs) == 2 && segs[0] == "sessions" && r.Method == http.MethodGet:
+	case len(segs) == 2 && segs[0] == "workspace-sessions" && r.Method == http.MethodGet:
 		id := segs[1]
-		a.serveAuthz(w, r, []string{"session:read"}, func(_ *http.Request) (string, string, string) {
-			return "session.get", "session", id
+		a.serveAuthz(w, r, []string{"workspace-session:read"}, func(_ *http.Request) (string, string, string) {
+			return "workspace-session.get", "workspace-session", id
 		}, func(w http.ResponseWriter, r *http.Request) { a.handleSessionGet(w, r, id) })
 		return
-	case len(segs) == 2 && segs[0] == "sessions":
+	case len(segs) == 2 && segs[0] == "workspace-sessions":
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
-	case len(segs) == 3 && segs[0] == "sessions" && segs[2] == "runs" && r.Method == http.MethodPost:
-		sessionID := segs[1]
-		a.serveAuthz(w, r, []string{"run:write"}, func(_ *http.Request) (string, string, string) {
-			return "run.start", "session", sessionID
-		}, func(w http.ResponseWriter, r *http.Request) { a.handleSessionRunsCreate(w, r, sessionID) })
+	case len(segs) == 3 && segs[0] == "workspace-sessions" && segs[2] == "harness-runs" && r.Method == http.MethodPost:
+		workspaceSessionID := segs[1]
+		a.serveAuthz(w, r, []string{"harness-run:write"}, func(_ *http.Request) (string, string, string) {
+			return "harness-run.start", "workspace-session", workspaceSessionID
+		}, func(w http.ResponseWriter, r *http.Request) { a.handleSessionRunsCreate(w, r, workspaceSessionID) })
 		return
-	case len(segs) == 3 && segs[0] == "sessions" && segs[2] == "runs":
+	case len(segs) == 3 && segs[0] == "workspace-sessions" && segs[2] == "harness-runs":
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
-	case len(segs) == 3 && segs[0] == "sessions" && segs[2] == "attach-control" && r.Method == http.MethodPatch:
-		sessionID := segs[1]
+	case len(segs) == 3 && segs[0] == "workspace-sessions" && segs[2] == "attach-control" && r.Method == http.MethodPatch:
+		workspaceSessionID := segs[1]
 		a.serveAuthz(w, r, []string{"control:write"}, func(_ *http.Request) (string, string, string) {
-			return "attach-control.update", "session", sessionID
-		}, func(w http.ResponseWriter, r *http.Request) { a.handleAttachControlPatch(w, r, sessionID) })
+			return "attach-control.update", "workspace-session", workspaceSessionID
+		}, func(w http.ResponseWriter, r *http.Request) { a.handleAttachControlPatch(w, r, workspaceSessionID) })
 		return
-	case len(segs) == 3 && segs[0] == "sessions" && segs[2] == "attach-control":
+	case len(segs) == 3 && segs[0] == "workspace-sessions" && segs[2] == "attach-control":
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
-	case len(segs) == 3 && segs[0] == "sessions" && segs[2] == "attach-token" && r.Method == http.MethodPost:
-		sessionID := segs[1]
-		a.serveAuthz(w, r, []string{"run:read"}, func(_ *http.Request) (string, string, string) {
-			return "attach.token.issue", "session", sessionID
-		}, func(w http.ResponseWriter, r *http.Request) { a.handleAttachTokenIssue(w, r, sessionID) })
+	case len(segs) == 3 && segs[0] == "workspace-sessions" && segs[2] == "attach-token" && r.Method == http.MethodPost:
+		workspaceSessionID := segs[1]
+		a.serveAuthz(w, r, []string{"harness-run:read"}, func(_ *http.Request) (string, string, string) {
+			return "attach.token.issue", "workspace-session", workspaceSessionID
+		}, func(w http.ResponseWriter, r *http.Request) { a.handleAttachTokenIssue(w, r, workspaceSessionID) })
 		return
-	case len(segs) == 3 && segs[0] == "sessions" && segs[2] == "attach-token":
+	case len(segs) == 3 && segs[0] == "workspace-sessions" && segs[2] == "attach-token":
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
-	case len(segs) == 3 && segs[0] == "sessions" && segs[2] == "attach-cookie" && r.Method == http.MethodPost:
-		sessionID := segs[1]
-		a.serveAuthz(w, r, []string{"run:read"}, func(_ *http.Request) (string, string, string) {
-			return "attach.cookie.issue", "session", sessionID
-		}, func(w http.ResponseWriter, r *http.Request) { a.handleAttachCookieIssue(w, r, sessionID) })
+	case len(segs) == 3 && segs[0] == "workspace-sessions" && segs[2] == "attach-cookie" && r.Method == http.MethodPost:
+		workspaceSessionID := segs[1]
+		a.serveAuthz(w, r, []string{"harness-run:read"}, func(_ *http.Request) (string, string, string) {
+			return "attach.cookie.issue", "workspace-session", workspaceSessionID
+		}, func(w http.ResponseWriter, r *http.Request) { a.handleAttachCookieIssue(w, r, workspaceSessionID) })
 		return
-	case len(segs) == 3 && segs[0] == "sessions" && segs[2] == "attach-cookie":
+	case len(segs) == 3 && segs[0] == "workspace-sessions" && segs[2] == "attach-cookie":
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
-	case len(segs) == 3 && segs[0] == "sessions" && segs[2] == "attach" && r.Method == http.MethodGet:
+	case len(segs) == 3 && segs[0] == "workspace-sessions" && segs[2] == "attach" && r.Method == http.MethodGet:
 		a.handleAttachWS(w, r, segs[1])
 		return
-	case len(segs) == 3 && segs[0] == "sessions" && segs[2] == "attach":
+	case len(segs) == 3 && segs[0] == "workspace-sessions" && segs[2] == "attach":
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
-	case len(segs) == 3 && segs[0] == "sessions" && segs[2] == "egress-override" && r.Method == http.MethodPatch:
-		sessionID := segs[1]
+	case len(segs) == 3 && segs[0] == "workspace-sessions" && segs[2] == "egress-override" && r.Method == http.MethodPatch:
+		workspaceSessionID := segs[1]
 		a.serveAuthz(w, r, []string{"control:write"}, func(_ *http.Request) (string, string, string) {
-			return "egress-override.update", "session", sessionID
-		}, func(w http.ResponseWriter, r *http.Request) { a.handleEgressOverridePatch(w, r, sessionID) })
+			return "egress-override.update", "workspace-session", workspaceSessionID
+		}, func(w http.ResponseWriter, r *http.Request) { a.handleEgressOverridePatch(w, r, workspaceSessionID) })
 		return
-	case len(segs) == 3 && segs[0] == "sessions" && segs[2] == "egress-override":
+	case len(segs) == 3 && segs[0] == "workspace-sessions" && segs[2] == "egress-override":
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
-	case len(segs) == 1 && segs[0] == "runs" && r.Method == http.MethodGet:
-		a.serveAuthz(w, r, []string{"run:read"}, func(_ *http.Request) (string, string, string) {
-			return "run.list", "run", "*"
+	case len(segs) == 1 && segs[0] == "harness-runs" && r.Method == http.MethodGet:
+		a.serveAuthz(w, r, []string{"harness-run:read"}, func(_ *http.Request) (string, string, string) {
+			return "harness-run.list", "harness-run", "*"
 		}, a.handleRunsList)
 		return
-	case len(segs) == 1 && segs[0] == "runs":
+	case len(segs) == 1 && segs[0] == "harness-runs":
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
-	case len(segs) == 2 && segs[0] == "runs" && r.Method == http.MethodGet:
+	case len(segs) == 2 && segs[0] == "harness-runs" && r.Method == http.MethodGet:
 		id := segs[1]
-		a.serveAuthz(w, r, []string{"run:read"}, func(_ *http.Request) (string, string, string) {
-			return "run.get", "run", id
+		a.serveAuthz(w, r, []string{"harness-run:read"}, func(_ *http.Request) (string, string, string) {
+			return "harness-run.get", "harness-run", id
 		}, func(w http.ResponseWriter, r *http.Request) { a.handleRunGet(w, r, id) })
 		return
-	case len(segs) == 2 && segs[0] == "runs":
+	case len(segs) == 2 && segs[0] == "harness-runs":
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
-	case len(segs) == 3 && segs[0] == "runs" && segs[2] == "stop" && r.Method == http.MethodPost:
+	case len(segs) == 3 && segs[0] == "harness-runs" && segs[2] == "stop" && r.Method == http.MethodPost:
 		id := segs[1]
-		a.serveAuthz(w, r, []string{"run:write"}, func(_ *http.Request) (string, string, string) {
-			return "run.stop", "run", id
+		a.serveAuthz(w, r, []string{"harness-run:write"}, func(_ *http.Request) (string, string, string) {
+			return "harness-run.stop", "harness-run", id
 		}, func(w http.ResponseWriter, r *http.Request) { a.handleRunStopPost(w, r, id) })
 		return
-	case len(segs) == 3 && segs[0] == "runs" && segs[2] == "stop":
+	case len(segs) == 3 && segs[0] == "harness-runs" && segs[2] == "stop":
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
-	case len(segs) == 3 && segs[0] == "runs" && segs[2] == "resume" && r.Method == http.MethodPost:
+	case len(segs) == 3 && segs[0] == "harness-runs" && segs[2] == "resume" && r.Method == http.MethodPost:
 		id := segs[1]
-		a.serveAuthz(w, r, []string{"run:write"}, func(_ *http.Request) (string, string, string) {
-			return "run.resume", "run", id
+		a.serveAuthz(w, r, []string{"harness-run:write"}, func(_ *http.Request) (string, string, string) {
+			return "harness-run.resume", "harness-run", id
 		}, func(w http.ResponseWriter, r *http.Request) { a.handleRunResumePost(w, r, id) })
 		return
-	case len(segs) == 3 && segs[0] == "runs" && segs[2] == "resume":
+	case len(segs) == 3 && segs[0] == "harness-runs" && segs[2] == "resume":
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	case len(segs) == 1 && segs[0] == "audit" && r.Method == http.MethodGet:
@@ -216,14 +216,14 @@ func sessionToResponse(s *operatorv1alpha1.Session) sessionResponse {
 func (a *API) handleSessionsList(w http.ResponseWriter, r *http.Request) {
 	var list operatorv1alpha1.SessionList
 	if err := a.K8s.List(r.Context(), &list, client.InNamespace(a.Namespace)); err != nil {
-		writeError(w, http.StatusInternalServerError, "list sessions failed")
+		writeError(w, http.StatusInternalServerError, "list workspace sessions failed")
 		return
 	}
 	out := make([]sessionResponse, 0, len(list.Items))
 	for i := range list.Items {
 		out = append(out, sessionToResponse(&list.Items[i]))
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"sessions": out})
+	writeJSON(w, http.StatusOK, map[string]any{"workspaceSessions": out})
 }
 
 func (a *API) handleSessionsCreate(w http.ResponseWriter, r *http.Request) {
@@ -239,7 +239,7 @@ func (a *API) handleSessionsCreate(w http.ResponseWriter, r *http.Request) {
 		Spec:       operatorv1alpha1.SessionSpec{RepoURL: req.RepoURL},
 	}
 	if err := a.K8s.Create(r.Context(), sess); err != nil {
-		writeError(w, http.StatusInternalServerError, "create session failed")
+		writeError(w, http.StatusInternalServerError, "create workspace session failed")
 		return
 	}
 	writeJSON(w, http.StatusCreated, sessionToResponse(sess))
@@ -250,10 +250,10 @@ func (a *API) handleSessionGet(w http.ResponseWriter, r *http.Request, id string
 	err := a.K8s.Get(r.Context(), client.ObjectKey{Namespace: a.Namespace, Name: id}, &sess)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
-			writeError(w, http.StatusNotFound, "session not found")
+			writeError(w, http.StatusNotFound, "workspace session not found")
 			return
 		}
-		writeError(w, http.StatusInternalServerError, "get session failed")
+		writeError(w, http.StatusInternalServerError, "get workspace session failed")
 		return
 	}
 	writeJSON(w, http.StatusOK, sessionToResponse(&sess))
@@ -287,13 +287,13 @@ func normalizeRunEgressMode(mode string) (string, bool) {
 }
 
 type runResponse struct {
-	ID           string                           `json:"id"`
-	SessionID    string                           `json:"sessionID,omitempty"`
-	RepoURL      string                           `json:"repoURL"`
-	RepoRevision string                           `json:"repoRevision,omitempty"`
-	Image        string                           `json:"image"`
-	Phase        operatorv1alpha1.HarnessRunPhase `json:"phase,omitempty"`
-	PodName      string                           `json:"podName,omitempty"`
+	ID                 string                           `json:"id"`
+	WorkspaceSessionID string                           `json:"workspaceSessionID,omitempty"`
+	RepoURL            string                           `json:"repoURL"`
+	RepoRevision       string                           `json:"repoRevision,omitempty"`
+	Image              string                           `json:"image"`
+	Phase              operatorv1alpha1.HarnessRunPhase `json:"phase,omitempty"`
+	PodName            string                           `json:"podName,omitempty"`
 
 	// GitHub outcome metadata (optional)
 	GitHubBranch      string `json:"gitHubBranch,omitempty"`
@@ -307,27 +307,27 @@ func runToResponse(run *operatorv1alpha1.HarnessRun) runResponse {
 		ann = map[string]string{}
 	}
 	return runResponse{
-		ID:                run.Name,
-		SessionID:         run.Spec.SessionName,
-		RepoURL:           run.Spec.RepoURL,
-		RepoRevision:      run.Spec.RepoRevision,
-		Image:             run.Spec.Image,
-		Phase:             run.Status.Phase,
-		PodName:           run.Status.PodName,
-		GitHubBranch:      ann[controllers.AnnotationGitHubBranch],
-		PullRequestURL:    ann[controllers.AnnotationPullRequestURL],
-		PullRequestStatus: ann[controllers.AnnotationPullRequestStatus],
+		ID:                 run.Name,
+		WorkspaceSessionID: run.Spec.WorkspaceSessionName,
+		RepoURL:            run.Spec.RepoURL,
+		RepoRevision:       run.Spec.RepoRevision,
+		Image:              run.Spec.Image,
+		Phase:              run.Status.Phase,
+		PodName:            run.Status.PodName,
+		GitHubBranch:       ann[controllers.AnnotationGitHubBranch],
+		PullRequestURL:     ann[controllers.AnnotationPullRequestURL],
+		PullRequestStatus:  ann[controllers.AnnotationPullRequestStatus],
 	}
 }
 
-func (a *API) handleSessionRunsCreate(w http.ResponseWriter, r *http.Request, sessionID string) {
+func (a *API) handleSessionRunsCreate(w http.ResponseWriter, r *http.Request, workspaceSessionID string) {
 	var sess operatorv1alpha1.Session
-	if err := a.K8s.Get(r.Context(), client.ObjectKey{Namespace: a.Namespace, Name: sessionID}, &sess); err != nil {
+	if err := a.K8s.Get(r.Context(), client.ObjectKey{Namespace: a.Namespace, Name: workspaceSessionID}, &sess); err != nil {
 		if apierrors.IsNotFound(err) {
-			writeError(w, http.StatusNotFound, "session not found")
+			writeError(w, http.StatusNotFound, "workspace session not found")
 			return
 		}
-		writeError(w, http.StatusInternalServerError, "get session failed")
+		writeError(w, http.StatusInternalServerError, "get workspace session failed")
 		return
 	}
 
@@ -355,7 +355,7 @@ func (a *API) handleSessionRunsCreate(w http.ResponseWriter, r *http.Request, se
 		TypeMeta:   metav1.TypeMeta{APIVersion: operatorv1alpha1.GroupVersion.String(), Kind: "HarnessRun"},
 		ObjectMeta: metav1.ObjectMeta{Name: id, Namespace: a.Namespace},
 		Spec: operatorv1alpha1.HarnessRunSpec{
-			SessionName:             sessionID,
+			WorkspaceSessionName:    workspaceSessionID,
 			RepoURL:                 req.RepoURL,
 			RepoRevision:            req.RepoRevision,
 			Image:                   req.Image,
@@ -369,11 +369,11 @@ func (a *API) handleSessionRunsCreate(w http.ResponseWriter, r *http.Request, se
 		},
 	}
 	if err := a.K8s.Create(r.Context(), run); err != nil {
-		writeError(w, http.StatusInternalServerError, "create run failed")
+		writeError(w, http.StatusInternalServerError, "create harness run failed")
 		return
 	}
 	if egressMode == "full" {
-		a.Audit.Append(r.Context(), principal(r.Context()), "run.egress.override", "run", run.Name, "allowed", map[string]any{"mode": egressMode})
+		a.Audit.Append(r.Context(), principal(r.Context()), "harness-run.egress.override", "harness-run", run.Name, "allowed", map[string]any{"mode": egressMode})
 	}
 
 	// Credential-use audit is derived from env var names and gitAuth presence only.
@@ -396,7 +396,7 @@ func (a *API) handleSessionRunsCreate(w http.ResponseWriter, r *http.Request, se
 		if gitAuthUsed {
 			meta["gitAuth"] = true
 		}
-		a.Audit.Append(r.Context(), principal(r.Context()), "credential.use", "run", run.Name, "allowed", meta)
+		a.Audit.Append(r.Context(), principal(r.Context()), "credential.use", "harness-run", run.Name, "allowed", meta)
 	}
 
 	writeJSON(w, http.StatusCreated, runToResponse(run))
@@ -405,18 +405,18 @@ func (a *API) handleSessionRunsCreate(w http.ResponseWriter, r *http.Request, se
 func (a *API) handleRunsList(w http.ResponseWriter, r *http.Request) {
 	var list operatorv1alpha1.HarnessRunList
 	opts := []client.ListOption{client.InNamespace(a.Namespace)}
-	if sessionID := strings.TrimSpace(r.URL.Query().Get("sessionID")); sessionID != "" {
-		opts = append(opts, client.MatchingLabels{controllers.LabelSessionName: sessionID})
+	if workspaceSessionID := strings.TrimSpace(r.URL.Query().Get("workspaceSessionID")); workspaceSessionID != "" {
+		opts = append(opts, client.MatchingLabels{controllers.LabelWorkspaceSessionName: workspaceSessionID})
 	}
 	if err := a.K8s.List(r.Context(), &list, opts...); err != nil {
-		writeError(w, http.StatusInternalServerError, "list runs failed")
+		writeError(w, http.StatusInternalServerError, "list harness runs failed")
 		return
 	}
 	out := make([]runResponse, 0, len(list.Items))
 	for i := range list.Items {
 		out = append(out, runToResponse(&list.Items[i]))
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"runs": out})
+	writeJSON(w, http.StatusOK, map[string]any{"harnessRuns": out})
 }
 
 func (a *API) handleRunGet(w http.ResponseWriter, r *http.Request, id string) {
@@ -424,10 +424,10 @@ func (a *API) handleRunGet(w http.ResponseWriter, r *http.Request, id string) {
 	err := a.K8s.Get(r.Context(), client.ObjectKey{Namespace: a.Namespace, Name: id}, &run)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
-			writeError(w, http.StatusNotFound, "run not found")
+			writeError(w, http.StatusNotFound, "harness run not found")
 			return
 		}
-		writeError(w, http.StatusInternalServerError, "get run failed")
+		writeError(w, http.StatusInternalServerError, "get harness run failed")
 		return
 	}
 	writeJSON(w, http.StatusOK, runToResponse(&run))
@@ -437,10 +437,10 @@ func (a *API) handleRunStopPost(w http.ResponseWriter, r *http.Request, id strin
 	var run operatorv1alpha1.HarnessRun
 	if err := a.K8s.Get(r.Context(), client.ObjectKey{Namespace: a.Namespace, Name: id}, &run); err != nil {
 		if apierrors.IsNotFound(err) {
-			writeError(w, http.StatusNotFound, "run not found")
+			writeError(w, http.StatusNotFound, "harness run not found")
 			return
 		}
-		writeError(w, http.StatusInternalServerError, "get run failed")
+		writeError(w, http.StatusInternalServerError, "get harness run failed")
 		return
 	}
 	if err := a.K8s.Delete(r.Context(), &run); err != nil {
@@ -448,7 +448,7 @@ func (a *API) handleRunStopPost(w http.ResponseWriter, r *http.Request, id strin
 			writeJSON(w, http.StatusOK, map[string]any{"stopped": true})
 			return
 		}
-		writeError(w, http.StatusInternalServerError, "delete run failed")
+		writeError(w, http.StatusInternalServerError, "delete harness run failed")
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"stopped": true})
@@ -458,10 +458,10 @@ func (a *API) handleRunResumePost(w http.ResponseWriter, r *http.Request, id str
 	var run operatorv1alpha1.HarnessRun
 	if err := a.K8s.Get(r.Context(), client.ObjectKey{Namespace: a.Namespace, Name: id}, &run); err != nil {
 		if apierrors.IsNotFound(err) {
-			writeError(w, http.StatusNotFound, "run not found")
+			writeError(w, http.StatusNotFound, "harness run not found")
 			return
 		}
-		writeError(w, http.StatusInternalServerError, "get run failed")
+		writeError(w, http.StatusInternalServerError, "get harness run failed")
 		return
 	}
 	newID := newID()
@@ -472,7 +472,7 @@ func (a *API) handleRunResumePost(w http.ResponseWriter, r *http.Request, id str
 	}
 	copy.Spec.TTLSecondsAfterFinished = run.Spec.TTLSecondsAfterFinished
 	if err := a.K8s.Create(r.Context(), copy); err != nil {
-		writeError(w, http.StatusInternalServerError, "create resumed run failed")
+		writeError(w, http.StatusInternalServerError, "create resumed harness run failed")
 		return
 	}
 	writeJSON(w, http.StatusCreated, runToResponse(copy))
@@ -482,19 +482,19 @@ type attachControlRequest struct {
 	Enabled bool `json:"enabled"`
 }
 
-func (a *API) handleAttachControlPatch(w http.ResponseWriter, r *http.Request, sessionID string) {
+func (a *API) handleAttachControlPatch(w http.ResponseWriter, r *http.Request, workspaceSessionID string) {
 	var req attachControlRequest
 	if err := readJSON(w, r, &req); err != nil {
 		writeJSONError(w, err)
 		return
 	}
 	var sess operatorv1alpha1.Session
-	if err := a.K8s.Get(r.Context(), client.ObjectKey{Namespace: a.Namespace, Name: sessionID}, &sess); err != nil {
+	if err := a.K8s.Get(r.Context(), client.ObjectKey{Namespace: a.Namespace, Name: workspaceSessionID}, &sess); err != nil {
 		if apierrors.IsNotFound(err) {
-			writeError(w, http.StatusNotFound, "session not found")
+			writeError(w, http.StatusNotFound, "workspace session not found")
 			return
 		}
-		writeError(w, http.StatusInternalServerError, "get session failed")
+		writeError(w, http.StatusInternalServerError, "get workspace session failed")
 		return
 	}
 	updated := sess.DeepCopy()
@@ -506,7 +506,7 @@ func (a *API) handleAttachControlPatch(w http.ResponseWriter, r *http.Request, s
 		writeError(w, http.StatusInternalServerError, "update attach control failed")
 		return
 	}
-	a.Audit.Append(r.Context(), principal(r.Context()), "attach-control.changed", "session", sessionID, "allowed", map[string]any{"enabled": req.Enabled})
+	a.Audit.Append(r.Context(), principal(r.Context()), "attach-control.changed", "workspace-session", workspaceSessionID, "allowed", map[string]any{"enabled": req.Enabled})
 	writeJSON(w, http.StatusOK, map[string]any{"updated": true})
 }
 
@@ -515,7 +515,7 @@ type egressOverrideRequest struct {
 	AllowedHosts []string `json:"allowedHosts,omitempty"`
 }
 
-func (a *API) handleEgressOverridePatch(w http.ResponseWriter, r *http.Request, sessionID string) {
+func (a *API) handleEgressOverridePatch(w http.ResponseWriter, r *http.Request, workspaceSessionID string) {
 	var req egressOverrideRequest
 	if err := readJSON(w, r, &req); err != nil {
 		writeJSONError(w, err)
@@ -535,12 +535,12 @@ func (a *API) handleEgressOverridePatch(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 	var sess operatorv1alpha1.Session
-	if err := a.K8s.Get(r.Context(), client.ObjectKey{Namespace: a.Namespace, Name: sessionID}, &sess); err != nil {
+	if err := a.K8s.Get(r.Context(), client.ObjectKey{Namespace: a.Namespace, Name: workspaceSessionID}, &sess); err != nil {
 		if apierrors.IsNotFound(err) {
-			writeError(w, http.StatusNotFound, "session not found")
+			writeError(w, http.StatusNotFound, "workspace session not found")
 			return
 		}
-		writeError(w, http.StatusInternalServerError, "get session failed")
+		writeError(w, http.StatusInternalServerError, "get workspace session failed")
 		return
 	}
 	updated := sess.DeepCopy()
@@ -552,7 +552,7 @@ func (a *API) handleEgressOverridePatch(w http.ResponseWriter, r *http.Request, 
 		writeError(w, http.StatusInternalServerError, "update egress override failed")
 		return
 	}
-	a.Audit.Append(r.Context(), principal(r.Context()), "egress-override.changed", "session", sessionID, "allowed", map[string]any{"mode": mode})
+	a.Audit.Append(r.Context(), principal(r.Context()), "egress-override.changed", "workspace-session", workspaceSessionID, "allowed", map[string]any{"mode": mode})
 	writeJSON(w, http.StatusOK, map[string]any{"updated": true})
 }
 

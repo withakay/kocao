@@ -40,7 +40,7 @@ func (r *SessionReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 			return ctrl.Result{}, err
 		}
 		now := metav1.Now()
-		setCondition(&updated.Status.Conditions, metav1.Condition{Type: ConditionReady, Status: metav1.ConditionTrue, Reason: "Ready", Message: "session accepted", LastTransitionTime: now})
+		setCondition(&updated.Status.Conditions, metav1.Condition{Type: ConditionReady, Status: metav1.ConditionTrue, Reason: "Ready", Message: "workspace session accepted", LastTransitionTime: now})
 		updated.Status.Phase = operatorv1alpha1.SessionPhaseActive
 		updated.Status.ObservedGeneration = updated.Generation
 		changedStatus = true
@@ -50,7 +50,7 @@ func (r *SessionReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		changedStatus = true
 
 		var runs operatorv1alpha1.HarnessRunList
-		if err := r.List(ctx, &runs, client.InNamespace(updated.Namespace), client.MatchingLabels{LabelSessionName: updated.Name}); err != nil {
+		if err := r.List(ctx, &runs, client.InNamespace(updated.Namespace), client.MatchingLabels{LabelWorkspaceSessionName: updated.Name}); err != nil {
 			return ctrl.Result{}, err
 		}
 		if len(runs.Items) != 0 {
@@ -58,7 +58,7 @@ func (r *SessionReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 				_ = r.Delete(ctx, &runs.Items[i])
 			}
 			var remaining operatorv1alpha1.HarnessRunList
-			if err := r.List(ctx, &remaining, client.InNamespace(updated.Namespace), client.MatchingLabels{LabelSessionName: updated.Name}); err != nil {
+			if err := r.List(ctx, &remaining, client.InNamespace(updated.Namespace), client.MatchingLabels{LabelWorkspaceSessionName: updated.Name}); err != nil {
 				return ctrl.Result{}, err
 			}
 			if len(remaining.Items) != 0 {

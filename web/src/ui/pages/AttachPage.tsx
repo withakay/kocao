@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useParams, useSearchParams } from 'react-router-dom'
 import { useAuth } from '../auth'
-import { api } from '../lib/api'
+import { api, isUnauthorizedError } from '../lib/api'
 import { base64DecodeToBytes, base64EncodeBytes } from '../lib/base64'
 import { Topbar } from '../components/Topbar'
 
@@ -11,7 +11,7 @@ type AttachMsg = {
   cols?: number
   rows?: number
   message?: string
-  sessionID?: string
+  workspaceSessionID?: string
   clientID?: string
   role?: string
   driverID?: string
@@ -19,11 +19,15 @@ type AttachMsg = {
 }
 
 export function AttachPage() {
-  const { sessionID } = useParams()
-  const id = sessionID ?? ''
-  const { token } = useAuth()
+  const { workspaceSessionID } = useParams()
+  const id = workspaceSessionID ?? ''
+  const { token, invalidateToken } = useAuth()
   const [sp] = useSearchParams()
   const role = (sp.get('role') === 'driver' ? 'driver' : 'viewer') as 'viewer' | 'driver'
+
+  const onUnauthorized = useCallback(() => {
+    invalidateToken('Bearer token rejected (401). Please re-enter a valid token in the top bar.')
+  }, [invalidateToken])
 
   const [status, setStatus] = useState('initializing')
   const [err, setErr] = useState<string | null>(null)
@@ -55,7 +59,7 @@ export function AttachPage() {
         setStatus('connecting')
 
         const proto = window.location.protocol === 'https:' ? 'wss' : 'ws'
-        const url = `${proto}://${window.location.host}/api/v1/sessions/${encodeURIComponent(id)}/attach`
+        const url = `${proto}://${window.location.host}/api/v1/workspace-sessions/${encodeURIComponent(id)}/attach`
 
         ws = new WebSocket(url)
         wsRef.current = ws
@@ -120,6 +124,12 @@ export function AttachPage() {
           keepaliveTimer = null
         }
       } catch (e) {
+        if (isUnauthorizedError(e)) {
+          onUnauthorized()
+          setErr('unauthorized (401)')
+          setStatus('error')
+          return
+        }
         setErr(e instanceof Error ? e.message : String(e))
         setStatus('error')
       }
@@ -133,7 +143,7 @@ export function AttachPage() {
       ws?.close()
       wsRef.current = null
     }
-  }, [token, id, role, decoder])
+  }, [token, id, role, decoder, onUnauthorized])
 
   const sendLine = () => {
     const ws = wsRef.current
@@ -151,7 +161,7 @@ export function AttachPage() {
 
   return (
     <>
-      <Topbar title={`Attach ${id}`} subtitle="Interactive attach session (viewer/driver)" />
+      <Topbar title={`Attach ${id}`} subtitle="Interactive attach on the running harness pod (viewer/driver)" />
 
       <div className="grid">
         <section className="card">
@@ -184,8 +194,8 @@ export function AttachPage() {
             <button className="btn" onClick={takeControl} type="button">
               Take Control
             </button>
-            <Link className="btn" to={`/sessions/${encodeURIComponent(id)}`}>
-              Back to Session
+            <Link className="btn" to={`/workspace-sessions/${encodeURIComponent(id)}`}>
+              Back to Workspace Session
             </Link>
           </div>
 

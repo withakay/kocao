@@ -1,34 +1,38 @@
 import { useCallback, useMemo, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { useAuth } from '../auth'
-import { api } from '../lib/api'
+import { api, isUnauthorizedError } from '../lib/api'
 import { usePollingQuery } from '../lib/usePolling'
 import { StatusPill } from '../components/StatusPill'
 import { Topbar } from '../components/Topbar'
 
 export function SessionDetailPage() {
-  const { sessionID } = useParams()
-  const id = sessionID ?? ''
-  const { token } = useAuth()
+  const { workspaceSessionID } = useParams()
+  const id = workspaceSessionID ?? ''
+  const { token, invalidateToken } = useAuth()
   const nav = useNavigate()
 
+  const onUnauthorized = useCallback(() => {
+    invalidateToken('Bearer token rejected (401). Please re-enter a valid token in the top bar.')
+  }, [invalidateToken])
+
   const sessQ = usePollingQuery(
-    `session:${id}:${token}`,
-    () => api.getSession(token, id),
-    { intervalMs: 2500, enabled: token.trim() !== '' && id !== '' }
+    `workspace-session:${id}:${token}`,
+    () => api.getWorkspaceSession(token, id),
+    { intervalMs: 2500, enabled: token.trim() !== '' && id !== '', onUnauthorized }
   )
   const runsQ = usePollingQuery(
-    `runs:${id}:${token}`,
-    () => api.listRuns(token, id),
-    { intervalMs: 2500, enabled: token.trim() !== '' && id !== '' }
+    `harness-runs:${id}:${token}`,
+    () => api.listHarnessRuns(token, id),
+    { intervalMs: 2500, enabled: token.trim() !== '' && id !== '', onUnauthorized }
   )
   const auditQ = usePollingQuery(
     `audit:${token}`,
     () => api.listAudit(token, 200),
-    { intervalMs: 3000, enabled: token.trim() !== '' }
+    { intervalMs: 3000, enabled: token.trim() !== '', onUnauthorized }
   )
 
-  const runs = useMemo(() => (runsQ.data?.runs ?? []).slice().sort((a, b) => b.id.localeCompare(a.id)), [runsQ.data])
+  const runs = useMemo(() => (runsQ.data?.harnessRuns ?? []).slice().sort((a, b) => b.id.localeCompare(a.id)), [runsQ.data])
   const events = useMemo(() => {
     const evs = auditQ.data?.events ?? []
     return evs.filter((e) => e.resourceID === id).slice(-30)
@@ -45,26 +49,30 @@ export function SessionDetailPage() {
     setStarting(true)
     setStartErr(null)
     try {
-      const out = await api.startRun(token, id, {
+      const out = await api.startHarnessRun(token, id, {
         repoURL: repoURL.trim() !== '' ? repoURL.trim() : sessQ.data?.repoURL ?? '',
         repoRevision: repoRevision.trim() !== '' ? repoRevision.trim() : undefined,
         image: image.trim(),
         egressMode
       })
-      nav(`/runs/${encodeURIComponent(out.id)}`)
+      nav(`/harness-runs/${encodeURIComponent(out.id)}`)
     } catch (e) {
+      if (isUnauthorizedError(e)) {
+        onUnauthorized()
+        return
+      }
       setStartErr(e instanceof Error ? e.message : String(e))
     } finally {
       setStarting(false)
     }
-  }, [token, id, repoURL, repoRevision, image, egressMode, nav, sessQ.data])
+  }, [token, id, repoURL, repoRevision, image, egressMode, nav, sessQ.data, onUnauthorized])
 
   const sess = sessQ.data
   const effectiveRepo = repoURL.trim() !== '' ? repoURL.trim() : sess?.repoURL ?? ''
 
   return (
     <>
-      <Topbar title={`Session ${id}`} subtitle="Run orchestration container for one repository." />
+      <Topbar title={`Workspace Session ${id}`} subtitle="Durable workspace context with Harness Run creation." />
 
       <div className="grid">
         <section className="card">
@@ -81,7 +89,7 @@ export function SessionDetailPage() {
                 <div className="mono">{sess.repoURL && sess.repoURL.trim() !== '' ? sess.repoURL : '(none)'}</div>
               </div>
               <div className="formRow">
-                <div className="label">Phase</div>
+                <div className="label">Workspace Session Lifecycle</div>
                 <div>
                   <StatusPill phase={sess.phase} />
                 </div>
@@ -96,8 +104,8 @@ export function SessionDetailPage() {
 
         <section className="card">
           <div className="cardHeader">
-            <h2>Start Run</h2>
-            <div className="muted">Creates a HarnessRun</div>
+            <h2>Start Harness Run</h2>
+            <div className="muted">Creates a Harness Run</div>
           </div>
 
           <div className="formRow">
@@ -106,7 +114,7 @@ export function SessionDetailPage() {
               className="input"
               value={effectiveRepo}
               onChange={(e) => setRepoURL(e.target.value)}
-              placeholder="defaults to session repoURL"
+              placeholder="defaults to workspace session repoURL"
             />
           </div>
           <div className="formRow">
@@ -127,9 +135,9 @@ export function SessionDetailPage() {
 
           <div className="rowActions">
             <button className="btn btnPrimary" disabled={starting || token.trim() === '' || effectiveRepo.trim() === ''} onClick={start} type="button">
-              {starting ? 'Starting…' : 'Start Run'}
+              {starting ? 'Starting…' : 'Start Harness Run'}
             </button>
-            <span className="faint">Needs <span className="mono">run:write</span>.</span>
+            <span className="faint">Needs <span className="mono">harness-run:write</span>.</span>
           </div>
 
           {startErr ? <div className="errorBox">{startErr}</div> : null}
@@ -139,29 +147,29 @@ export function SessionDetailPage() {
       <div className="grid">
         <section className="card">
           <div className="cardHeader">
-            <h2>Runs</h2>
+            <h2>Harness Runs</h2>
             <div className="muted">Live</div>
           </div>
-          <table className="table" aria-label="runs table">
+          <table className="table" aria-label="harness runs table">
             <thead>
               <tr>
                 <th>ID</th>
                 <th>Repo</th>
-                <th>Phase</th>
+                <th>Harness Run Lifecycle</th>
               </tr>
             </thead>
             <tbody>
               {runs.length === 0 ? (
                 <tr>
                   <td colSpan={3} className="muted">
-                    {runsQ.loading ? 'Loading…' : 'No runs for this session.'}
+                    {runsQ.loading ? 'Loading…' : 'No harness runs for this workspace session.'}
                   </td>
                 </tr>
               ) : (
                 runs.map((r) => (
                   <tr key={r.id}>
                     <td className="mono">
-                      <Link to={`/runs/${encodeURIComponent(r.id)}`}>{r.id}</Link>
+                      <Link to={`/harness-runs/${encodeURIComponent(r.id)}`}>{r.id}</Link>
                     </td>
                     <td className="mono">{r.repoURL}</td>
                     <td>
@@ -177,12 +185,12 @@ export function SessionDetailPage() {
 
         <section className="card">
           <div className="cardHeader">
-            <h2>Session Audit (Recent)</h2>
+            <h2>Workspace Session Audit (Recent)</h2>
             <div className="muted">Derived from /api/v1/audit</div>
           </div>
 
           {events.length === 0 ? (
-            <div className="muted">{auditQ.loading ? 'Loading…' : 'No recent audit events for this session.'}</div>
+            <div className="muted">{auditQ.loading ? 'Loading…' : 'No recent audit events for this workspace session.'}</div>
           ) : (
             <table className="table" aria-label="audit table">
               <thead>

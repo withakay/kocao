@@ -26,9 +26,9 @@ import (
 )
 
 const (
-	attachClaimSessionID = "attach.sessionID"
-	attachClaimClientID  = "attach.clientID"
-	attachClaimRole      = "attach.role"
+	attachClaimWorkspaceSessionID = "attach.workspaceSessionID"
+	attachClaimClientID           = "attach.clientID"
+	attachClaimRole               = "attach.role"
 
 	attachCookieName = "kocao_attach"
 )
@@ -71,18 +71,18 @@ type attachTokenRequest struct {
 }
 
 type attachTokenResponse struct {
-	Token     string    `json:"token"`
-	ExpiresAt time.Time `json:"expiresAt"`
-	SessionID string    `json:"sessionID"`
-	ClientID  string    `json:"clientID"`
-	Role      string    `json:"role"`
+	Token              string    `json:"token"`
+	ExpiresAt          time.Time `json:"expiresAt"`
+	WorkspaceSessionID string    `json:"workspaceSessionID"`
+	ClientID           string    `json:"clientID"`
+	Role               string    `json:"role"`
 }
 
 type attachCookieResponse struct {
-	ExpiresAt time.Time `json:"expiresAt"`
-	SessionID string    `json:"sessionID"`
-	ClientID  string    `json:"clientID"`
-	Role      string    `json:"role"`
+	ExpiresAt          time.Time `json:"expiresAt"`
+	WorkspaceSessionID string    `json:"workspaceSessionID"`
+	ClientID           string    `json:"clientID"`
+	Role               string    `json:"role"`
 }
 
 type attachMsg struct {
@@ -91,12 +91,12 @@ type attachMsg struct {
 	Cols int    `json:"cols,omitempty"`
 	Rows int    `json:"rows,omitempty"`
 
-	Message   string `json:"message,omitempty"`
-	SessionID string `json:"sessionID,omitempty"`
-	ClientID  string `json:"clientID,omitempty"`
-	Role      string `json:"role,omitempty"`
-	DriverID  string `json:"driverID,omitempty"`
-	LeaseMS   int64  `json:"leaseMS,omitempty"`
+	Message            string `json:"message,omitempty"`
+	WorkspaceSessionID string `json:"workspaceSessionID,omitempty"`
+	ClientID           string `json:"clientID,omitempty"`
+	Role               string `json:"role,omitempty"`
+	DriverID           string `json:"driverID,omitempty"`
+	LeaseMS            int64  `json:"leaseMS,omitempty"`
 }
 
 type attachClient struct {
@@ -272,21 +272,21 @@ func newAttachService(ns string, restCfg *rest.Config, k8s client.Client, tokens
 	return &AttachService{namespace: ns, restCfg: restCfg, k8s: k8s, tokens: tokens, audit: audit, sessions: map[string]*attachSession{}}
 }
 
-func (s *AttachService) issueToken(ctx context.Context, principalID string, sessionID string, role AttachRole, clientID string) (attachTokenResponse, error) {
+func (s *AttachService) issueToken(ctx context.Context, principalID string, workspaceSessionID string, role AttachRole, clientID string) (attachTokenResponse, error) {
 	if strings.TrimSpace(clientID) == "" {
 		clientID = newID()
 	}
 	raw := newID() + newID()
 	exp := time.Now().Add(attachTokenTTL)
 	claims := map[string]string{
-		attachClaimSessionID: sessionID,
-		attachClaimClientID:  clientID,
-		attachClaimRole:      string(role),
+		attachClaimWorkspaceSessionID: workspaceSessionID,
+		attachClaimClientID:           clientID,
+		attachClaimRole:               string(role),
 	}
 	if err := s.tokens.CreateWithClaims(ctx, "attach-"+principalID, raw, []string{"attach:connect"}, exp, claims); err != nil {
 		return attachTokenResponse{}, err
 	}
-	return attachTokenResponse{Token: raw, ExpiresAt: exp, SessionID: sessionID, ClientID: clientID, Role: string(role)}, nil
+	return attachTokenResponse{Token: raw, ExpiresAt: exp, WorkspaceSessionID: workspaceSessionID, ClientID: clientID, Role: string(role)}, nil
 }
 
 func (s *AttachService) claimsFromToken(ctx context.Context, raw string) (string, string, AttachRole, string, error) {
@@ -297,22 +297,22 @@ func (s *AttachService) claimsFromToken(ctx context.Context, raw string) (string
 	if rec == nil || rec.Claims == nil {
 		return "", "", "", "", errors.New("invalid token")
 	}
-	sessionID := strings.TrimSpace(rec.Claims[attachClaimSessionID])
+	workspaceSessionID := strings.TrimSpace(rec.Claims[attachClaimWorkspaceSessionID])
 	clientID := strings.TrimSpace(rec.Claims[attachClaimClientID])
 	role, ok := normalizeAttachRole(rec.Claims[attachClaimRole])
-	if sessionID == "" || clientID == "" || !ok {
+	if workspaceSessionID == "" || clientID == "" || !ok {
 		return "", "", "", "", errors.New("invalid token claims")
 	}
 	actor := strings.TrimPrefix(rec.ID, "attach-")
 	if strings.TrimSpace(actor) == "" {
 		actor = rec.ID
 	}
-	return sessionID, clientID, role, actor, nil
+	return workspaceSessionID, clientID, role, actor, nil
 }
 
-func (s *AttachService) findAttachPod(ctx context.Context, sessionID string) (string, error) {
+func (s *AttachService) findAttachPod(ctx context.Context, workspaceSessionID string) (string, error) {
 	var runs operatorv1alpha1.HarnessRunList
-	if err := s.k8s.List(ctx, &runs, client.InNamespace(s.namespace), client.MatchingLabels{controllers.LabelSessionName: sessionID}); err != nil {
+	if err := s.k8s.List(ctx, &runs, client.InNamespace(s.namespace), client.MatchingLabels{controllers.LabelWorkspaceSessionName: workspaceSessionID}); err != nil {
 		return "", err
 	}
 	var startingPod string
@@ -455,18 +455,18 @@ func isDevLocalHost(host string) bool {
 	return s == "localhost" || s == "127.0.0.1" || s == "::1"
 }
 
-func (a *API) handleAttachTokenIssue(w http.ResponseWriter, r *http.Request, sessionID string) {
+func (a *API) handleAttachTokenIssue(w http.ResponseWriter, r *http.Request, workspaceSessionID string) {
 	if a.Attach == nil {
 		writeError(w, http.StatusInternalServerError, "attach service not configured")
 		return
 	}
 	var sess operatorv1alpha1.Session
-	if err := a.K8s.Get(r.Context(), client.ObjectKey{Namespace: a.Namespace, Name: sessionID}, &sess); err != nil {
+	if err := a.K8s.Get(r.Context(), client.ObjectKey{Namespace: a.Namespace, Name: workspaceSessionID}, &sess); err != nil {
 		if apierrors.IsNotFound(err) {
-			writeError(w, http.StatusNotFound, "session not found")
+			writeError(w, http.StatusNotFound, "workspace session not found")
 			return
 		}
-		writeError(w, http.StatusInternalServerError, "get session failed")
+		writeError(w, http.StatusInternalServerError, "get workspace session failed")
 		return
 	}
 	enabled := false
@@ -496,27 +496,27 @@ func (a *API) handleAttachTokenIssue(w http.ResponseWriter, r *http.Request, ses
 		}
 	}
 	p := principal(r.Context())
-	resp, err := a.Attach.issueToken(r.Context(), p, sessionID, role, req.ClientID)
+	resp, err := a.Attach.issueToken(r.Context(), p, workspaceSessionID, role, req.ClientID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "issue attach token failed")
 		return
 	}
-	a.Audit.Append(r.Context(), p, "attach.token.issued", "session", sessionID, "allowed", map[string]any{"role": resp.Role})
+	a.Audit.Append(r.Context(), p, "attach.token.issued", "workspace-session", workspaceSessionID, "allowed", map[string]any{"role": resp.Role})
 	writeJSON(w, http.StatusCreated, resp)
 }
 
-func (a *API) handleAttachCookieIssue(w http.ResponseWriter, r *http.Request, sessionID string) {
+func (a *API) handleAttachCookieIssue(w http.ResponseWriter, r *http.Request, workspaceSessionID string) {
 	if a.Attach == nil {
 		writeError(w, http.StatusInternalServerError, "attach service not configured")
 		return
 	}
 	var sess operatorv1alpha1.Session
-	if err := a.K8s.Get(r.Context(), client.ObjectKey{Namespace: a.Namespace, Name: sessionID}, &sess); err != nil {
+	if err := a.K8s.Get(r.Context(), client.ObjectKey{Namespace: a.Namespace, Name: workspaceSessionID}, &sess); err != nil {
 		if apierrors.IsNotFound(err) {
-			writeError(w, http.StatusNotFound, "session not found")
+			writeError(w, http.StatusNotFound, "workspace session not found")
 			return
 		}
-		writeError(w, http.StatusInternalServerError, "get session failed")
+		writeError(w, http.StatusInternalServerError, "get workspace session failed")
 		return
 	}
 	enabled := false
@@ -547,14 +547,14 @@ func (a *API) handleAttachCookieIssue(w http.ResponseWriter, r *http.Request, se
 		}
 	}
 	p := principal(r.Context())
-	resp, err := a.Attach.issueToken(r.Context(), p, sessionID, role, req.ClientID)
+	resp, err := a.Attach.issueToken(r.Context(), p, workspaceSessionID, role, req.ClientID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "issue attach token failed")
 		return
 	}
 
 	secure := isHTTPSRequest(r)
-	path := "/api/v1/sessions/" + url.PathEscape(sessionID) + "/attach"
+	path := "/api/v1/workspace-sessions/" + url.PathEscape(workspaceSessionID) + "/attach"
 	maxAge := int(time.Until(resp.ExpiresAt).Seconds())
 	if maxAge < 0 {
 		maxAge = 0
@@ -570,8 +570,8 @@ func (a *API) handleAttachCookieIssue(w http.ResponseWriter, r *http.Request, se
 		Expires:  resp.ExpiresAt,
 	})
 
-	a.Audit.Append(r.Context(), p, "attach.cookie.issued", "session", sessionID, "allowed", map[string]any{"role": resp.Role})
-	writeJSON(w, http.StatusCreated, attachCookieResponse{ExpiresAt: resp.ExpiresAt, SessionID: resp.SessionID, ClientID: resp.ClientID, Role: resp.Role})
+	a.Audit.Append(r.Context(), p, "attach.cookie.issued", "workspace-session", workspaceSessionID, "allowed", map[string]any{"role": resp.Role})
+	writeJSON(w, http.StatusCreated, attachCookieResponse{ExpiresAt: resp.ExpiresAt, WorkspaceSessionID: resp.WorkspaceSessionID, ClientID: resp.ClientID, Role: resp.Role})
 }
 
 func isHTTPSRequest(r *http.Request) bool {
@@ -582,7 +582,7 @@ func isHTTPSRequest(r *http.Request) bool {
 	return strings.EqualFold(proto, "https")
 }
 
-func (a *API) handleAttachWS(w http.ResponseWriter, r *http.Request, sessionID string) {
+func (a *API) handleAttachWS(w http.ResponseWriter, r *http.Request, workspaceSessionID string) {
 	if r.Method != http.MethodGet {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
@@ -606,13 +606,13 @@ func (a *API) handleAttachWS(w http.ResponseWriter, r *http.Request, sessionID s
 		return
 	}
 
-	claimedSessionID, clientID, role, actor, err := a.Attach.claimsFromToken(r.Context(), tok)
+	claimedWorkspaceSessionID, clientID, role, actor, err := a.Attach.claimsFromToken(r.Context(), tok)
 	if err != nil {
 		writeError(w, http.StatusUnauthorized, "invalid attach token")
 		return
 	}
-	if claimedSessionID != sessionID {
-		writeError(w, http.StatusForbidden, "attach token session mismatch")
+	if claimedWorkspaceSessionID != workspaceSessionID {
+		writeError(w, http.StatusForbidden, "attach token workspace session mismatch")
 		return
 	}
 
@@ -622,10 +622,10 @@ func (a *API) handleAttachWS(w http.ResponseWriter, r *http.Request, sessionID s
 		return
 	}
 
-	a.Attach.handleConn(r.Context(), actor, sessionID, clientID, role, conn)
+	a.Attach.handleConn(r.Context(), actor, workspaceSessionID, clientID, role, conn)
 }
 
-func (s *AttachService) handleConn(ctx context.Context, actor, sessionID, clientID string, role AttachRole, conn *websocket.Conn) {
+func (s *AttachService) handleConn(ctx context.Context, actor, workspaceSessionID, clientID string, role AttachRole, conn *websocket.Conn) {
 	defer func() { _ = conn.Close() }()
 
 	conn.SetReadLimit(attachWSReadLimit)
@@ -636,16 +636,16 @@ func (s *AttachService) handleConn(ctx context.Context, actor, sessionID, client
 	})
 
 	s.mu.Lock()
-	sess, ok := s.sessions[sessionID]
+	sess, ok := s.sessions[workspaceSessionID]
 	if !ok {
-		created, err := newAttachSession(s.namespace, sessionID, s.restCfg)
+		created, err := newAttachSession(s.namespace, workspaceSessionID, s.restCfg)
 		if err != nil {
 			s.mu.Unlock()
 			_ = conn.WriteJSON(attachMsg{Type: "error", Message: "attach not available"})
 			return
 		}
 		sess = created
-		s.sessions[sessionID] = sess
+		s.sessions[workspaceSessionID] = sess
 	}
 	s.mu.Unlock()
 
@@ -701,7 +701,7 @@ func (s *AttachService) handleConn(ctx context.Context, actor, sessionID, client
 	}
 	sess.clients[clientID] = cli
 	if sess.backendCancel == nil {
-		podName, err := s.findAttachPod(ctx, sessionID)
+		podName, err := s.findAttachPod(ctx, workspaceSessionID)
 		if err == nil {
 			_ = sess.ensureBackendLocked(ctx, podName)
 		}
@@ -711,13 +711,13 @@ func (s *AttachService) handleConn(ctx context.Context, actor, sessionID, client
 	sess.mu.Unlock()
 
 	if s.audit != nil {
-		s.audit.Append(ctx, actor, "attach.connect", "session", sessionID, "allowed", map[string]any{"clientID": clientID, "role": string(cli.role), "via": roleVia})
+		s.audit.Append(ctx, actor, "attach.connect", "workspace-session", workspaceSessionID, "allowed", map[string]any{"clientID": clientID, "role": string(cli.role), "via": roleVia})
 		if cli.role == AttachRoleDriver {
-			s.audit.Append(ctx, actor, "attach.control.acquired", "session", sessionID, "allowed", map[string]any{"clientID": clientID, "via": roleVia})
+			s.audit.Append(ctx, actor, "attach.control.acquired", "workspace-session", workspaceSessionID, "allowed", map[string]any{"clientID": clientID, "via": roleVia})
 		}
 	}
 
-	cli.send <- attachMsg{Type: "hello", SessionID: sessionID, ClientID: clientID, Role: string(cli.role), DriverID: driverID, LeaseMS: lease.Milliseconds()}
+	cli.send <- attachMsg{Type: "hello", WorkspaceSessionID: workspaceSessionID, ClientID: clientID, Role: string(cli.role), DriverID: driverID, LeaseMS: lease.Milliseconds()}
 
 	for {
 		var m attachMsg
@@ -746,7 +746,7 @@ func (s *AttachService) handleConn(ctx context.Context, actor, sessionID, client
 			if cli.maxRole != AttachRoleDriver {
 				cli.send <- attachMsg{Type: "error", Message: "insufficient role"}
 				if s.audit != nil {
-					s.audit.Append(ctx, actor, "attach.control.acquired", "session", sessionID, "denied", map[string]any{"clientID": clientID, "reason": "insufficient_role"})
+					s.audit.Append(ctx, actor, "attach.control.acquired", "workspace-session", workspaceSessionID, "denied", map[string]any{"clientID": clientID, "reason": "insufficient_role"})
 				}
 				continue
 			}
@@ -764,7 +764,7 @@ func (s *AttachService) handleConn(ctx context.Context, actor, sessionID, client
 			sess.broadcastLocked(attachMsg{Type: "state", DriverID: cur, LeaseMS: lease.Milliseconds()})
 			sess.mu.Unlock()
 			if changed && s.audit != nil {
-				s.audit.Append(ctx, actor, "attach.control.acquired", "session", sessionID, "allowed", map[string]any{"clientID": clientID, "via": "take_control"})
+				s.audit.Append(ctx, actor, "attach.control.acquired", "workspace-session", workspaceSessionID, "allowed", map[string]any{"clientID": clientID, "via": "take_control"})
 			}
 		case "stdin":
 			payload, err := base64.StdEncoding.DecodeString(m.Data)
@@ -785,15 +785,15 @@ func (s *AttachService) handleConn(ctx context.Context, actor, sessionID, client
 			if cur != clientID {
 				cli.send <- attachMsg{Type: "error", Message: "read-only"}
 				if s.audit != nil {
-					s.audit.Append(ctx, actor, "attach.stdin", "session", sessionID, "denied", map[string]any{"clientID": clientID, "bytes": len(payload), "reason": "read_only"})
+					s.audit.Append(ctx, actor, "attach.stdin", "workspace-session", workspaceSessionID, "denied", map[string]any{"clientID": clientID, "bytes": len(payload), "reason": "read_only"})
 				}
 				continue
 			}
 			if s.audit != nil {
-				s.audit.Append(ctx, actor, "attach.stdin", "session", sessionID, "allowed", map[string]any{"clientID": clientID, "bytes": len(payload)})
+				s.audit.Append(ctx, actor, "attach.stdin", "workspace-session", workspaceSessionID, "allowed", map[string]any{"clientID": clientID, "bytes": len(payload)})
 			}
 			if w == nil {
-				podName, err := s.findAttachPod(ctx, sessionID)
+				podName, err := s.findAttachPod(ctx, workspaceSessionID)
 				if err != nil {
 					cli.send <- attachMsg{Type: "error", Message: "no active run pod"}
 					continue
@@ -830,7 +830,7 @@ func (s *AttachService) handleConn(ctx context.Context, actor, sessionID, client
 		}
 		sess.cleanupTimer = time.AfterFunc(delay, func() {
 			s.mu.Lock()
-			cur := s.sessions[sessionID]
+			cur := s.sessions[workspaceSessionID]
 			if cur == nil {
 				s.mu.Unlock()
 				return
@@ -843,7 +843,7 @@ func (s *AttachService) handleConn(ctx context.Context, actor, sessionID, client
 				if cancel != nil {
 					cancel()
 				}
-				delete(s.sessions, sessionID)
+				delete(s.sessions, workspaceSessionID)
 			}
 			s.mu.Unlock()
 		})
@@ -851,7 +851,7 @@ func (s *AttachService) handleConn(ctx context.Context, actor, sessionID, client
 	sess.mu.Unlock()
 
 	if s.audit != nil {
-		s.audit.Append(ctx, actor, "attach.disconnect", "session", sessionID, "allowed", map[string]any{"clientID": clientID, "wasDriver": stillDriver})
+		s.audit.Append(ctx, actor, "attach.disconnect", "workspace-session", workspaceSessionID, "allowed", map[string]any{"clientID": clientID, "wasDriver": stillDriver})
 	}
 
 	<-writeDone
