@@ -54,9 +54,7 @@ export function SessionDetailPage() {
       const trimmedTask = task.trim()
       const trimmedAdvancedArgs = advancedArgs.trim()
       let args: string[] | undefined
-      if (trimmedTask !== '') {
-        args = ['bash', '-lc', trimmedTask]
-      } else if (trimmedAdvancedArgs !== '') {
+      if (trimmedAdvancedArgs !== '') {
         let parsed: unknown
         try {
           parsed = JSON.parse(trimmedAdvancedArgs)
@@ -67,6 +65,8 @@ export function SessionDetailPage() {
           throw new Error('Advanced args must be a JSON array of strings.')
         }
         args = parsed as string[]
+      } else if (trimmedTask !== '') {
+        args = ['bash', '-lc', trimmedTask]
       }
 
       const out = await api.startHarnessRun(token, id, {
@@ -162,7 +162,7 @@ export function SessionDetailPage() {
               onChange={(e) => setAdvancedArgs(e.target.value)}
               placeholder='["go", "test", "./..."]'
             />
-            <div className="faint">Used only when Task is empty.</div>
+            <div className="faint">Overrides Task when provided.</div>
           </div>
           <div className="formRow">
             <div className="label">Image</div>

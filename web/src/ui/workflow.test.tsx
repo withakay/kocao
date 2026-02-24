@@ -184,6 +184,57 @@ describe('workflow-ui-github', () => {
 
     unmount()
   })
+
+  it('uses Advanced args when provided, even when Task is set', async () => {
+    sessionStorage.setItem('kocao.apiToken', 't-full')
+    window.location.hash = '#/workspace-sessions/sess-1'
+
+    const harnessRuns: HarnessRun[] = []
+    let lastStartBody: any = null
+
+    server.use(
+      http.get('/api/v1/workspace-sessions/sess-1', () =>
+        HttpResponse.json({ id: 'sess-1', repoURL: 'https://example.com/repo', phase: 'Active' })
+      ),
+      http.get('/api/v1/harness-runs', () => HttpResponse.json({ harnessRuns })),
+      http.get('/api/v1/audit', () => HttpResponse.json({ events: [] })),
+      http.post('/api/v1/workspace-sessions/:id/harness-runs', async (ctx: any) => {
+        const b = (await ctx.request.json()) as { repoURL: string; repoRevision?: string; image: string; args?: string[] }
+        lastStartBody = b
+        const r: HarnessRun = {
+          id: 'run-advanced',
+          workspaceSessionID: String(ctx.params.id),
+          repoURL: b.repoURL,
+          repoRevision: b.repoRevision ?? 'main',
+          image: b.image,
+          phase: 'Running',
+          podName: 'pod-advanced'
+        }
+        harnessRuns.unshift(r)
+        return HttpResponse.json(r, { status: 201 })
+      }),
+      http.get('/api/v1/harness-runs/:id', () =>
+        HttpResponse.json({ id: 'run-advanced', workspaceSessionID: 'sess-1', repoURL: 'https://example.com/repo', image: 'kocao/harness-runtime:dev', phase: 'Running' })
+      )
+    )
+
+    const { unmount } = render(<App />)
+
+    const taskInput = await screen.findByPlaceholderText('make ci')
+    await userEvent.type(taskInput, 'make ci')
+
+    const advancedInput = await screen.findByPlaceholderText('["go", "test", "./..."]')
+    await userEvent.click(advancedInput)
+    await userEvent.paste('["go", "test", "./..."]')
+
+    const start = await screen.findByRole('button', { name: 'Start Harness Run' })
+    await userEvent.click(start)
+
+    await screen.findByRole('heading', { name: /Harness Run run-advanced/ })
+    expect(lastStartBody?.args).toEqual(['go', 'test', './...'])
+
+    unmount()
+  })
 })
 
 describe('auth-failures', () => {
