@@ -1,45 +1,67 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Smoke test for the harness runtime image.
+# Reads runtime-matrix.json and validates every baked runtime and tool.
+# Exits non-zero with a clear report on any missing or unreachable tool.
+
 matrix=${1:-/etc/kocao/runtime-matrix.json}
 
 if [[ ! -f "${matrix}" ]]; then
-  echo "runtime matrix not found: ${matrix}" >&2
+  echo "FAIL: runtime matrix not found: ${matrix}" >&2
   exit 1
 fi
 
-want_go=$(jq -r '.go' "${matrix}")
-want_node=$(jq -r '.node' "${matrix}")
-want_py=$(jq -r '.python' "${matrix}")
+fail=0
 
-got_go=$(go version | awk '{print $3}' | sed 's/^go//')
-if [[ "${got_go}" != "${want_go}" ]]; then
-  echo "go version mismatch: got=${got_go} want=${want_go}" >&2
-  exit 1
-fi
+echo "=== Validating runtimes ==="
 
-got_node=$(node --version | sed 's/^v//')
-if [[ "${got_node}" != "${want_node}" ]]; then
-  echo "node version mismatch: got=${got_node} want=${want_node}" >&2
-  exit 1
-fi
+# Check each runtime is installed and reachable.
+for runtime in $(jq -r '.runtimes | keys[]' "${matrix}"); do
+  check_cmd=$(jq -r ".runtimes[\"${runtime}\"].check" "${matrix}")
+  versions=$(jq -r ".runtimes[\"${runtime}\"].versions[]" "${matrix}")
 
-got_py=$(python3 --version | awk '{print $2}' | cut -d. -f1-2)
-if [[ "${got_py}" != "${want_py}" ]]; then
-  echo "python version mismatch: got=${got_py} want=${want_py}" >&2
-  exit 1
-fi
-
-missing=0
-while IFS= read -r bin; do
-  if ! command -v "${bin}" >/dev/null 2>&1; then
-    echo "missing required bin: ${bin}" >&2
-    missing=1
+  # Verify the default version is reachable.
+  if ! eval "${check_cmd}" >/dev/null 2>&1; then
+    echo "FAIL: ${runtime} — default not reachable (${check_cmd})" >&2
+    fail=1
+  else
+    echo "  ok: ${runtime} default — $(eval "${check_cmd}" 2>&1 | head -1)"
   fi
-done < <(jq -r '.required_bins[]' "${matrix}")
 
-if [[ "${missing}" -ne 0 ]]; then
+  # Verify each pinned version is installed in mise.
+  for ver in ${versions}; do
+    if ! mise where "${runtime}@${ver}" >/dev/null 2>&1; then
+      echo "FAIL: ${runtime}@${ver} — not installed in mise" >&2
+      fail=1
+    else
+      echo "  ok: ${runtime}@${ver} — installed at $(mise where "${runtime}@${ver}")"
+    fi
+  done
+done
+
+echo ""
+echo "=== Validating tools ==="
+
+# Check each CLI tool is on PATH and executable.
+for tool in $(jq -r '.tools | keys[]' "${matrix}"); do
+  check_cmd=$(jq -r ".tools[\"${tool}\"]" "${matrix}")
+
+  if ! command -v "${tool}" >/dev/null 2>&1; then
+    echo "FAIL: ${tool} — not found on PATH" >&2
+    fail=1
+  elif ! eval "${check_cmd}" >/dev/null 2>&1; then
+    echo "FAIL: ${tool} — found but check failed (${check_cmd})" >&2
+    fail=1
+  else
+    echo "  ok: ${tool} — $(eval "${check_cmd}" 2>&1 | head -1)"
+  fi
+done
+
+echo ""
+if [[ "${fail}" -ne 0 ]]; then
+  echo "FAIL: one or more checks failed" >&2
   exit 1
 fi
 
-echo "ok"
+echo "ok: all checks passed"
