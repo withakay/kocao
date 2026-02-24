@@ -17,7 +17,7 @@ export default defineConfig({
       // Control plane API (kind NodePort in local dev).
       // Keeps the web app on a single origin and supports websockets for attach.
       '/api': {
-        target: 'http://localhost:30080',
+        target: 'http://127.0.0.1:30080',
         changeOrigin: true,
         ws: true
       }
