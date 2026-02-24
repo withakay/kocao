@@ -1,4 +1,5 @@
 import { NavLink, Outlet, useLocation } from 'react-router-dom'
+import { cn } from '@/lib/utils'
 
 function isActive(locationPath: string, href: string) {
   return locationPath === href || locationPath.startsWith(href + '/')
@@ -9,32 +10,51 @@ export function Shell() {
   const path = loc.pathname
 
   return (
-    <div className="appShell">
-      <aside className="sidebar">
-        <div className="brand">
-          <div className="brandMark" />
+    <div className="shell-grid grid min-h-screen" style={{ gridTemplateColumns: '240px 1fr' }}>
+      <aside className="shell-sidebar border-r border-border bg-sidebar p-5">
+        <div className="flex items-center gap-3 mb-4">
+          <div
+            className="size-8 shrink-0 rounded-md bg-primary/20 border border-primary/30"
+          />
           <div>
-            <div className="brandTitle">kocao</div>
-            <div className="brandSub">workspace sessions • harness runs • PR outcomes</div>
+            <div className="text-sm font-semibold tracking-tight text-sidebar-foreground">kocao</div>
+            <div className="text-xs text-muted-foreground">k8s agent orchestration</div>
           </div>
         </div>
-        <nav className="nav">
+        <nav className="flex flex-col gap-1 mt-4">
           <NavLink
-            className={() => (isActive(path, '/workspace-sessions') ? 'navLink navLinkActive' : 'navLink')}
+            className={() =>
+              cn(
+                'px-3 py-2 rounded-md text-sm transition-colors border border-transparent',
+                isActive(path, '/workspace-sessions')
+                  ? 'bg-sidebar-accent border-primary/20 text-sidebar-accent-foreground'
+                  : 'text-muted-foreground hover:bg-secondary hover:text-foreground',
+              )
+            }
             to="/workspace-sessions"
-          >
-            Workspace Sessions
+           >
+            Sessions
           </NavLink>
-          <NavLink className={() => (isActive(path, '/harness-runs') ? 'navLink navLinkActive' : 'navLink')} to="/harness-runs">
-            Harness Runs
+          <NavLink
+            className={() =>
+              cn(
+                'px-3 py-2 rounded-md text-sm transition-colors border border-transparent',
+                isActive(path, '/harness-runs')
+                  ? 'bg-sidebar-accent border-primary/20 text-sidebar-accent-foreground'
+                  : 'text-muted-foreground hover:bg-secondary hover:text-foreground',
+              )
+            }
+            to="/harness-runs"
+          >
+            Runs
           </NavLink>
         </nav>
-        <div style={{ marginTop: 18 }} className="faint">
-          API proxy: <span className="mono">/api</span> → <span className="mono">http://localhost:30080</span>
+        <div className="mt-5 text-xs text-muted-foreground font-mono">
+          /api → localhost:30080
         </div>
       </aside>
 
-      <main className="main">
+      <main className="p-6">
         <Outlet />
       </main>
     </div>

@@ -12,3 +12,4 @@ Deliver the interactive attach and UI workflow that turns orchestrated runs into
 - [x] 003-02_deliver-ui-and-github-pr-workflow
 - [x] 003-03_run-commands-parity
 - [ ] 003-04_add-scalar-and-cluster-ui-serving
+- [ ] 003-05_refresh-monochrome-kibo-ui

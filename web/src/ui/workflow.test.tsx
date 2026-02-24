@@ -109,7 +109,7 @@ describe('workflow-ui-github', () => {
 
     const { unmount } = render(<App />)
 
-    const create = await screen.findByRole('button', { name: 'Create Workspace Session' })
+    const create = await screen.findByRole('button', { name: 'Provision' })
     await userEvent.click(create)
 
     await screen.findByRole('heading', { name: /Workspace Session sess-1/ })
@@ -254,7 +254,7 @@ describe('auth-failures', () => {
     expect(sessionStorage.getItem('kocao.apiToken')).toBeNull()
     expect(localStorage.getItem('kocao.apiToken')).toBeNull()
 
-    await screen.findByText('Set a bearer token in the top bar to use the API.')
+    await screen.findByText('No bearer token set. Auth required for API calls.')
 
     unmount()
   })
