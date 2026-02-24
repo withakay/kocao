@@ -1,15 +1,22 @@
 ## ADDED Requirements
 
-### Requirement: Reproducible Harness Runtime Image
-The system SHALL provide a versioned harness image that includes the approved runtime matrix and required coding-agent tooling for MVP workloads.
+### Requirement: Workspace Path Safety
+The harness entrypoint SHALL prevent destructive operations outside the configured workspace directory.
 
-#### Scenario: Harness pod starts with required toolchain availability
-- **WHEN** a run pod starts from the published harness image
-- **THEN** the required language runtimes and core CLI tools are available and report expected versions
+#### Scenario: Repo dir outside workspace is rejected
+- **WHEN** the harness is configured with a repo directory outside the workspace
+- **THEN** the entrypoint fails fast and does not delete any directories
 
-### Requirement: Harness Pod Execution Contract
-The system SHALL enforce a standard run-pod contract for workspace mounting, process startup, and secure credential injection.
+### Requirement: Reserved Environment Variables
+The system SHALL treat critical harness environment variables as reserved and SHALL prevent user overrides.
 
-#### Scenario: Run pod receives scoped credentials
-- **WHEN** a run is created with valid repository credentials
-- **THEN** the run pod receives credentials through the defined secure injection path without exposing them in logs
+#### Scenario: User env cannot override reserved KOCAO vars
+- **WHEN** a run specifies an environment variable that conflicts with reserved `KOCAO_*` variables
+- **THEN** the operator rejects the spec or drops the override
+
+### Requirement: Non-Root Harness Container
+The harness container SHALL run as a non-root user by default and SHALL drop unnecessary Linux capabilities.
+
+#### Scenario: Hardened security context
+- **WHEN** a harness pod is created
+- **THEN** the container runs as non-root where possible and has a restrictive security context
