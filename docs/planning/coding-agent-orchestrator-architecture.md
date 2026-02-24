@@ -149,4 +149,15 @@ Default restricted egress
 
 ------------------------------------------------------------------------
 
+# 10. Cluster Web Edge (Caddy + Scalar)
+
+- The control-plane deployment runs a same-pod Caddy edge in front of the API container.
+- Caddy serves static pages at `/` and `/scalar`.
+- Scalar loads the live API schema from `/openapi.json` (no bundled spec file).
+- Caddy proxies `/api/v1/*`, `/openapi.json`, `/healthz`, `/readyz`, and attach websocket upgrades to `127.0.0.1:8080`.
+- Dev-kind is the first target for rollout and smoke validation.
+- Optional Tailscale exposure is planned as an explicit opt-in overlay path.
+
+------------------------------------------------------------------------
+
 End of Document

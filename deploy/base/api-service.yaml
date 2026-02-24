@@ -6,8 +6,8 @@ spec:
   selector:
     app: control-plane-api
   ports:
-    - name: http
+    - name: edge
       port: 80
-      targetPort: http
+      targetPort: edge
       nodePort: 30080
   type: NodePort

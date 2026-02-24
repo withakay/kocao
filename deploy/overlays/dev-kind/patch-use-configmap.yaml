@@ -6,6 +6,10 @@ spec:
   template:
     spec:
       containers:
+        - name: caddy
+          envFrom:
+            - configMapRef:
+                name: control-plane-config
         - name: api
           envFrom:
             - configMapRef:

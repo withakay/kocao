@@ -53,6 +53,12 @@ This doc translates those requirements into operator-facing guidance and deploym
 - Do not expose plain HTTP on shared networks.
 - Restrict inbound access to known operator/bastion origins.
 
+### Optional Tailscale Front Door
+
+- For dev-kind experimentation, an opt-in Tailscale sidecar overlay is available at `deploy/overlays/dev-kind-tailscale`.
+- Keep this overlay disabled by default and enable only with explicit operator approval.
+- Treat `tailscale-auth` credentials as high-sensitivity secrets and rotate frequently.
+
 ### Tokens
 
 - Bearer tokens are the primary API auth mechanism.

@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>kocao Cluster UI</title>
+    <style>
+      :root {
+        color-scheme: light;
+        font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
+      }
+      body {
+        margin: 0;
+        background: #f5f7fb;
+        color: #0f172a;
+      }
+      main {
+        max-width: 920px;
+        margin: 4rem auto;
+        padding: 0 1.25rem;
+      }
+      h1 {
+        margin: 0 0 0.75rem;
+      }
+      p {
+        line-height: 1.45;
+      }
+      .card {
+        background: white;
+        border: 1px solid #d7dfeb;
+        border-radius: 12px;
+        padding: 1rem;
+        margin-top: 1rem;
+      }
+      a {
+        color: #0a66c2;
+        text-decoration: none;
+        font-weight: 600;
+      }
+      code {
+        background: #eef3fb;
+        border-radius: 6px;
+        padding: 0.1rem 0.4rem;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>kocao Web Edge</h1>
+      <p>
+        This Caddy edge runs in the same pod as the control-plane API. It serves Scalar at
+        <a href="/scalar"><code>/scalar</code></a> and proxies API traffic under <code>/api/v1</code>.
+      </p>
+      <section class="card">
+        <h2>Cluster Endpoints</h2>
+        <p><a href="/scalar">Open Scalar API Docs</a></p>
+        <p><a href="/openapi.json">Open live OpenAPI spec</a></p>
+      </section>
+    </main>
+  </body>
+</html>

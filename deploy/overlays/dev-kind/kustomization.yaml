@@ -24,3 +24,6 @@ images:
 
 patches:
   - path: patch-use-configmap.yaml
+
+# Optional Tailscale sidecar plan overlay (disabled by default):
+# kustomize build deploy/overlays/dev-kind-tailscale

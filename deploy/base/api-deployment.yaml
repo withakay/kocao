@@ -14,6 +14,30 @@ spec:
     spec:
       serviceAccountName: control-plane-api
       containers:
+        - name: caddy
+          image: caddy:2.10.2-alpine
+          imagePullPolicy: IfNotPresent
+          args:
+            - run
+            - --config
+            - /etc/caddy/Caddyfile
+          ports:
+            - name: edge
+              containerPort: 8081
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: edge
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: edge
+          volumeMounts:
+            - name: caddy-config
+              mountPath: /etc/caddy/Caddyfile
+              subPath: Caddyfile
+            - name: caddy-static
+              mountPath: /srv
         - name: api
           image: kocao/control-plane-api:dev
           imagePullPolicy: IfNotPresent
@@ -35,3 +59,10 @@ spec:
             httpGet:
               path: /readyz
               port: http
+      volumes:
+        - name: caddy-config
+          configMap:
+            name: control-plane-caddy-config
+        - name: caddy-static
+          configMap:
+            name: control-plane-caddy-static

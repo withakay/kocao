@@ -13,3 +13,15 @@ resources:
   - api-deployment.yaml
   - api-service.yaml
   - operator-deployment.yaml
+
+configMapGenerator:
+  - name: control-plane-caddy-config
+    files:
+      - caddy/Caddyfile
+  - name: control-plane-caddy-static
+    files:
+      - caddy/index.html
+      - caddy/scalar.html
+
+generatorOptions:
+  disableNameSuffixHash: true
