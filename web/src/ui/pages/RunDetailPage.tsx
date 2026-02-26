@@ -5,6 +5,10 @@ import { api, isUnauthorizedError } from '../lib/api'
 import { usePollingQuery } from '../lib/usePolling'
 import { StatusPill } from '../components/StatusPill'
 import { Topbar } from '../components/Topbar'
+import {
+  Btn, btnClass, Card, CardHeader, DetailRow, ErrorBanner,
+  ScopeBadge, Table, Td, Th, EmptyRow,
+} from '../components/primitives'
 
 export function RunDetailPage() {
   const { harnessRunID } = useParams()
@@ -42,10 +46,7 @@ export function RunDetailPage() {
       await api.stopHarnessRun(token, id)
       runQ.reload()
     } catch (e) {
-      if (isUnauthorizedError(e)) {
-        onUnauthorized()
-        return
-      }
+      if (isUnauthorizedError(e)) { onUnauthorized(); return }
       setActionErr(e instanceof Error ? e.message : String(e))
     } finally {
       setActing(false)
@@ -59,10 +60,7 @@ export function RunDetailPage() {
       const out = await api.resumeHarnessRun(token, id)
       nav(`/harness-runs/${encodeURIComponent(out.id)}`)
     } catch (e) {
-      if (isUnauthorizedError(e)) {
-        onUnauthorized()
-        return
-      }
+      if (isUnauthorizedError(e)) { onUnauthorized(); return }
       setActionErr(e instanceof Error ? e.message : String(e))
     } finally {
       setActing(false)
@@ -72,190 +70,121 @@ export function RunDetailPage() {
   const attachLinks = run?.workspaceSessionID
     ? {
         viewer: `/workspace-sessions/${encodeURIComponent(run.workspaceSessionID)}/attach?role=viewer`,
-        driver: `/workspace-sessions/${encodeURIComponent(run.workspaceSessionID)}/attach?role=driver`
+        driver: `/workspace-sessions/${encodeURIComponent(run.workspaceSessionID)}/attach?role=driver`,
       }
     : null
 
-  const cardClass = 'rounded-lg border border-border bg-card p-4'
-  const headerClass = 'flex items-center justify-between mb-3'
-  const rowClass = 'flex items-start gap-3 mb-3'
-  const labelClass = 'text-xs text-muted-foreground w-28 shrink-0 pt-0.5'
-  const refreshBtnClass =
-    'rounded-md border border-border bg-secondary px-3 py-1.5 text-sm text-secondary-foreground hover:bg-secondary/80 transition-colors cursor-pointer'
-  const errorClass = 'mt-3 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-foreground'
-
   return (
     <>
-      <Topbar title={`Harness Run ${id}`} subtitle="Run lifecycle, attach entry points, and GitHub outcome." />
+      <Topbar title={`Run ${id}`} subtitle="Run lifecycle, attach entry points, and GitHub outcome." />
 
-      <div className="mt-4 flex flex-col gap-4">
-        <section className={cardClass}>
-          <div className={headerClass}>
-            <h2 className="text-sm font-semibold tracking-tight">Details</h2>
-            <button className={refreshBtnClass} onClick={runQ.reload} type="button">
-              Refresh
-            </button>
-          </div>
-
+      <div className="flex-1 overflow-y-auto p-4 space-y-3">
+        {/* Details */}
+        <Card>
+          <CardHeader
+            title="Details"
+            right={<Btn onClick={runQ.reload} type="button">Refresh</Btn>}
+          />
           {run ? (
             <>
-              <div className={rowClass}>
-                <div className={labelClass}>Workspace Session</div>
-                <div className="font-mono text-sm">
-                  {run.workspaceSessionID ? (
-                    <Link to={`/workspace-sessions/${encodeURIComponent(run.workspaceSessionID)}`} className="text-primary hover:underline">{run.workspaceSessionID}</Link>
-                  ) : (
-                    <span className="text-muted-foreground">(none)</span>
-                  )}
-                </div>
-              </div>
-              <div className={rowClass}>
-                <div className={labelClass}>Repo</div>
-                <div className="font-mono text-sm">{run.repoURL}</div>
-              </div>
-              <div className={rowClass}>
-                <div className={labelClass}>Revision</div>
-                <div className="font-mono text-sm">{run.repoRevision && run.repoRevision.trim() !== '' ? run.repoRevision : '(none)'}</div>
-              </div>
-              <div className={rowClass}>
-                <div className={labelClass}>Image</div>
-                <div className="font-mono text-sm">{run.image}</div>
-              </div>
-              <div className={rowClass}>
-                <div className={labelClass}>Phase</div>
-                <div>
-                  <StatusPill phase={run.phase} />
-                </div>
-              </div>
-              <div className={rowClass}>
-                <div className={labelClass}>Pod</div>
-                <div className="font-mono text-sm">{run.podName && run.podName.trim() !== '' ? run.podName : '(none yet)'}</div>
-              </div>
+              <DetailRow label="Session">
+                {run.workspaceSessionID ? (
+                  <Link to={`/workspace-sessions/${encodeURIComponent(run.workspaceSessionID)}`} className="text-primary hover:underline">{run.workspaceSessionID}</Link>
+                ) : '\u2014'}
+              </DetailRow>
+              <DetailRow label="Repo">{run.repoURL}</DetailRow>
+              <DetailRow label="Revision">{run.repoRevision && run.repoRevision.trim() !== '' ? run.repoRevision : '\u2014'}</DetailRow>
+              <DetailRow label="Image">{run.image}</DetailRow>
+              <DetailRow label="Phase"><StatusPill phase={run.phase} /></DetailRow>
+              <DetailRow label="Pod">{run.podName && run.podName.trim() !== '' ? run.podName : '\u2014'}</DetailRow>
             </>
           ) : (
-            <div className="text-sm text-muted-foreground">{runQ.loading ? 'Loading…' : runQ.error ?? 'No data.'}</div>
+            <div className="text-xs text-muted-foreground">{runQ.loading ? 'Loading\u2026' : runQ.error ?? 'No data.'}</div>
           )}
-
-          <div className="flex items-center gap-3 mt-1">
-            <button
-              className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-1.5 text-sm text-foreground hover:bg-destructive/20 transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
-              disabled={acting || token.trim() === ''}
-              onClick={stop}
-              type="button"
-            >
+          <div className="flex items-center gap-2 mt-2 pl-27">
+            <Btn variant="danger" disabled={acting || token.trim() === ''} onClick={stop} type="button">
               Stop
-            </button>
-            <button
-              className={refreshBtnClass + ' disabled:opacity-40 disabled:cursor-not-allowed'}
-              disabled={acting || token.trim() === ''}
-              onClick={resume}
-              type="button"
-            >
+            </Btn>
+            <Btn disabled={acting || token.trim() === ''} onClick={resume} type="button">
               Resume
-            </button>
-            <span className="text-xs text-muted-foreground">
-              Scope: <code className="font-mono text-foreground/80">harness-run:write</code>
-            </span>
+            </Btn>
+            <ScopeBadge scope="harness-run:write" />
           </div>
+          {actionErr ? <ErrorBanner>{actionErr}</ErrorBanner> : null}
+          {runQ.error ? <ErrorBanner>{runQ.error}</ErrorBanner> : null}
+        </Card>
 
-          {actionErr ? <div className={errorClass}>{actionErr}</div> : null}
-          {runQ.error ? <div className={errorClass}>{runQ.error}</div> : null}
-        </section>
-
-        <section className={cardClass}>
-          <div className={headerClass}>
-            <h2 className="text-sm font-semibold tracking-tight">Attach</h2>
-            <div className="text-xs text-muted-foreground font-mono">websocket attach</div>
-          </div>
-
+        {/* Attach */}
+        <Card>
+          <CardHeader
+            title="Attach"
+            right={<span className="text-[10px] text-muted-foreground/50 font-mono">websocket</span>}
+          />
           {attachLinks ? (
             <>
-              <div className="text-sm text-muted-foreground mb-3">Attach tokens are ephemeral. This page acquires a token and opens the websocket.</div>
-              <div className="flex items-center gap-3">
-                <Link
-                  className={refreshBtnClass}
-                  to={attachLinks.viewer}
-                >
-                  Open Viewer
-                </Link>
-                <Link
-                  className="rounded-md border border-primary/30 bg-primary/10 px-3 py-1.5 text-sm text-foreground hover:bg-primary/20 transition-colors"
-                  to={attachLinks.driver}
-                >
-                  Open Driver
-                </Link>
+              <p className="text-xs text-muted-foreground mb-2">Attach tokens are ephemeral. Opens a websocket terminal session.</p>
+              <div className="flex items-center gap-2">
+                <Link className={btnClass('secondary')} to={attachLinks.viewer}>Open Viewer</Link>
+                <Link className={btnClass('primary')} to={attachLinks.driver}>Open Driver</Link>
               </div>
             </>
           ) : (
-            <div className="text-sm text-muted-foreground">This harness run is not associated with a workspace session.</div>
+            <p className="text-xs text-muted-foreground">Not associated with a workspace session.</p>
           )}
-        </section>
-      </div>
+        </Card>
 
-      <div className="mt-4 flex flex-col gap-4">
-        <section className={cardClass}>
-          <div className={headerClass}>
-            <h2 className="text-sm font-semibold tracking-tight">GitHub Outcome</h2>
-            <div className="text-xs text-muted-foreground font-mono">source: run metadata</div>
-          </div>
+        {/* GitHub Outcome */}
+        <Card>
+          <CardHeader
+            title="GitHub Outcome"
+            right={<span className="text-[10px] text-muted-foreground/50 font-mono">run metadata</span>}
+          />
           {run ? (
             <>
-              <div className={rowClass}>
-                <div className={labelClass}>Branch</div>
-                <div className="font-mono text-sm">{run.gitHubBranch && run.gitHubBranch.trim() !== '' ? run.gitHubBranch : '(none reported)'}</div>
-              </div>
-              <div className={rowClass}>
-                <div className={labelClass}>PR URL</div>
-                <div className="font-mono text-sm">
-                  {run.pullRequestURL && run.pullRequestURL.trim() !== '' ? (
-                    <a href={run.pullRequestURL} target="_blank" rel="noreferrer" className="text-primary hover:underline">
-                      {run.pullRequestURL}
-                    </a>
-                  ) : (
-                    '(none reported)'
-                  )}
-                </div>
-              </div>
-              <div className={rowClass}>
-                <div className={labelClass}>PR Status</div>
-                <div className="font-mono text-sm">{run.pullRequestStatus && run.pullRequestStatus.trim() !== '' ? run.pullRequestStatus : '(none reported)'}</div>
-              </div>
+              <DetailRow label="Branch">{run.gitHubBranch && run.gitHubBranch.trim() !== '' ? run.gitHubBranch : '\u2014'}</DetailRow>
+              <DetailRow label="PR URL">
+                {run.pullRequestURL && run.pullRequestURL.trim() !== '' ? (
+                  <a href={run.pullRequestURL} target="_blank" rel="noreferrer" className="text-primary hover:underline">
+                    {run.pullRequestURL}
+                  </a>
+                ) : '\u2014'}
+              </DetailRow>
+              <DetailRow label="PR Status">{run.pullRequestStatus && run.pullRequestStatus.trim() !== '' ? run.pullRequestStatus : '\u2014'}</DetailRow>
             </>
           ) : (
-            <div className="text-sm text-muted-foreground">No harness run loaded.</div>
+            <div className="text-xs text-muted-foreground">No harness run loaded.</div>
           )}
-        </section>
+        </Card>
 
-        <section className={cardClass}>
-          <div className={headerClass}>
-            <h2 className="text-sm font-semibold tracking-tight">Audit Trail</h2>
-            <div className="text-xs text-muted-foreground font-mono">source: /api/v1/audit</div>
-          </div>
+        {/* Audit trail */}
+        <Card>
+          <CardHeader
+            title="Audit Trail"
+            right={<span className="text-[10px] text-muted-foreground/50 font-mono">source: /api/v1/audit</span>}
+          />
           {events.length === 0 ? (
-            <div className="text-sm text-muted-foreground">{auditQ.loading ? 'Loading…' : 'No audit events for this run.'}</div>
+            <div className="text-xs text-muted-foreground">{auditQ.loading ? 'Loading\u2026' : 'No audit events for this run.'}</div>
           ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm" aria-label="audit table">
-                <thead>
-                  <tr className="border-b border-border text-left">
-                    <th className="py-2 pr-4 text-xs font-medium text-muted-foreground">At</th>
-                    <th className="py-2 pr-4 text-xs font-medium text-muted-foreground">Action</th>
-                    <th className="py-2 text-xs font-medium text-muted-foreground">Outcome</th>
+            <Table label="audit table">
+              <thead>
+                <tr className="border-b border-border/40">
+                  <Th>At</Th>
+                  <Th>Action</Th>
+                  <Th>Outcome</Th>
+                </tr>
+              </thead>
+              <tbody>
+                {events.map((e) => (
+                  <tr key={e.id} className="border-b border-border/20 last:border-b-0">
+                    <Td className="font-mono">{new Date(e.at).toLocaleTimeString()}</Td>
+                    <Td className="font-mono">{e.action}</Td>
+                    <Td className="font-mono">{e.outcome}</Td>
                   </tr>
-                </thead>
-                <tbody>
-                  {events.map((e) => (
-                    <tr key={e.id} className="border-b border-border/50 last:border-b-0">
-                      <td className="py-2.5 pr-4 font-mono text-sm">{new Date(e.at).toLocaleTimeString()}</td>
-                      <td className="py-2.5 pr-4 font-mono text-sm">{e.action}</td>
-                      <td className="py-2.5 font-mono text-sm">{e.outcome}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                ))}
+              </tbody>
+            </Table>
           )}
-        </section>
+        </Card>
       </div>
     </>
   )

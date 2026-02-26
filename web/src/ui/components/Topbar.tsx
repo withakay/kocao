@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react'
 import { useAuth } from '../auth'
-import { cn } from '@/lib/utils'
+import { Btn, Input, ErrorBanner } from './primitives'
 
-export function Topbar({ title, subtitle }: { title: string; subtitle: string }) {
+export function Topbar({ title, subtitle }: { title: string; subtitle?: string }) {
   const { token, remember, notice, setRemember, setToken } = useAuth()
   const [draft, setDraft] = useState(token)
   const [reveal, setReveal] = useState(false)
@@ -12,25 +12,21 @@ export function Topbar({ title, subtitle }: { title: string; subtitle: string })
   }, [token])
 
   return (
-    <div className="flex items-center justify-between gap-4 rounded-lg border border-border bg-card p-3">
-      <div className="flex flex-col gap-0.5">
-        <h1 className="text-base font-semibold tracking-tight">{title}</h1>
-        <p className="text-xs text-muted-foreground">{subtitle}</p>
+    <div className="flex items-center justify-between gap-3 border-b border-border/40 bg-card/50 px-4 py-2 shrink-0">
+      <div className="min-w-0">
+        <h1 className="text-sm font-semibold tracking-tight truncate">{title}</h1>
+        {subtitle ? <p className="text-[11px] text-muted-foreground truncate">{subtitle}</p> : null}
       </div>
-      <div className="flex items-center gap-2">
-        <input
-          className={cn(
-            'w-72 rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground',
-            'placeholder:text-muted-foreground',
-            'focus:outline-none focus:ring-2 focus:ring-ring/40 focus:border-ring',
-          )}
+      <div className="flex items-center gap-1.5 shrink-0">
+        <Input
+          className="w-56 !py-1 !text-xs"
           type={reveal ? 'text' : 'password'}
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
-          placeholder="Bearer token (required)"
+          placeholder="Bearer token"
           aria-label="API token"
         />
-        <label className="flex items-center gap-1.5 text-xs text-muted-foreground select-none">
+        <label className="flex items-center gap-1 text-[10px] text-muted-foreground select-none cursor-pointer">
           <input
             type="checkbox"
             checked={remember}
@@ -38,28 +34,15 @@ export function Topbar({ title, subtitle }: { title: string; subtitle: string })
             aria-label="Remember token"
             className="accent-primary"
           />
-          Remember
+          Keep
         </label>
-        <button
-          className="rounded-md border border-border bg-secondary px-3 py-1.5 text-sm text-secondary-foreground hover:bg-secondary/80 transition-colors cursor-pointer"
-          onClick={() => setReveal((v) => !v)}
-          type="button"
-        >
+        <Btn variant="ghost" onClick={() => setReveal((v) => !v)} type="button">
           {reveal ? 'Hide' : 'Show'}
-        </button>
-        <button
-          className="rounded-md border border-primary/30 bg-primary/10 px-3 py-1.5 text-sm text-foreground hover:bg-primary/20 transition-colors cursor-pointer"
-          onClick={() => setToken(draft)}
-          type="button"
-        >
+        </Btn>
+        <Btn variant="primary" onClick={() => setToken(draft)} type="button">
           Save
-        </button>
-
-        {notice ? (
-          <div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-foreground">
-            {notice}
-          </div>
-        ) : null}
+        </Btn>
+        {notice ? <ErrorBanner>{notice}</ErrorBanner> : null}
       </div>
     </div>
   )

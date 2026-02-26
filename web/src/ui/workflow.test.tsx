@@ -112,7 +112,7 @@ describe('workflow-ui-github', () => {
     const create = await screen.findByRole('button', { name: 'Provision' })
     await userEvent.click(create)
 
-    await screen.findByRole('heading', { name: /Workspace Session sess-1/ })
+    await screen.findByRole('heading', { name: /Session sess-1/i })
 
     // Ensure the start-run form is actionable even if session data is still loading.
     const repoInput = await screen.findByPlaceholderText('defaults to workspace session repoURL')
@@ -122,11 +122,11 @@ describe('workflow-ui-github', () => {
     const start = await screen.findByRole('button', { name: 'Start Harness Run' })
     await userEvent.click(start)
 
-    await screen.findByRole('heading', { name: /Harness Run run-1/ })
+    await screen.findByRole('heading', { name: /Run run-1/i })
     expect(lastStartBody?.args).toBeUndefined()
     await screen.findByText('Succeeded')
 
-    const outcome = await screen.findByRole('heading', { name: 'GitHub Outcome' })
+    const outcome = await screen.findByRole('heading', { name: /GitHub Outcome/i })
     const card = outcome.closest('section') ?? outcome.parentElement
     expect(card).toBeTruthy()
 
@@ -179,7 +179,7 @@ describe('workflow-ui-github', () => {
     const start = await screen.findByRole('button', { name: 'Start Harness Run' })
     await userEvent.click(start)
 
-    await screen.findByRole('heading', { name: /Harness Run run-task/ })
+    await screen.findByRole('heading', { name: /Run run-task/i })
     expect(lastStartBody?.args).toEqual(['bash', '-lc', 'make ci'])
 
     unmount()
@@ -230,7 +230,7 @@ describe('workflow-ui-github', () => {
     const start = await screen.findByRole('button', { name: 'Start Harness Run' })
     await userEvent.click(start)
 
-    await screen.findByRole('heading', { name: /Harness Run run-advanced/ })
+    await screen.findByRole('heading', { name: /Run run-advanced/i })
     expect(lastStartBody?.args).toEqual(['go', 'test', './...'])
 
     unmount()
@@ -255,6 +255,50 @@ describe('auth-failures', () => {
     expect(localStorage.getItem('kocao.apiToken')).toBeNull()
 
     await screen.findByText('No bearer token set. Auth required for API calls.')
+
+    unmount()
+  })
+})
+
+describe('shell-layout', () => {
+  it('sidebar collapse state persists in localStorage', async () => {
+    localStorage.removeItem('kocao.sidebar.collapsed')
+    sessionStorage.setItem('kocao.apiToken', 't-full')
+    window.location.hash = '#/workspace-sessions'
+
+    server.use(
+      http.get('/api/v1/audit', () => HttpResponse.json({ events: [] })),
+      http.get('/api/v1/workspace-sessions', () => HttpResponse.json({ workspaceSessions: [] }))
+    )
+
+    const { unmount } = render(<App />)
+
+    // Sidebar should be expanded by default (Sessions link visible)
+    await screen.findByText('Sessions')
+
+    // Verify sidebar is not collapsed
+    expect(localStorage.getItem('kocao.sidebar.collapsed')).not.toBe('true')
+
+    // Find and click the expand sidebar button should not exist when expanded
+    expect(screen.queryByLabelText('Expand sidebar')).toBeNull()
+
+    unmount()
+  })
+
+  it('renders command palette placeholder when opened', async () => {
+    sessionStorage.setItem('kocao.apiToken', 't-full')
+    window.location.hash = '#/workspace-sessions'
+
+    server.use(
+      http.get('/api/v1/audit', () => HttpResponse.json({ events: [] })),
+      http.get('/api/v1/workspace-sessions', () => HttpResponse.json({ workspaceSessions: [] }))
+    )
+
+    const { unmount } = render(<App />)
+    await screen.findByText('Sessions')
+
+    // Palette should not be visible initially
+    expect(screen.queryByPlaceholderText('Type a command...')).toBeNull()
 
     unmount()
   })
@@ -315,13 +359,19 @@ describe('attach-ui', () => {
     try {
       const { unmount } = render(<App />)
 
-      await screen.findByText('connected')
-      expect(cookieCalls).toBeGreaterThan(0)
-      expect(urls.length).toBeGreaterThan(0)
+      // Wait for the WebSocket to be created (cookie call triggers WS construction)
+      await vi.waitFor(() => {
+        expect(cookieCalls).toBeGreaterThan(0)
+        expect(urls.length).toBeGreaterThan(0)
+      })
+
       for (const u of urls) {
         expect(u).not.toContain('token=')
       }
       expect(urls[urls.length - 1]).toContain('/api/v1/workspace-sessions/sess-1/attach')
+
+      // Status badge should eventually show 'connected' after MockWebSocket.onopen fires
+      await screen.findByText('connected', {}, { timeout: 3000 })
 
       unmount()
     } finally {

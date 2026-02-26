@@ -30,7 +30,7 @@
   --radius-lg: var(--radius);
   --radius-xl: calc(var(--radius) + 4px);
 
-  /* Status dot colors — semantic, not part of monochrome palette */
+  /* Status colors — semantic, not part of monochrome palette */
   --color-status-ok: oklch(0.72 0.17 163);
   --color-status-warn: oklch(0.75 0.15 70);
   --color-status-bad: oklch(0.62 0.2 25);
@@ -75,8 +75,10 @@
 }
 
 html,
-body {
+body,
+#root {
   height: 100%;
+  overflow: hidden;
 }
 
 body {
@@ -106,8 +108,8 @@ pre {
   font-family: var(--mono);
 }
 
-/* Media query for responsive layout */
-@media (max-width: 920px) {
+/* Responsive: collapse sidebar below 768px */
+@media (max-width: 768px) {
   .shell-grid {
     grid-template-columns: 1fr !important;
   }

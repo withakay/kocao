@@ -1,9 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useParams, useSearchParams } from 'react-router-dom'
 import { useAuth } from '../auth'
 import { api, isUnauthorizedError } from '../lib/api'
 import { base64DecodeToBytes, base64EncodeBytes } from '../lib/base64'
 import { Topbar } from '../components/Topbar'
+import { Btn, btnClass, Badge, Card, ErrorBanner } from '../components/primitives'
+import { GhosttyTerminal, type TerminalHandle } from '../components/GhosttyTerminal'
 import { cn } from '@/lib/utils'
 
 type AttachMsg = {
@@ -34,23 +36,32 @@ export function AttachPage() {
   const [err, setErr] = useState<string | null>(null)
   const [hello, setHello] = useState<{ clientID: string; role: string; driverID: string; leaseMS: number } | null>(null)
   const [driverState, setDriverState] = useState<{ driverID: string; leaseMS: number } | null>(null)
-  const [input, setInput] = useState('')
+  const [fullscreen, setFullscreen] = useState(false)
+  const [engineName, setEngineName] = useState<string | null>(null)
 
   const wsRef = useRef<WebSocket | null>(null)
-  const termRef = useRef<HTMLDivElement | null>(null)
-  const decoder = useMemo(() => new TextDecoder('utf-8'), [])
+  const termRef = useRef<TerminalHandle>(null)
+
+  // Send resize message to backend when terminal dimensions change
+  const handleTerminalResize = useCallback((dims: { cols: number; rows: number }) => {
+    const ws = wsRef.current
+    if (!ws || ws.readyState !== WebSocket.OPEN) return
+    ws.send(JSON.stringify({ type: 'resize', cols: dims.cols, rows: dims.rows }))
+  }, [])
+
+  // Send input from terminal to backend as stdin
+  const handleTerminalInput = useCallback((data: string) => {
+    const ws = wsRef.current
+    if (!ws || ws.readyState !== WebSocket.OPEN) return
+    const bytes = new TextEncoder().encode(data)
+    ws.send(JSON.stringify({ type: 'stdin', data: base64EncodeBytes(bytes) }))
+  }, [])
 
   useEffect(() => {
     if (token.trim() === '' || id === '') return
     let alive = true
     let keepaliveTimer: number | null = null
     let ws: WebSocket | null = null
-
-    const append = (s: string) => {
-      if (!termRef.current) return
-      termRef.current.textContent = (termRef.current.textContent ?? '') + s
-      termRef.current.scrollTop = termRef.current.scrollHeight
-    }
 
     const run = async () => {
       setStatus('setting cookie')
@@ -66,42 +77,35 @@ export function AttachPage() {
         wsRef.current = ws
 
         ws.onopen = () => {
-          append(`[connected]\n`)
           setStatus('connected')
 
+          // Send initial terminal dimensions
+          const dims = termRef.current?.dimensions()
+          if (dims && dims.cols > 0 && dims.rows > 0) {
+            ws?.send(JSON.stringify({ type: 'resize', cols: dims.cols, rows: dims.rows }))
+          }
+
           keepaliveTimer = window.setInterval(() => {
-            try {
-              ws?.send(JSON.stringify({ type: 'keepalive' }))
-            } catch {
-              // ignore
-            }
+            try { ws?.send(JSON.stringify({ type: 'keepalive' })) } catch { /* ignore */ }
           }, 10_000)
         }
 
         ws.onmessage = (ev) => {
           let m: AttachMsg
-          try {
-            m = JSON.parse(String(ev.data)) as AttachMsg
-          } catch {
-            return
-          }
+          try { m = JSON.parse(String(ev.data)) as AttachMsg } catch { return }
 
           if (m.type === 'stdout' && m.data) {
             const bytes = base64DecodeToBytes(m.data)
-            append(decoder.decode(bytes))
+            termRef.current?.write(bytes)
             return
           }
           if (m.type === 'error') {
-            append(`\n[error] ${m.message ?? 'unknown'}\n`)
+            const msg = m.message ?? 'unknown'
+            termRef.current?.write(new TextEncoder().encode(`\r\n[error] ${msg}\r\n`))
             return
           }
           if (m.type === 'hello') {
-            setHello({
-              clientID: m.clientID ?? '',
-              role: m.role ?? '',
-              driverID: m.driverID ?? '',
-              leaseMS: m.leaseMS ?? 0
-            })
+            setHello({ clientID: m.clientID ?? '', role: m.role ?? '', driverID: m.driverID ?? '', leaseMS: m.leaseMS ?? 0 })
             return
           }
           if (m.type === 'state') {
@@ -109,28 +113,20 @@ export function AttachPage() {
             return
           }
           if (m.type === 'backend_closed') {
-            append(`\n[backend closed]\n`)
+            termRef.current?.write(new TextEncoder().encode('\r\n[backend closed]\r\n'))
             return
           }
         }
 
-        ws.onerror = () => {
-          setErr('websocket error')
-        }
-
+        ws.onerror = () => { setErr('websocket error') }
         ws.onclose = () => {
-          append(`\n[disconnected]\n`)
+          termRef.current?.write(new TextEncoder().encode('\r\n[disconnected]\r\n'))
           setStatus('disconnected')
           if (keepaliveTimer !== null) window.clearInterval(keepaliveTimer)
           keepaliveTimer = null
         }
       } catch (e) {
-        if (isUnauthorizedError(e)) {
-          onUnauthorized()
-          setErr('unauthorized (401)')
-          setStatus('error')
-          return
-        }
+        if (isUnauthorizedError(e)) { onUnauthorized(); setErr('unauthorized (401)'); setStatus('error'); return }
         setErr(e instanceof Error ? e.message : String(e))
         setStatus('error')
       }
@@ -144,15 +140,7 @@ export function AttachPage() {
       ws?.close()
       wsRef.current = null
     }
-  }, [token, id, role, decoder, onUnauthorized])
-
-  const sendLine = () => {
-    const ws = wsRef.current
-    if (!ws || ws.readyState !== WebSocket.OPEN) return
-    const bytes = new TextEncoder().encode(input + '\n')
-    ws.send(JSON.stringify({ type: 'stdin', data: base64EncodeBytes(bytes) }))
-    setInput('')
-  }
+  }, [token, id, role, onUnauthorized])
 
   const takeControl = () => {
     const ws = wsRef.current
@@ -160,111 +148,59 @@ export function AttachPage() {
     ws.send(JSON.stringify({ type: 'take_control' }))
   }
 
-  const cardClass = 'rounded-lg border border-border bg-card p-4'
-  const headerClass = 'flex items-center justify-between mb-3'
-  const rowClass = 'flex items-start gap-3 mb-3'
-  const labelClass = 'text-xs text-muted-foreground w-24 shrink-0 pt-0.5'
-  const btnClass =
-    'rounded-md border border-border bg-secondary px-3 py-1.5 text-sm text-secondary-foreground hover:bg-secondary/80 transition-colors cursor-pointer'
-  const errorClass = 'mt-3 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-foreground'
+  const statusVariant = status === 'connected' ? 'ok' : status === 'error' || status === 'disconnected' ? 'bad' : 'neutral'
 
   return (
     <>
-      <Topbar title={`Attach ${id}`} subtitle="Live terminal — viewer or driver mode via websocket." />
+      {!fullscreen && <Topbar title={`Attach ${id}`} subtitle="Live terminal \u2014 viewer or driver mode via websocket." />}
 
-      <div className="mt-4 flex flex-col gap-4">
-        <section className={cardClass}>
-          <div className={headerClass}>
-            <h2 className="text-sm font-semibold tracking-tight">Connection</h2>
-            <div
-              className={cn(
-                'text-xs font-mono px-2 py-0.5 rounded-full border',
-                status === 'connected'
-                  ? 'border-status-ok/30 text-status-ok bg-status-ok/10'
-                  : status === 'error' || status === 'disconnected'
-                    ? 'border-destructive/30 text-destructive bg-destructive/10'
-                    : 'border-border text-muted-foreground bg-muted/50',
-              )}
-            >
-              {status}
+      <div className={cn('flex flex-col overflow-hidden', fullscreen ? 'h-screen' : 'flex-1 p-4 gap-3')}>
+        {/* Connection bar */}
+        {!fullscreen && (
+          <Card>
+            <div className="flex items-center gap-3 flex-wrap">
+              <Badge variant={statusVariant}>{status}</Badge>
+              <Badge variant={role === 'driver' ? 'info' : 'neutral'}>{role}</Badge>
+              {engineName && <Badge variant="neutral">{engineName}</Badge>}
+              <span className="text-[10px] font-mono text-muted-foreground">
+                client: {hello?.clientID ?? '\u2026'} | driver: {driverState?.driverID ?? hello?.driverID ?? '\u2014'} | lease: {String(driverState?.leaseMS ?? hello?.leaseMS ?? 0)}ms
+              </span>
+              <div className="flex items-center gap-1.5 ml-auto">
+                <Btn onClick={takeControl} type="button">Seize Control</Btn>
+                <Link className={btnClass('ghost')} to={`/workspace-sessions/${encodeURIComponent(id)}`}>\u2190 Session</Link>
+                <Btn variant="ghost" onClick={() => setFullscreen(true)} type="button">Fullscreen</Btn>
+              </div>
             </div>
-          </div>
+            {err ? <ErrorBanner>{err}</ErrorBanner> : null}
+            {token.trim() === '' ? <ErrorBanner>No bearer token set. Auth required.</ErrorBanner> : null}
+          </Card>
+        )}
 
-          <div className={rowClass}>
-            <div className={labelClass}>Role</div>
-            <div className={cn(
-              'font-mono text-sm px-2 py-0.5 rounded border',
-              role === 'driver'
-                ? 'border-primary/30 bg-primary/10 text-foreground'
-                : 'border-border bg-muted/50 text-muted-foreground',
-            )}>
-              {role}
+        {/* Terminal panel */}
+        <div className={cn(
+          'flex flex-col min-h-0',
+          fullscreen ? 'flex-1' : 'flex-1 rounded-lg border border-border/60 bg-card overflow-hidden',
+        )}>
+          {fullscreen && (
+            <div className="flex items-center gap-2 px-3 py-1.5 border-b border-border/40 bg-card/50 shrink-0">
+              <Badge variant={statusVariant}>{status}</Badge>
+              <Badge variant={role === 'driver' ? 'info' : 'neutral'}>{role}</Badge>
+              {engineName && <Badge variant="neutral">{engineName}</Badge>}
+              <span className="text-[10px] font-mono text-muted-foreground flex-1">
+                {hello?.clientID ?? ''} | {id}
+              </span>
+              <Btn variant="ghost" onClick={() => setFullscreen(false)} type="button">Exit Fullscreen</Btn>
             </div>
-          </div>
-
-          <div className={rowClass}>
-            <div className={labelClass}>Client</div>
-            <div className="font-mono text-sm">{hello?.clientID ?? '(pending)'}</div>
-          </div>
-
-          <div className={rowClass}>
-            <div className={labelClass}>Driver</div>
-            <div className="font-mono text-sm">{driverState?.driverID ?? hello?.driverID ?? '(none)'}</div>
-          </div>
-
-          <div className={rowClass}>
-            <div className={labelClass}>Lease</div>
-            <div className="font-mono text-sm">{String(driverState?.leaseMS ?? hello?.leaseMS ?? 0)}ms</div>
-          </div>
-
-          <div className="flex items-center gap-3 mt-1">
-            <button className={btnClass} onClick={takeControl} type="button">
-              Seize Control
-            </button>
-            <Link className={btnClass} to={`/workspace-sessions/${encodeURIComponent(id)}`}>
-              ← Session
-            </Link>
-          </div>
-
-          {err ? <div className={errorClass}>{err}</div> : null}
-          {token.trim() === '' ? <div className={errorClass}>No bearer token set. Auth required.</div> : null}
-        </section>
-
-        <section className={cardClass}>
-          <div className={headerClass}>
-            <h2 className="text-sm font-semibold tracking-tight">Terminal</h2>
-            <div className="text-xs text-muted-foreground">stdout stream via websocket</div>
-          </div>
-
-          <div
-            className="min-h-[320px] max-h-[600px] overflow-auto rounded-md border border-border bg-background p-3 font-mono text-sm text-foreground whitespace-pre-wrap"
+          )}
+          <GhosttyTerminal
             ref={termRef}
+            className="flex-1 min-h-0"
+            onInput={handleTerminalInput}
+            onResize={handleTerminalResize}
+            onReady={setEngineName}
+            disableInput={role !== 'driver'}
           />
-
-          <div className="flex items-center gap-3 mt-3">
-            <input
-              className="flex-1 rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground font-mono placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring/40 focus:border-ring disabled:opacity-40 disabled:cursor-not-allowed"
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              placeholder={role === 'driver' ? 'stdin → enter to send' : 'read-only (viewer)'}
-              disabled={role !== 'driver'}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') {
-                  e.preventDefault()
-                  sendLine()
-                }
-              }}
-            />
-            <button
-              className="rounded-md border border-primary/30 bg-primary/10 px-4 py-2 text-sm text-foreground hover:bg-primary/20 transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
-              onClick={sendLine}
-              type="button"
-              disabled={role !== 'driver'}
-            >
-              Send
-            </button>
-          </div>
-        </section>
+        </div>
       </div>
     </>
   )
