@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strings"
 )
 
 const maxJSONBodyBytes int64 = 1 << 20 // 1 MiB
@@ -55,6 +56,10 @@ func writeJSONError(w http.ResponseWriter, err error) {
 }
 
 func readJSON(w http.ResponseWriter, r *http.Request, dst any) error {
+	ct := r.Header.Get("Content-Type")
+	if ct != "" && !strings.HasPrefix(strings.ToLower(strings.TrimSpace(ct)), "application/json") {
+		return &requestError{status: http.StatusUnsupportedMediaType, msg: "content-type must be application/json"}
+	}
 	r.Body = http.MaxBytesReader(w, r.Body, maxJSONBodyBytes)
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()

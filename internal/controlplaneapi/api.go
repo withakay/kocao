@@ -272,6 +272,17 @@ type runCreateRequest struct {
 	TTLSecondsAfterFinished *int32                        `json:"ttlSecondsAfterFinished,omitempty"`
 }
 
+// isAllowedRepoURL validates that the repo URL uses an https scheme to prevent
+// SSRF via file://, ssh://, or other schemes that git-clone would happily follow.
+func isAllowedRepoURL(raw string) bool {
+	u := strings.TrimSpace(raw)
+	if u == "" {
+		return false
+	}
+	lower := strings.ToLower(u)
+	return strings.HasPrefix(lower, "https://")
+}
+
 func normalizeRunEgressMode(mode string) (string, bool) {
 	m := strings.ToLower(strings.TrimSpace(mode))
 	switch m {
@@ -340,9 +351,32 @@ func (a *API) handleSessionRunsCreate(w http.ResponseWriter, r *http.Request, wo
 		writeError(w, http.StatusBadRequest, "repoURL required")
 		return
 	}
+	if !isAllowedRepoURL(req.RepoURL) {
+		writeError(w, http.StatusBadRequest, "repoURL must be an https:// URL")
+		return
+	}
 	if strings.TrimSpace(req.Image) == "" {
 		writeError(w, http.StatusBadRequest, "image required")
 		return
+	}
+	if len(req.Command) > 64 {
+		writeError(w, http.StatusBadRequest, "command list too long (max 64)")
+		return
+	}
+	if len(req.Args) > 128 {
+		writeError(w, http.StatusBadRequest, "args list too long (max 128)")
+		return
+	}
+	if len(req.Env) > 64 {
+		writeError(w, http.StatusBadRequest, "env list too long (max 64)")
+		return
+	}
+	if req.TTLSecondsAfterFinished != nil {
+		ttl := *req.TTLSecondsAfterFinished
+		if ttl < 0 || ttl > 86400 {
+			writeError(w, http.StatusBadRequest, "ttlSecondsAfterFinished must be 0-86400")
+			return
+		}
 	}
 	egressMode, ok := normalizeRunEgressMode(req.EgressMode)
 	if !ok {
@@ -563,6 +597,9 @@ func (a *API) handleAuditList(w http.ResponseWriter, r *http.Request) {
 		if err != nil || n <= 0 {
 			writeError(w, http.StatusBadRequest, "invalid limit")
 			return
+		}
+		if n > 1000 {
+			n = 1000
 		}
 		limit = n
 	}

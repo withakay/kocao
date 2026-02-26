@@ -383,7 +383,10 @@ func newAttachOriginAllowlist(env string, configured []string) (attachOriginAllo
 func (l attachOriginAllowlist) CheckOrigin(r *http.Request) bool {
 	origin := strings.TrimSpace(r.Header.Get("Origin"))
 	if origin == "" {
-		return true
+		// Browsers always send Origin on WebSocket upgrades. In production, reject
+		// missing Origin to block non-browser clients. In dev/test, allow it for
+		// integration tests and local tooling that may omit the header.
+		return l.allowDevLocal
 	}
 	if l.allowAll {
 		return true
