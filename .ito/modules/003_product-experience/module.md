@@ -6,6 +6,8 @@ Deliver the interactive attach and UI workflow that turns orchestrated runs into
 ## Scope
 - attach-session
 - workflow-ui-github
+- terminal-engine-selection
+- ide-terminal-experience
 
 ## Changes
 - [x] 003-01_implement-attach-driver-viewer
@@ -13,4 +15,5 @@ Deliver the interactive attach and UI workflow that turns orchestrated runs into
 - [x] 003-03_run-commands-parity
 - [ ] 003-04_add-scalar-and-cluster-ui-serving
 - [x] 003-05_refresh-monochrome-kibo-ui
-- [ ] 003-06_terminal-engine-toggle-ghostty-xterm
+- [x] 003-06_terminal-engine-toggle-ghostty-xterm
+- [ ] 003-07_add-ide-terminal-experience

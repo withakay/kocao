@@ -25,8 +25,8 @@ ______________________________________________________________________
 - **Action**: Introduce a renderer-agnostic terminal adapter interface and move attach transport plumbing so the UI can bind either xterm or ghostty without changing websocket logic.
 - **Verify**: `cd web && pnpm test`
 - **Done When**: Attach transport/input/output path is decoupled from concrete renderer and existing attach behavior still works.
-- **Updated At**: 2026-02-24
-- **Status**: [>] in-progress
+- **Updated At**: 2026-02-26
+- **Status**: [x] complete
 
 ### Task 1.2: Integrate xterm and ghostty engines with per-session toggle
 
@@ -35,8 +35,8 @@ ______________________________________________________________________
 - **Action**: Add engine selector in attach UI with `xterm.js` and `ghostty-web (experimental)`, default to xterm, and support immediate engine switching in active sessions.
 - **Verify**: `cd web && pnpm test`
 - **Done When**: Users can hot-switch engines during an attach session and output continues streaming without requiring a new session.
-- **Updated At**: 2026-02-24
-- **Status**: [ ] pending
+- **Updated At**: 2026-02-26
+- **Status**: [x] complete
 
 ### Task 1.3: Persist engine selection in cookie by workspace session
 
@@ -45,8 +45,8 @@ ______________________________________________________________________
 - **Action**: Persist selected engine in cookie keyed by workspace session ID and restore choice on reload for that same session.
 - **Verify**: `cd web && pnpm test`
 - **Done When**: Reloading attach page for a session restores prior engine choice from cookie state.
-- **Updated At**: 2026-02-24
-- **Status**: [ ] pending
+- **Updated At**: 2026-02-26
+- **Status**: [x] complete
 
 ### Task 1.4: Add tests for interchangeability and persistence
 
@@ -55,8 +55,8 @@ ______________________________________________________________________
 - **Action**: Add tests covering engine toggle visibility, immediate switching semantics, and cookie-based restore behavior.
 - **Verify**: `cd web && pnpm test`
 - **Done When**: New tests fail before implementation and pass after; key acceptance scenarios are automated.
-- **Updated At**: 2026-02-24
-- **Status**: [ ] pending
+- **Updated At**: 2026-02-26
+- **Status**: [x] complete
 
 ______________________________________________________________________
 
@@ -71,5 +71,5 @@ ______________________________________________________________________
 - **Action**: Validate no attach protocol changes were introduced and verify fallback/default behavior remains xterm-first with ghostty marked experimental.
 - **Verify**: `cd web && pnpm test` and `make test`
 - **Done When**: Web and repo test suites pass and acceptance criteria in spec are satisfied.
-- **Updated At**: 2026-02-24
-- **Status**: [ ] pending
+- **Updated At**: 2026-02-26
+- **Status**: [x] complete
