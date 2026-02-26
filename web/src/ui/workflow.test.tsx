@@ -378,4 +378,74 @@ describe('attach-ui', () => {
       vi.unstubAllGlobals()
     }
   })
+
+  it('shows inspector and activity UI elements', async () => {
+    sessionStorage.setItem('kocao.apiToken', 't-full')
+    localStorage.removeItem('kocao.attach.inspectorOpen')
+    localStorage.removeItem('kocao.attach.activityOpen')
+    window.location.hash = '#/workspace-sessions/sess-1/attach?role=viewer'
+
+    server.use(
+      http.get('/api/v1/audit', () => HttpResponse.json({ events: [] })),
+      http.get('/api/v1/harness-runs/:id', () => new HttpResponse('not found', { status: 404 })),
+      http.post('/api/v1/workspace-sessions/:id/attach-cookie', () =>
+        HttpResponse.json(
+          {
+            expiresAt: new Date().toISOString(),
+            workspaceSessionID: 'sess-1',
+            clientID: 'cli-1',
+            role: 'viewer'
+          },
+          { status: 201 }
+        )
+      )
+    )
+
+    class MockWebSocket {
+      readonly url: string
+      readyState = 1
+      onopen: ((ev: any) => void) | null = null
+      onmessage: ((ev: any) => void) | null = null
+      onerror: ((ev: any) => void) | null = null
+      onclose: ((ev: any) => void) | null = null
+
+      constructor(url: string) {
+        this.url = url
+        setTimeout(() => {
+          this.onopen?.({})
+        }, 0)
+      }
+
+      send(_data: any) {
+        // no-op
+      }
+
+      close() {
+        this.readyState = 3
+        this.onclose?.({})
+      }
+    }
+
+    vi.stubGlobal('WebSocket', MockWebSocket)
+    try {
+      const { unmount } = render(<App />)
+
+      // Wait for connected status
+      await screen.findByText('connected', {}, { timeout: 3000 })
+
+      // Inspector opens via toolbar button
+      const inspectorBtn = await screen.findByRole('button', { name: 'Inspector' })
+      await userEvent.click(inspectorBtn)
+      await screen.findByRole('heading', { name: 'Inspector' })
+
+      // Activity panel opens via footer button
+      const showActivityBtn = await screen.findByRole('button', { name: 'Show Activity' })
+      await userEvent.click(showActivityBtn)
+      await screen.findByRole('button', { name: 'Hide' })
+
+      unmount()
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
 })

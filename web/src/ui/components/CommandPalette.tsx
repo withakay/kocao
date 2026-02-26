@@ -1,13 +1,13 @@
 import { Command } from 'cmdk'
 import { useNavigate, useLocation } from 'react-router-dom'
-import { usePalette, useSidebarCollapsed, useFullscreen } from '../lib/useLayoutState'
+import { usePalette, useSidebarCollapsed, useAttachLayout } from '../lib/useLayoutState'
 
 export function CommandPalette() {
   const { open, setOpen } = usePalette()
   const navigate = useNavigate()
   const location = useLocation()
   const { collapsed, toggle: toggleSidebar } = useSidebarCollapsed()
-  const { fullscreen, toggleFullscreen } = useFullscreen()
+  const { toggleFullscreen: toggleAttachFullscreen, toggleInspector, toggleActivity } = useAttachLayout()
 
   if (!open) return null
 
@@ -17,7 +17,7 @@ export function CommandPalette() {
   }
 
   // Check if we're on the attach page (where fullscreen is available)
-  const isAttachPage = location.pathname.includes('/attach/')
+  const isAttachPage = location.pathname.includes('/attach')
 
   return (
     <div className="fixed inset-0 z-50 flex items-start justify-center pt-[18vh]">
@@ -59,13 +59,21 @@ export function CommandPalette() {
             <Command.Separator className="my-1 h-px bg-white/[0.04]" />
 
             <Command.Group heading="Layout" className="[&_[cmdk-group-heading]]:px-4 [&_[cmdk-group-heading]]:py-2 [&_[cmdk-group-heading]]:text-[10px] [&_[cmdk-group-heading]]:font-medium [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-[0.15em] [&_[cmdk-group-heading]]:text-white/25">
-              <Item onSelect={() => { toggleSidebar(); setOpen(false) }} icon={<PanelsIcon />} shortcut="Cmd+\">
+              <Item onSelect={() => { toggleSidebar(); setOpen(false) }} icon={<PanelsIcon />} shortcut="Cmd+\\">
                 Toggle Sidebar
               </Item>
               {isAttachPage && (
-                <Item onSelect={() => { toggleFullscreen(); setOpen(false) }} icon={<PanelsIcon />}>
-                  Toggle Fullscreen
-                </Item>
+                <>
+                  <Item onSelect={() => { toggleAttachFullscreen(); setOpen(false) }} icon={<PanelsIcon />}>
+                    Toggle Fullscreen
+                  </Item>
+                  <Item onSelect={() => { toggleInspector(); setOpen(false) }} icon={<PanelsIcon />} shortcut="Cmd+I">
+                    Toggle Inspector
+                  </Item>
+                  <Item onSelect={() => { toggleActivity(); setOpen(false) }} icon={<PanelsIcon />} shortcut="Cmd+J">
+                    Toggle Activity Panel
+                  </Item>
+                </>
               )}
             </Command.Group>
 

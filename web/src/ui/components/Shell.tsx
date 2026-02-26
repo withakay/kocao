@@ -1,7 +1,7 @@
-import { useMemo, useState, useEffect, useRef } from 'react'
+import { useMemo, useState, useEffect } from 'react'
 import { NavLink, Outlet, useLocation } from 'react-router-dom'
 import { cn } from '@/lib/utils'
-import { useSidebarCollapsed, PaletteContext } from '../lib/useLayoutState'
+import { useSidebarCollapsed, PaletteContext, useAttachLayout } from '../lib/useLayoutState'
 import { useKeyboardShortcuts } from '../lib/useKeyboardShortcuts'
 import { CommandPalette } from './CommandPalette'
 
@@ -19,6 +19,9 @@ export function Shell() {
   const path = loc.pathname
   const { collapsed, toggle: toggleSidebar } = useSidebarCollapsed()
   const [paletteOpen, setPaletteOpen] = useState(false)
+  const { toggleInspector, toggleActivity } = useAttachLayout()
+  
+  const isAttachPage = path.includes('/attach')
   
   const [sidebarWidth, setSidebarWidth] = useState<number>(() => {
     try {
@@ -75,10 +78,23 @@ export function Shell() {
   }
 
   // Escape is handled by CommandPalette itself to avoid double-firing
-  const shortcuts = useMemo(() => ({
-    'mod+k': () => setPaletteOpen((v) => !v),
-    'mod+\\': () => toggleSidebar(),
-  }), [toggleSidebar])
+  const shortcuts = useMemo(() => {
+    const base = {
+      'mod+k': () => setPaletteOpen((v) => !v),
+      'mod+\\': () => toggleSidebar(),
+    }
+    
+    // Add attach-specific shortcuts only on attach page
+    if (isAttachPage) {
+      return {
+        ...base,
+        'mod+i': () => toggleInspector(),
+        'mod+j': () => toggleActivity(),
+      }
+    }
+    
+    return base
+  }, [toggleSidebar, isAttachPage, toggleInspector, toggleActivity])
 
   useKeyboardShortcuts(shortcuts)
 

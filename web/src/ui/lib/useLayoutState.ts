@@ -59,19 +59,89 @@ export function usePalette() {
 }
 
 /* ------------------------------------------------------------------ */
-/*  Fullscreen context                                                */
+/*  Attach layout state — shared across sibling trees                 */
 /* ------------------------------------------------------------------ */
 
-export type FullscreenContextValue = {
+const ATTACH_INSPECTOR_KEY = 'kocao.attach.inspectorOpen'
+const ATTACH_ACTIVITY_KEY = 'kocao.attach.activityOpen'
+
+type AttachLayoutState = {
   fullscreen: boolean
-  toggleFullscreen: () => void
+  inspectorOpen: boolean
+  activityOpen: boolean
 }
 
-export const FullscreenContext = createContext<FullscreenContextValue>({
-  fullscreen: false,
-  toggleFullscreen: () => {},
-})
+function readStoredBool(key: string, fallback = false): boolean {
+  if (typeof window === 'undefined') return fallback
+  try {
+    return localStorage.getItem(key) === 'true'
+  } catch {
+    return fallback
+  }
+}
 
-export function useFullscreen() {
-  return useContext(FullscreenContext)
+let attachLayoutState: AttachLayoutState = {
+  fullscreen: false,
+  inspectorOpen: readStoredBool(ATTACH_INSPECTOR_KEY),
+  activityOpen: readStoredBool(ATTACH_ACTIVITY_KEY),
+}
+
+const attachLayoutListeners = new Set<() => void>()
+
+function subscribeAttachLayout(cb: () => void) {
+  attachLayoutListeners.add(cb)
+  return () => { attachLayoutListeners.delete(cb) }
+}
+
+function getAttachLayoutSnapshot(): AttachLayoutState {
+  return attachLayoutState
+}
+
+function getAttachLayoutServerSnapshot(): AttachLayoutState {
+  return { fullscreen: false, inspectorOpen: false, activityOpen: false }
+}
+
+function setAttachFullscreen(val: boolean) {
+  attachLayoutState = { ...attachLayoutState, fullscreen: val }
+  for (const cb of attachLayoutListeners) cb()
+}
+
+function setAttachInspectorOpen(val: boolean) {
+  attachLayoutState = { ...attachLayoutState, inspectorOpen: val }
+  try {
+    localStorage.setItem(ATTACH_INSPECTOR_KEY, String(val))
+  } catch {
+    // localStorage unavailable
+  }
+  for (const cb of attachLayoutListeners) cb()
+}
+
+function setAttachActivityOpen(val: boolean) {
+  attachLayoutState = { ...attachLayoutState, activityOpen: val }
+  try {
+    localStorage.setItem(ATTACH_ACTIVITY_KEY, String(val))
+  } catch {
+    // localStorage unavailable
+  }
+  for (const cb of attachLayoutListeners) cb()
+}
+
+export function useAttachLayout() {
+  const state = useSyncExternalStore(subscribeAttachLayout, getAttachLayoutSnapshot, getAttachLayoutServerSnapshot)
+
+  const toggleFullscreen = useCallback(() => setAttachFullscreen(!state.fullscreen), [state.fullscreen])
+  const toggleInspector = useCallback(() => setAttachInspectorOpen(!state.inspectorOpen), [state.inspectorOpen])
+  const toggleActivity = useCallback(() => setAttachActivityOpen(!state.activityOpen), [state.activityOpen])
+
+  return {
+    fullscreen: state.fullscreen,
+    inspectorOpen: state.inspectorOpen,
+    activityOpen: state.activityOpen,
+    setFullscreen: setAttachFullscreen,
+    setInspectorOpen: setAttachInspectorOpen,
+    setActivityOpen: setAttachActivityOpen,
+    toggleFullscreen,
+    toggleInspector,
+    toggleActivity,
+  }
 }
