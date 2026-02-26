@@ -17,3 +17,4 @@ Deliver the interactive attach and UI workflow that turns orchestrated runs into
 - [x] 003-05_refresh-monochrome-kibo-ui
 - [x] 003-06_terminal-engine-toggle-ghostty-xterm
 - [x] 003-07_add-ide-terminal-experience
+- [ ] 003-08_desktop-app-ux
