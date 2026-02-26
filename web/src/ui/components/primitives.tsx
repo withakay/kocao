@@ -1,4 +1,5 @@
 import { cn } from '@/lib/utils'
+import { useCallback, useState } from 'react'
 import type { ButtonHTMLAttributes, InputHTMLAttributes, ReactNode, SelectHTMLAttributes, TdHTMLAttributes, TextareaHTMLAttributes, ThHTMLAttributes } from 'react'
 
 /* ------------------------------------------------------------------ */
@@ -58,7 +59,7 @@ export function Select({ className, ...props }: SelectHTMLAttributes<HTMLSelectE
 
 export function Card({ className, children }: { className?: string; children: ReactNode }) {
   return (
-    <section className={cn('rounded-lg border border-border/60 bg-card p-3', className)}>
+    <section className={cn('rounded-lg border border-border/60 bg-card p-2.5', className)}>
       {children}
     </section>
   )
@@ -66,7 +67,7 @@ export function Card({ className, children }: { className?: string; children: Re
 
 export function CardHeader({ title, right }: { title: string; right?: ReactNode }) {
   return (
-    <div className="flex items-center justify-between mb-2">
+    <div className="flex items-center justify-between mb-1.5">
       <h2 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">{title}</h2>
       {right}
     </div>
@@ -79,8 +80,8 @@ export function CardHeader({ title, right }: { title: string; right?: ReactNode 
 
 export function FormRow({ label, children, hint }: { label: string; children: ReactNode; hint?: ReactNode }) {
   return (
-    <div className="flex items-start gap-3 mb-2">
-      <div className="text-xs text-muted-foreground w-24 shrink-0 pt-1.5 text-right">{label}</div>
+    <div className="flex items-start gap-3 mb-1.5">
+      <div className="text-xs text-muted-foreground w-20 shrink-0 pt-1.5 text-right">{label}</div>
       <div className="flex-1 min-w-0">
         {children}
         {hint ? <div className="mt-0.5 text-[11px] text-muted-foreground/70">{hint}</div> : null}
@@ -103,8 +104,8 @@ export function FieldValue({ children, mono = true }: { children: ReactNode; mon
 
 export function DetailRow({ label, children }: { label: string; children: ReactNode }) {
   return (
-    <div className="flex items-baseline gap-3 py-1">
-      <div className="text-xs text-muted-foreground w-24 shrink-0 text-right">{label}</div>
+    <div className="flex items-baseline gap-2 py-1">
+      <div className="text-xs text-muted-foreground w-20 shrink-0 text-right">{label}</div>
       <div className="text-sm font-mono min-w-0 break-all">{children}</div>
     </div>
   )
@@ -179,11 +180,11 @@ export function Table({ label, children }: { label: string; children: ReactNode 
 }
 
 export function Th({ children, className, ...props }: ThHTMLAttributes<HTMLTableCellElement>) {
-  return <th className={cn('py-1.5 pr-3 text-[11px] font-medium text-muted-foreground text-left', className)} {...props}>{children}</th>
+  return <th className={cn('py-1 pr-3 text-[11px] font-medium text-muted-foreground text-left', className)} {...props}>{children}</th>
 }
 
 export function Td({ children, className, ...props }: TdHTMLAttributes<HTMLTableCellElement>) {
-  return <td className={cn('py-1.5 pr-3 text-sm', className)} {...props}>{children}</td>
+  return <td className={cn('py-1 pr-3 text-sm', className)} {...props}>{children}</td>
 }
 
 export function EmptyRow({ cols, loading, message }: { cols: number; loading: boolean; message: string }) {
@@ -193,5 +194,118 @@ export function EmptyRow({ cols, loading, message }: { cols: number; loading: bo
         {loading ? 'Loading\u2026' : message}
       </td>
     </tr>
+  )
+}
+
+/* ------------------------------------------------------------------ */
+/*  CollapsibleSection                                                */
+/* ------------------------------------------------------------------ */
+
+type CollapsibleSectionProps = {
+  /** Section title shown in the header */
+  title: string
+  /** Optional localStorage key to persist open/closed state */
+  persistKey?: string
+  /** Start expanded (default: true) */
+  defaultOpen?: boolean
+  /** Content */
+  children: ReactNode
+  /** Optional right-side content in header (e.g., action buttons) */
+  headerRight?: ReactNode
+  /** CSS class for the outer wrapper */
+  className?: string
+}
+
+export function CollapsibleSection({
+  title,
+  persistKey,
+  defaultOpen = true,
+  children,
+  headerRight,
+  className,
+}: CollapsibleSectionProps) {
+  const getInitialOpen = (): boolean => {
+    if (!persistKey) return defaultOpen
+    try {
+      const stored = localStorage.getItem(persistKey)
+      return stored !== null ? stored === 'true' : defaultOpen
+    } catch {
+      return defaultOpen
+    }
+  }
+
+  const [isOpen, setIsOpen] = useState(getInitialOpen)
+
+  const toggle = useCallback(() => {
+    setIsOpen((prev) => {
+      const next = !prev
+      if (persistKey) {
+        try {
+          localStorage.setItem(persistKey, String(next))
+        } catch {
+          // ignore localStorage errors
+        }
+      }
+      return next
+    })
+  }, [persistKey])
+
+  return (
+    <section className={cn('rounded-lg border border-border/60 bg-card', className)}>
+      {/* Header */}
+      <div
+        className="flex items-center gap-2 px-2.5 py-1.5 cursor-pointer hover:bg-secondary/30 transition-colors rounded-t-lg"
+        onClick={toggle}
+        role="button"
+        tabIndex={0}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault()
+            toggle()
+          }
+        }}
+        aria-expanded={isOpen}
+      >
+        {/* Chevron */}
+        <svg
+          className="shrink-0 transition-transform duration-200"
+          style={{ transform: isOpen ? 'rotate(90deg)' : 'rotate(0deg)' }}
+          width="12"
+          height="12"
+          viewBox="0 0 12 12"
+          fill="none"
+          xmlns="http://www.w3.org/2000/svg"
+          aria-hidden="true"
+        >
+          <path d="M4.5 2L8.5 6L4.5 10" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+
+        {/* Title */}
+        <h2 className="flex-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+          {title}
+        </h2>
+
+        {/* Optional right content */}
+        {headerRight ? (
+          <div onClick={(e) => e.stopPropagation()}>
+            {headerRight}
+          </div>
+        ) : null}
+      </div>
+
+      {/* Collapsible content */}
+      <div
+        className="grid transition-[grid-template-rows] duration-200 ease-in-out"
+        style={{
+          gridTemplateRows: isOpen ? '1fr' : '0fr',
+        }}
+      >
+        <div className="overflow-hidden min-h-0">
+          <div className="p-3 pt-0">
+            {children}
+          </div>
+        </div>
+      </div>
+    </section>
   )
 }

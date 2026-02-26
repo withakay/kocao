@@ -6,7 +6,7 @@ import { usePollingQuery } from '../lib/usePolling'
 import { StatusPill } from '../components/StatusPill'
 import { Topbar } from '../components/Topbar'
 import {
-  Btn, btnClass, Card, CardHeader, DetailRow, ErrorBanner,
+  Btn, btnClass, CollapsibleSection, DetailRow, ErrorBanner,
   ScopeBadge, Table, Td, Th, EmptyRow,
 } from '../components/primitives'
 
@@ -79,12 +79,13 @@ export function RunDetailPage() {
       <Topbar title={`Run ${id}`} subtitle="Run lifecycle, attach entry points, and GitHub outcome." />
 
       <div className="flex-1 overflow-y-auto p-4 space-y-3">
-        {/* Details */}
-        <Card>
-          <CardHeader
-            title="Details"
-            right={<Btn onClick={runQ.reload} type="button">Refresh</Btn>}
-          />
+        {/* Run Info */}
+        <CollapsibleSection
+          title="Run Info"
+          persistKey="kocao.section.run.info"
+          defaultOpen={true}
+          headerRight={<Btn onClick={runQ.reload} type="button">Refresh</Btn>}
+        >
           {run ? (
             <>
               <DetailRow label="Session">
@@ -101,25 +102,34 @@ export function RunDetailPage() {
           ) : (
             <div className="text-xs text-muted-foreground">{runQ.loading ? 'Loading\u2026' : runQ.error ?? 'No data.'}</div>
           )}
-          <div className="flex items-center gap-2 mt-2 pl-27">
+          {runQ.error ? <ErrorBanner>{runQ.error}</ErrorBanner> : null}
+        </CollapsibleSection>
+
+        {/* Actions */}
+        <CollapsibleSection
+          title="Actions"
+          persistKey="kocao.section.run.actions"
+          defaultOpen={true}
+          headerRight={<ScopeBadge scope="harness-run:write" />}
+        >
+          <div className="flex items-center gap-2">
             <Btn variant="danger" disabled={acting || token.trim() === ''} onClick={stop} type="button">
               Stop
             </Btn>
             <Btn disabled={acting || token.trim() === ''} onClick={resume} type="button">
               Resume
             </Btn>
-            <ScopeBadge scope="harness-run:write" />
           </div>
           {actionErr ? <ErrorBanner>{actionErr}</ErrorBanner> : null}
-          {runQ.error ? <ErrorBanner>{runQ.error}</ErrorBanner> : null}
-        </Card>
+        </CollapsibleSection>
 
         {/* Attach */}
-        <Card>
-          <CardHeader
-            title="Attach"
-            right={<span className="text-[10px] text-muted-foreground/50 font-mono">websocket</span>}
-          />
+        <CollapsibleSection
+          title="Attach"
+          persistKey="kocao.section.run.attach"
+          defaultOpen={true}
+          headerRight={<span className="text-[10px] text-muted-foreground/50 font-mono">websocket</span>}
+        >
           {attachLinks ? (
             <>
               <p className="text-xs text-muted-foreground mb-2">Attach tokens are ephemeral. Opens a websocket terminal session.</p>
@@ -131,37 +141,33 @@ export function RunDetailPage() {
           ) : (
             <p className="text-xs text-muted-foreground">Not associated with a workspace session.</p>
           )}
-        </Card>
+        </CollapsibleSection>
 
         {/* GitHub Outcome */}
-        <Card>
-          <CardHeader
+        {run?.pullRequestURL && run.pullRequestURL.trim() !== '' ? (
+          <CollapsibleSection
             title="GitHub Outcome"
-            right={<span className="text-[10px] text-muted-foreground/50 font-mono">run metadata</span>}
-          />
-          {run ? (
-            <>
-              <DetailRow label="Branch">{run.gitHubBranch && run.gitHubBranch.trim() !== '' ? run.gitHubBranch : '\u2014'}</DetailRow>
-              <DetailRow label="PR URL">
-                {run.pullRequestURL && run.pullRequestURL.trim() !== '' ? (
-                  <a href={run.pullRequestURL} target="_blank" rel="noreferrer" className="text-primary hover:underline">
-                    {run.pullRequestURL}
-                  </a>
-                ) : '\u2014'}
-              </DetailRow>
-              <DetailRow label="PR Status">{run.pullRequestStatus && run.pullRequestStatus.trim() !== '' ? run.pullRequestStatus : '\u2014'}</DetailRow>
-            </>
-          ) : (
-            <div className="text-xs text-muted-foreground">No harness run loaded.</div>
-          )}
-        </Card>
+            persistKey="kocao.section.run.github"
+            defaultOpen={true}
+            headerRight={<span className="text-[10px] text-muted-foreground/50 font-mono">run metadata</span>}
+          >
+            <DetailRow label="Branch">{run.gitHubBranch && run.gitHubBranch.trim() !== '' ? run.gitHubBranch : '\u2014'}</DetailRow>
+            <DetailRow label="PR URL">
+              <a href={run.pullRequestURL} target="_blank" rel="noreferrer" className="text-primary hover:underline">
+                {run.pullRequestURL}
+              </a>
+            </DetailRow>
+            <DetailRow label="PR Status">{run.pullRequestStatus && run.pullRequestStatus.trim() !== '' ? run.pullRequestStatus : '\u2014'}</DetailRow>
+          </CollapsibleSection>
+        ) : null}
 
-        {/* Audit trail */}
-        <Card>
-          <CardHeader
-            title="Audit Trail"
-            right={<span className="text-[10px] text-muted-foreground/50 font-mono">source: /api/v1/audit</span>}
-          />
+        {/* Audit Trail */}
+        <CollapsibleSection
+          title="Audit Trail"
+          persistKey="kocao.section.run.audit"
+          defaultOpen={true}
+          headerRight={<span className="text-[10px] text-muted-foreground/50 font-mono">source: /api/v1/audit</span>}
+        >
           {events.length === 0 ? (
             <div className="text-xs text-muted-foreground">{auditQ.loading ? 'Loading\u2026' : 'No audit events for this run.'}</div>
           ) : (
@@ -184,7 +190,7 @@ export function RunDetailPage() {
               </tbody>
             </Table>
           )}
-        </Card>
+        </CollapsibleSection>
       </div>
     </>
   )

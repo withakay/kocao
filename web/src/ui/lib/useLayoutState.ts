@@ -57,3 +57,21 @@ export const PaletteContext = createContext<PaletteContextValue>({
 export function usePalette() {
   return useContext(PaletteContext)
 }
+
+/* ------------------------------------------------------------------ */
+/*  Fullscreen context                                                */
+/* ------------------------------------------------------------------ */
+
+export type FullscreenContextValue = {
+  fullscreen: boolean
+  toggleFullscreen: () => void
+}
+
+export const FullscreenContext = createContext<FullscreenContextValue>({
+  fullscreen: false,
+  toggleFullscreen: () => {},
+})
+
+export function useFullscreen() {
+  return useContext(FullscreenContext)
+}

@@ -6,7 +6,7 @@ import { usePollingQuery } from '../lib/usePolling'
 import { StatusPill } from '../components/StatusPill'
 import { Topbar } from '../components/Topbar'
 import {
-  Btn, Card, CardHeader, DetailRow, ErrorBanner, FormRow,
+  Btn, CollapsibleSection, DetailRow, ErrorBanner, FormRow,
   Input, Select, ScopeBadge, Table, Td, Textarea, Th, EmptyRow,
 } from '../components/primitives'
 
@@ -95,12 +95,13 @@ export function SessionDetailPage() {
       <Topbar title={`Session ${id}`} subtitle="Session context, harness run dispatch, and audit trail." />
 
       <div className="flex-1 overflow-y-auto p-4 space-y-3">
-        {/* Details */}
-        <Card>
-          <CardHeader
-            title="Details"
-            right={<Btn onClick={() => { sessQ.reload(); runsQ.reload() }} type="button">Refresh</Btn>}
-          />
+        {/* Session Info */}
+        <CollapsibleSection
+          title="Session Info"
+          persistKey="kocao.section.session.info"
+          defaultOpen={true}
+          headerRight={<Btn onClick={() => { sessQ.reload(); runsQ.reload() }} type="button">Refresh</Btn>}
+        >
           {sess ? (
             <>
               <DetailRow label="Repo">{sess.repoURL && sess.repoURL.trim() !== '' ? sess.repoURL : '\u2014'}</DetailRow>
@@ -110,14 +111,15 @@ export function SessionDetailPage() {
             <div className="text-xs text-muted-foreground">{sessQ.loading ? 'Loading\u2026' : sessQ.error ?? 'No data.'}</div>
           )}
           {sessQ.error ? <ErrorBanner>{sessQ.error}</ErrorBanner> : null}
-        </Card>
+        </CollapsibleSection>
 
-        {/* Dispatch form */}
-        <Card>
-          <CardHeader
-            title="Dispatch Harness Run"
-            right={<ScopeBadge scope="harness-run:write" />}
-          />
+        {/* Start Harness Run */}
+        <CollapsibleSection
+          title="Start Harness Run"
+          persistKey="kocao.section.session.start"
+          defaultOpen={true}
+          headerRight={<ScopeBadge scope="harness-run:write" />}
+        >
           <FormRow label="Repo URL">
             <Input value={effectiveRepo} onChange={(e) => setRepoURL(e.target.value)} placeholder="defaults to workspace session repoURL" />
           </FormRow>
@@ -150,14 +152,15 @@ export function SessionDetailPage() {
             </Btn>
           </div>
           {startErr ? <ErrorBanner>{startErr}</ErrorBanner> : null}
-        </Card>
+        </CollapsibleSection>
 
-        {/* Runs table */}
-        <Card>
-          <CardHeader
-            title="Harness Runs"
-            right={<span className="text-[10px] text-muted-foreground/50 font-mono">polling 2.5s</span>}
-          />
+        {/* Runs */}
+        <CollapsibleSection
+          title="Runs"
+          persistKey="kocao.section.session.runs"
+          defaultOpen={true}
+          headerRight={<span className="text-[10px] text-muted-foreground/50 font-mono">polling 2.5s</span>}
+        >
           <Table label="harness runs table">
             <thead>
               <tr className="border-b border-border/40">
@@ -183,14 +186,15 @@ export function SessionDetailPage() {
             </tbody>
           </Table>
           {runsQ.error ? <ErrorBanner>{runsQ.error}</ErrorBanner> : null}
-        </Card>
+        </CollapsibleSection>
 
-        {/* Audit trail */}
-        <Card>
-          <CardHeader
-            title="Audit Trail"
-            right={<span className="text-[10px] text-muted-foreground/50 font-mono">source: /api/v1/audit</span>}
-          />
+        {/* Audit Trail */}
+        <CollapsibleSection
+          title="Audit Trail"
+          persistKey="kocao.section.session.audit"
+          defaultOpen={true}
+          headerRight={<span className="text-[10px] text-muted-foreground/50 font-mono">source: /api/v1/audit</span>}
+        >
           {events.length === 0 ? (
             <div className="text-xs text-muted-foreground">{auditQ.loading ? 'Loading\u2026' : 'No audit events for this session.'}</div>
           ) : (
@@ -213,7 +217,7 @@ export function SessionDetailPage() {
               </tbody>
             </Table>
           )}
-        </Card>
+        </CollapsibleSection>
       </div>
     </>
   )

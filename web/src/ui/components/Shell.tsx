@@ -1,9 +1,14 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useState, useEffect, useRef } from 'react'
 import { NavLink, Outlet, useLocation } from 'react-router-dom'
 import { cn } from '@/lib/utils'
 import { useSidebarCollapsed, PaletteContext } from '../lib/useLayoutState'
 import { useKeyboardShortcuts } from '../lib/useKeyboardShortcuts'
 import { CommandPalette } from './CommandPalette'
+
+const SIDEBAR_STORAGE_KEY = 'kocao.sidebar.width'
+const DEFAULT_SIDEBAR_WIDTH = 208 // w-52 in pixels
+const MIN_SIDEBAR_WIDTH = 180
+const MAX_SIDEBAR_WIDTH = 320
 
 function isActive(locationPath: string, href: string) {
   return locationPath === href || locationPath.startsWith(href + '/')
@@ -14,6 +19,60 @@ export function Shell() {
   const path = loc.pathname
   const { collapsed, toggle: toggleSidebar } = useSidebarCollapsed()
   const [paletteOpen, setPaletteOpen] = useState(false)
+  
+  const [sidebarWidth, setSidebarWidth] = useState<number>(() => {
+    try {
+      const stored = localStorage.getItem(SIDEBAR_STORAGE_KEY)
+      if (stored) {
+        const parsed = Number(stored)
+        if (!isNaN(parsed) && parsed >= MIN_SIDEBAR_WIDTH && parsed <= MAX_SIDEBAR_WIDTH) {
+          return parsed
+        }
+      }
+    } catch {
+      // localStorage unavailable
+    }
+    return DEFAULT_SIDEBAR_WIDTH
+  })
+
+  const [isDragging, setIsDragging] = useState(false)
+
+  // Persist sidebar width
+  useEffect(() => {
+    try {
+      localStorage.setItem(SIDEBAR_STORAGE_KEY, String(sidebarWidth))
+    } catch {
+      // localStorage unavailable
+    }
+  }, [sidebarWidth])
+
+  // Handle sidebar resize dragging
+  useEffect(() => {
+    if (!isDragging) return
+
+    const handlePointerMove = (e: PointerEvent) => {
+      const newWidth = e.clientX
+      const clampedWidth = Math.max(MIN_SIDEBAR_WIDTH, Math.min(MAX_SIDEBAR_WIDTH, newWidth))
+      setSidebarWidth(clampedWidth)
+    }
+
+    const handlePointerUp = () => {
+      setIsDragging(false)
+    }
+
+    document.addEventListener('pointermove', handlePointerMove)
+    document.addEventListener('pointerup', handlePointerUp)
+
+    return () => {
+      document.removeEventListener('pointermove', handlePointerMove)
+      document.removeEventListener('pointerup', handlePointerUp)
+    }
+  }, [isDragging])
+
+  const handleResizePointerDown = (e: React.PointerEvent) => {
+    e.preventDefault()
+    setIsDragging(true)
+  }
 
   // Escape is handled by CommandPalette itself to avoid double-firing
   const shortcuts = useMemo(() => ({
@@ -40,33 +99,47 @@ export function Shell() {
     <PaletteContext.Provider value={paletteCtx}>
       <div className="flex h-screen overflow-hidden">
         {/* Sidebar */}
-        <aside
-          className={cn(
-            'shrink-0 border-r border-border/60 bg-sidebar flex flex-col transition-[width] duration-200 overflow-hidden',
-            collapsed ? 'w-0 border-r-0' : 'w-52',
-          )}
-        >
-          <div className="flex items-center gap-2.5 px-4 py-3 border-b border-border/40">
-            <div className="size-6 shrink-0 rounded bg-primary/20 border border-primary/30" />
-            <div className="min-w-0">
-              <div className="text-xs font-semibold tracking-tight text-sidebar-foreground leading-none">kocao</div>
-              <div className="text-[10px] text-muted-foreground leading-tight">agent orchestration</div>
-            </div>
-          </div>
+        {!collapsed && (
+          <>
+            <aside
+              style={{ width: `${sidebarWidth}px` }}
+              className="shrink-0 border-r border-border/60 bg-sidebar flex flex-col overflow-hidden"
+            >
+              <div className="flex items-center gap-2.5 px-4 py-3 border-b border-border/40">
+                <div className="size-6 shrink-0 rounded bg-primary/20 border border-primary/30" />
+                <div className="min-w-0">
+                  <div className="text-xs font-semibold tracking-tight text-sidebar-foreground leading-none">kocao</div>
+                  <div className="text-[10px] text-muted-foreground leading-tight">agent orchestration</div>
+                </div>
+              </div>
 
-          <nav className="flex flex-col gap-0.5 p-2 flex-1">
-            <NavLink className={() => linkClass('/workspace-sessions')} to="/workspace-sessions">
-              Sessions
-            </NavLink>
-            <NavLink className={() => linkClass('/harness-runs')} to="/harness-runs">
-              Runs
-            </NavLink>
-          </nav>
+              <nav className="flex flex-col gap-0.5 p-2 flex-1">
+                <NavLink className={() => linkClass('/workspace-sessions')} to="/workspace-sessions">
+                  Sessions
+                </NavLink>
+                <NavLink className={() => linkClass('/harness-runs')} to="/harness-runs">
+                  Runs
+                </NavLink>
+              </nav>
 
-          <div className="px-4 py-2 text-[10px] text-muted-foreground/50 font-mono border-t border-border/40">
-            api: localhost:30080
-          </div>
-        </aside>
+              <div className="px-4 py-2 text-[10px] text-muted-foreground/50 font-mono border-t border-border/40">
+                api: localhost:30080
+              </div>
+            </aside>
+
+            {/* Resize handle */}
+            <div
+              onPointerDown={handleResizePointerDown}
+              className={cn(
+                'shrink-0 w-1 cursor-col-resize transition-colors',
+                isDragging
+                  ? 'bg-primary'
+                  : 'bg-border/60 hover:bg-primary/60',
+              )}
+              style={{ touchAction: 'none' }}
+            />
+          </>
+        )}
 
         {/* Collapsed sidebar toggle */}
         {collapsed && (

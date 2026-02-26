@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState, useMemo } from 'react'
 import { Link, useParams, useSearchParams } from 'react-router-dom'
 import { useAuth } from '../auth'
 import { api, isUnauthorizedError } from '../lib/api'
@@ -6,6 +6,8 @@ import { base64DecodeToBytes, base64EncodeBytes } from '../lib/base64'
 import { Topbar } from '../components/Topbar'
 import { Btn, btnClass, Badge, Card, ErrorBanner } from '../components/primitives'
 import { GhosttyTerminal, type TerminalHandle } from '../components/GhosttyTerminal'
+import { ResizablePanel } from '../components/ResizablePanel'
+import { FullscreenContext } from '../lib/useLayoutState'
 import { cn } from '@/lib/utils'
 
 type AttachMsg = {
@@ -150,38 +152,27 @@ export function AttachPage() {
 
   const statusVariant = status === 'connected' ? 'ok' : status === 'error' || status === 'disconnected' ? 'bad' : 'neutral'
 
+  const toggleFullscreen = useCallback(() => {
+    setFullscreen((v) => !v)
+  }, [])
+
+  const fullscreenCtx = useMemo(() => ({
+    fullscreen,
+    toggleFullscreen,
+  }), [fullscreen, toggleFullscreen])
+
+  const handlePanelResize = useCallback(() => {
+    termRef.current?.fit()
+  }, [])
+
   return (
-    <>
+    <FullscreenContext.Provider value={fullscreenCtx}>
       {!fullscreen && <Topbar title={`Attach ${id}`} subtitle="Live terminal \u2014 viewer or driver mode via websocket." />}
 
-      <div className={cn('flex flex-col overflow-hidden', fullscreen ? 'h-screen' : 'flex-1 p-4 gap-3')}>
-        {/* Connection bar */}
-        {!fullscreen && (
-          <Card>
-            <div className="flex items-center gap-3 flex-wrap">
-              <Badge variant={statusVariant}>{status}</Badge>
-              <Badge variant={role === 'driver' ? 'info' : 'neutral'}>{role}</Badge>
-              {engineName && <Badge variant="neutral">{engineName}</Badge>}
-              <span className="text-[10px] font-mono text-muted-foreground">
-                client: {hello?.clientID ?? '\u2026'} | driver: {driverState?.driverID ?? hello?.driverID ?? '\u2014'} | lease: {String(driverState?.leaseMS ?? hello?.leaseMS ?? 0)}ms
-              </span>
-              <div className="flex items-center gap-1.5 ml-auto">
-                <Btn onClick={takeControl} type="button">Seize Control</Btn>
-                <Link className={btnClass('ghost')} to={`/workspace-sessions/${encodeURIComponent(id)}`}>\u2190 Session</Link>
-                <Btn variant="ghost" onClick={() => setFullscreen(true)} type="button">Fullscreen</Btn>
-              </div>
-            </div>
-            {err ? <ErrorBanner>{err}</ErrorBanner> : null}
-            {token.trim() === '' ? <ErrorBanner>No bearer token set. Auth required.</ErrorBanner> : null}
-          </Card>
-        )}
-
-        {/* Terminal panel */}
-        <div className={cn(
-          'flex flex-col min-h-0',
-          fullscreen ? 'flex-1' : 'flex-1 rounded-lg border border-border/60 bg-card overflow-hidden',
-        )}>
-          {fullscreen && (
+      <div className={cn('flex flex-col overflow-hidden', fullscreen ? 'h-screen' : 'flex-1 p-4')}>
+        {fullscreen ? (
+          // Fullscreen mode: just terminal with minimal header
+          <div className="flex flex-col min-h-0 flex-1">
             <div className="flex items-center gap-2 px-3 py-1.5 border-b border-border/40 bg-card/50 shrink-0">
               <Badge variant={statusVariant}>{status}</Badge>
               <Badge variant={role === 'driver' ? 'info' : 'neutral'}>{role}</Badge>
@@ -191,17 +182,59 @@ export function AttachPage() {
               </span>
               <Btn variant="ghost" onClick={() => setFullscreen(false)} type="button">Exit Fullscreen</Btn>
             </div>
-          )}
-          <GhosttyTerminal
-            ref={termRef}
-            className="flex-1 min-h-0"
-            onInput={handleTerminalInput}
-            onResize={handleTerminalResize}
-            onReady={setEngineName}
-            disableInput={role !== 'driver'}
-          />
-        </div>
+            <GhosttyTerminal
+              ref={termRef}
+              className="flex-1 min-h-0"
+              onInput={handleTerminalInput}
+              onResize={handleTerminalResize}
+              onReady={setEngineName}
+              disableInput={role !== 'driver'}
+            />
+          </div>
+        ) : (
+          // Normal mode: resizable panel with connection info and terminal
+          <ResizablePanel
+            id={`attach-${id}`}
+            direction="vertical"
+            defaultSize={120}
+            minSize={80}
+            maxSize={300}
+            onResize={handlePanelResize}
+            className="flex-1"
+          >
+            {/* Connection info panel */}
+            <Card>
+              <div className="flex items-center gap-3 flex-wrap">
+                <Badge variant={statusVariant}>{status}</Badge>
+                <Badge variant={role === 'driver' ? 'info' : 'neutral'}>{role}</Badge>
+                {engineName && <Badge variant="neutral">{engineName}</Badge>}
+                <span className="text-[10px] font-mono text-muted-foreground">
+                  client: {hello?.clientID ?? '\u2026'} | driver: {driverState?.driverID ?? hello?.driverID ?? '\u2014'} | lease: {String(driverState?.leaseMS ?? hello?.leaseMS ?? 0)}ms
+                </span>
+                <div className="flex items-center gap-1.5 ml-auto">
+                  <Btn onClick={takeControl} type="button">Seize Control</Btn>
+                  <Link className={btnClass('ghost')} to={`/workspace-sessions/${encodeURIComponent(id)}`}>\u2190 Session</Link>
+                  <Btn variant="ghost" onClick={() => setFullscreen(true)} type="button">Fullscreen</Btn>
+                </div>
+              </div>
+              {err ? <ErrorBanner>{err}</ErrorBanner> : null}
+              {token.trim() === '' ? <ErrorBanner>No bearer token set. Auth required.</ErrorBanner> : null}
+            </Card>
+
+            {/* Terminal panel */}
+            <div className="flex flex-col min-h-0 rounded-lg border border-border/60 bg-card overflow-hidden">
+              <GhosttyTerminal
+                ref={termRef}
+                className="flex-1 min-h-0"
+                onInput={handleTerminalInput}
+                onResize={handleTerminalResize}
+                onReady={setEngineName}
+                disableInput={role !== 'driver'}
+              />
+            </div>
+          </ResizablePanel>
+        )}
       </div>
-    </>
+    </FullscreenContext.Provider>
   )
 }
