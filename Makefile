@@ -4,6 +4,7 @@ LOCALBIN ?= $(CURDIR)/.local/bin
 KIND ?= $(LOCALBIN)/kind
 
 KIND_CLUSTER_NAME ?= kocao-dev
+K8S_NAMESPACE ?= kocao-system
 
 API_IMAGE ?= kocao/control-plane-api
 OPERATOR_IMAGE ?= kocao/control-plane-operator
@@ -25,6 +26,9 @@ help:
 		"  images              Build local Docker images" \
 		"  kind-load-images    Load images into kind" \
 		"  deploy              Apply kustomize overlay" \
+		"  deploy-restart      Apply overlay + restart control-plane pods" \
+		"  deploy-wait         Wait for control-plane rollout" \
+		"  kind-refresh        Build + load + deploy-restart for kind" \
 		"  undeploy            Delete kustomize overlay" \
 		"  harness-smoke       Build + smoke-test harness image" \
 		"  web-install         Install web deps (pnpm)" \
@@ -97,6 +101,19 @@ harness-smoke:
 .PHONY: deploy
 deploy:
 	kubectl apply -k deploy/overlays/dev-kind
+
+.PHONY: deploy-wait
+deploy-wait:
+	kubectl -n "$(K8S_NAMESPACE)" rollout status deploy/control-plane-api --timeout=300s
+	kubectl -n "$(K8S_NAMESPACE)" rollout status deploy/control-plane-operator --timeout=300s
+
+.PHONY: deploy-restart
+deploy-restart: deploy
+	kubectl -n "$(K8S_NAMESPACE)" rollout restart deploy/control-plane-api deploy/control-plane-operator
+	$(MAKE) deploy-wait
+
+.PHONY: kind-refresh
+kind-refresh: images kind-load-images deploy-restart
 
 .PHONY: undeploy
 undeploy:
