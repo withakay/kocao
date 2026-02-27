@@ -3,6 +3,7 @@ package controlplaneapi
 import (
 	"context"
 	"errors"
+	"github.com/withakay/kocao/internal/namegen"
 	operatorv1alpha1 "github.com/withakay/kocao/internal/operator/api/v1alpha1"
 	"github.com/withakay/kocao/internal/operator/controllers"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -200,17 +201,19 @@ func (a *API) serveAPI(w http.ResponseWriter, r *http.Request) {
 }
 
 type sessionCreateRequest struct {
-	RepoURL string `json:"repoURL,omitempty"`
+	DisplayName string `json:"displayName,omitempty"`
+	RepoURL     string `json:"repoURL,omitempty"`
 }
 
 type sessionResponse struct {
-	ID      string                        `json:"id"`
-	RepoURL string                        `json:"repoURL,omitempty"`
-	Phase   operatorv1alpha1.SessionPhase `json:"phase,omitempty"`
+	ID          string                        `json:"id"`
+	DisplayName string                        `json:"displayName,omitempty"`
+	RepoURL     string                        `json:"repoURL,omitempty"`
+	Phase       operatorv1alpha1.SessionPhase `json:"phase,omitempty"`
 }
 
 func sessionToResponse(s *operatorv1alpha1.Session) sessionResponse {
-	return sessionResponse{ID: s.Name, RepoURL: s.Spec.RepoURL, Phase: s.Status.Phase}
+	return sessionResponse{ID: s.Name, DisplayName: s.Spec.DisplayName, RepoURL: s.Spec.RepoURL, Phase: s.Status.Phase}
 }
 
 func (a *API) handleSessionsList(w http.ResponseWriter, r *http.Request) {
@@ -232,11 +235,45 @@ func (a *API) handleSessionsCreate(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, err)
 		return
 	}
+	displayName := strings.TrimSpace(req.DisplayName)
+	if displayName == "" {
+		existing := func(candidate string) bool {
+			var list operatorv1alpha1.SessionList
+			if err := a.K8s.List(r.Context(), &list, client.InNamespace(a.Namespace)); err != nil {
+				return true
+			}
+			for _, s := range list.Items {
+				if s.Spec.DisplayName == candidate {
+					return true
+				}
+			}
+			return false
+		}
+		name, err := namegen.GenerateUnique(existing)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to generate unique display name")
+			return
+		}
+		displayName = name
+	} else {
+		var list operatorv1alpha1.SessionList
+		if err := a.K8s.List(r.Context(), &list, client.InNamespace(a.Namespace)); err != nil {
+			writeError(w, http.StatusInternalServerError, "list workspace sessions failed")
+			return
+		}
+		for _, s := range list.Items {
+			if s.Spec.DisplayName == displayName {
+				writeError(w, http.StatusConflict, "display name already in use")
+				return
+			}
+		}
+	}
+
 	id := newID()
 	sess := &operatorv1alpha1.Session{
 		TypeMeta:   metav1.TypeMeta{APIVersion: operatorv1alpha1.GroupVersion.String(), Kind: "Session"},
 		ObjectMeta: metav1.ObjectMeta{Name: id, Namespace: a.Namespace},
-		Spec:       operatorv1alpha1.SessionSpec{RepoURL: req.RepoURL},
+		Spec:       operatorv1alpha1.SessionSpec{DisplayName: displayName, RepoURL: req.RepoURL},
 	}
 	if err := a.K8s.Create(r.Context(), sess); err != nil {
 		writeError(w, http.StatusInternalServerError, "create workspace session failed")
@@ -299,6 +336,7 @@ func normalizeRunEgressMode(mode string) (string, bool) {
 
 type runResponse struct {
 	ID                 string                           `json:"id"`
+	DisplayName        string                           `json:"displayName,omitempty"`
 	WorkspaceSessionID string                           `json:"workspaceSessionID,omitempty"`
 	RepoURL            string                           `json:"repoURL"`
 	RepoRevision       string                           `json:"repoRevision,omitempty"`
@@ -312,13 +350,22 @@ type runResponse struct {
 	PullRequestStatus string `json:"pullRequestStatus,omitempty"`
 }
 
-func runToResponse(run *operatorv1alpha1.HarnessRun) runResponse {
+func runToResponse(run *operatorv1alpha1.HarnessRun, sessionDisplayName string) runResponse {
 	ann := run.Annotations
 	if ann == nil {
 		ann = map[string]string{}
 	}
+	displayName := ""
+	if sessionDisplayName != "" {
+		suffix := run.Name
+		if len(suffix) > 5 {
+			suffix = suffix[len(suffix)-5:]
+		}
+		displayName = sessionDisplayName + "-" + suffix
+	}
 	return runResponse{
 		ID:                 run.Name,
+		DisplayName:        displayName,
 		WorkspaceSessionID: run.Spec.WorkspaceSessionName,
 		RepoURL:            run.Spec.RepoURL,
 		RepoRevision:       run.Spec.RepoRevision,
@@ -433,7 +480,18 @@ func (a *API) handleSessionRunsCreate(w http.ResponseWriter, r *http.Request, wo
 		a.Audit.Append(r.Context(), principal(r.Context()), "credential.use", "harness-run", run.Name, "allowed", meta)
 	}
 
-	writeJSON(w, http.StatusCreated, runToResponse(run))
+	writeJSON(w, http.StatusCreated, runToResponse(run, sess.Spec.DisplayName))
+}
+
+func (a *API) sessionDisplayNameFor(ctx context.Context, run *operatorv1alpha1.HarnessRun) string {
+	if run.Spec.WorkspaceSessionName == "" {
+		return ""
+	}
+	var sess operatorv1alpha1.Session
+	if err := a.K8s.Get(ctx, client.ObjectKey{Namespace: a.Namespace, Name: run.Spec.WorkspaceSessionName}, &sess); err != nil {
+		return ""
+	}
+	return sess.Spec.DisplayName
 }
 
 func (a *API) handleRunsList(w http.ResponseWriter, r *http.Request) {
@@ -446,9 +504,20 @@ func (a *API) handleRunsList(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "list harness runs failed")
 		return
 	}
+	sessionNames := map[string]string{}
+	for i := range list.Items {
+		sid := list.Items[i].Spec.WorkspaceSessionName
+		if sid != "" {
+			if _, ok := sessionNames[sid]; !ok {
+				sessionNames[sid] = a.sessionDisplayNameFor(r.Context(), &list.Items[i])
+			}
+		}
+	}
+
 	out := make([]runResponse, 0, len(list.Items))
 	for i := range list.Items {
-		out = append(out, runToResponse(&list.Items[i]))
+		dn := sessionNames[list.Items[i].Spec.WorkspaceSessionName]
+		out = append(out, runToResponse(&list.Items[i], dn))
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"harnessRuns": out})
 }
@@ -464,7 +533,7 @@ func (a *API) handleRunGet(w http.ResponseWriter, r *http.Request, id string) {
 		writeError(w, http.StatusInternalServerError, "get harness run failed")
 		return
 	}
-	writeJSON(w, http.StatusOK, runToResponse(&run))
+	writeJSON(w, http.StatusOK, runToResponse(&run, a.sessionDisplayNameFor(r.Context(), &run)))
 }
 
 func (a *API) handleRunStopPost(w http.ResponseWriter, r *http.Request, id string) {
@@ -509,7 +578,7 @@ func (a *API) handleRunResumePost(w http.ResponseWriter, r *http.Request, id str
 		writeError(w, http.StatusInternalServerError, "create resumed harness run failed")
 		return
 	}
-	writeJSON(w, http.StatusCreated, runToResponse(copy))
+	writeJSON(w, http.StatusCreated, runToResponse(copy, a.sessionDisplayNameFor(r.Context(), copy)))
 }
 
 type attachControlRequest struct {

@@ -113,12 +113,12 @@ func TestCaddyEdgeConfig_HasScalarAndProxyRoutes(t *testing.T) {
 	content := string(b)
 	required := []string{
 		":8081",
-		"/scalar",
-		"/openapi.json",
+		"/api/v1/scalar",
+		"/api/v1/openapi.json",
 		"/api/v1/*",
 		"path_regexp attach ^/api/v1/workspace-sessions/[^/]+/attach$",
 		"header Upgrade websocket",
-		"reverse_proxy @api 127.0.0.1:8080",
+		"reverse_proxy 127.0.0.1:8080",
 	}
 	for _, token := range required {
 		if !strings.Contains(content, token) {
@@ -417,4 +417,64 @@ func TestAttachWS_OriginAllowlist(t *testing.T) {
 	}
 	defer func() { _ = conn.Close() }()
 	_ = readMsgType(t, conn, "hello")
+}
+
+func TestSessionCreate_AutoGeneratesDisplayName(t *testing.T) {
+	api, cleanup := newTestAPI(t)
+	defer cleanup()
+
+	if err := api.Tokens.Create(context.Background(), "t-full", "full", []string{"workspace-session:write", "workspace-session:read"}); err != nil {
+		t.Fatalf("create token: %v", err)
+	}
+
+	srv := httptest.NewServer(api.Handler())
+	defer srv.Close()
+
+	resp, b := doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/workspace-sessions", "full", map[string]any{"repoURL": "https://example.com/repo"})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create session status = %d, want 201 (body=%s)", resp.StatusCode, string(b))
+	}
+	var sess sessionResponse
+	_ = json.Unmarshal(b, &sess)
+	if sess.DisplayName == "" {
+		t.Fatal("expected auto-generated display name, got empty")
+	}
+
+	resp, b = doJSON(t, srv.Client(), http.MethodGet, srv.URL+"/api/v1/workspace-sessions/"+sess.ID, "full", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("get session status = %d, want 200 (body=%s)", resp.StatusCode, string(b))
+	}
+	var got sessionResponse
+	_ = json.Unmarshal(b, &got)
+	if got.DisplayName != sess.DisplayName {
+		t.Fatalf("expected display name %q, got %q", sess.DisplayName, got.DisplayName)
+	}
+}
+
+func TestSessionCreate_DuplicateDisplayNameConflict(t *testing.T) {
+	api, cleanup := newTestAPI(t)
+	defer cleanup()
+
+	if err := api.Tokens.Create(context.Background(), "t-full", "full", []string{"workspace-session:write", "workspace-session:read"}); err != nil {
+		t.Fatalf("create token: %v", err)
+	}
+
+	srv := httptest.NewServer(api.Handler())
+	defer srv.Close()
+
+	resp, b := doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/workspace-sessions", "full", map[string]any{
+		"displayName": "bold-tiger",
+		"repoURL":     "https://example.com/repo",
+	})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("status = %d, want 201 (body=%s)", resp.StatusCode, string(b))
+	}
+
+	resp, b = doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/workspace-sessions", "full", map[string]any{
+		"displayName": "bold-tiger",
+		"repoURL":     "https://example.com/repo2",
+	})
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("status = %d, want 409 (body=%s)", resp.StatusCode, string(b))
+	}
 }

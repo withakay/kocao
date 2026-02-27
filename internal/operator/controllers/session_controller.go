@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/withakay/kocao/internal/namegen"
 	operatorv1alpha1 "github.com/withakay/kocao/internal/operator/api/v1alpha1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -34,6 +35,33 @@ func (r *SessionReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	if updated.DeletionTimestamp.IsZero() {
 		if !controllerutil.ContainsFinalizer(updated, FinalizerName) {
 			controllerutil.AddFinalizer(updated, FinalizerName)
+			changedMeta = true
+		}
+		if updated.Annotations == nil {
+			updated.Annotations = map[string]string{}
+		}
+		if _, ok := updated.Annotations[AnnotationAttachEnabled]; !ok {
+			updated.Annotations[AnnotationAttachEnabled] = "true"
+			changedMeta = true
+		}
+		if updated.Spec.DisplayName == "" {
+			existing := func(candidate string) bool {
+				var all operatorv1alpha1.SessionList
+				if err := r.List(ctx, &all, client.InNamespace(updated.Namespace)); err != nil {
+					return true
+				}
+				for _, s := range all.Items {
+					if s.Spec.DisplayName == candidate {
+						return true
+					}
+				}
+				return false
+			}
+			name, err := namegen.GenerateUnique(existing)
+			if err != nil {
+				return ctrl.Result{}, err
+			}
+			updated.Spec.DisplayName = name
 			changedMeta = true
 		}
 		if err := ensureSessionWorkspacePVC(ctx, r.Client, r.Scheme, updated); err != nil {

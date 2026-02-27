@@ -92,7 +92,7 @@ export function SessionDetailPage() {
 
   return (
     <>
-      <Topbar title={`Session ${id}`} subtitle="Session context, harness run dispatch, and audit trail." />
+      <Topbar title={`Session ${sess?.displayName ?? id}`} subtitle="Session context, harness run dispatch, and audit trail." />
 
       <div className="flex-1 overflow-y-auto p-4 space-y-3">
         {/* Session Info */}
@@ -104,6 +104,8 @@ export function SessionDetailPage() {
         >
           {sess ? (
             <>
+              <DetailRow label="Name">{sess.displayName ?? id}</DetailRow>
+              <DetailRow label="ID">{id}</DetailRow>
               <DetailRow label="Repo">{sess.repoURL && sess.repoURL.trim() !== '' ? sess.repoURL : '\u2014'}</DetailRow>
               <DetailRow label="Phase"><StatusPill phase={sess.phase} /></DetailRow>
             </>
@@ -164,7 +166,7 @@ export function SessionDetailPage() {
           <Table label="harness runs table">
             <thead>
               <tr className="border-b border-border/40">
-                <Th>ID</Th>
+                <Th>Name</Th>
                 <Th>Repo</Th>
                 <Th className="w-28">Phase</Th>
               </tr>
@@ -176,7 +178,8 @@ export function SessionDetailPage() {
                 runs.map((r) => (
                   <tr key={r.id} className="border-b border-border/20 last:border-b-0 hover:bg-muted/30 transition-colors">
                     <Td className="font-mono">
-                      <Link to="/harness-runs/$harnessRunID" params={{ harnessRunID: r.id }} className="text-primary hover:underline">{r.id}</Link>
+                      <Link to="/harness-runs/$harnessRunID" params={{ harnessRunID: r.id }} className="text-primary hover:underline">{r.displayName ?? r.id}</Link>
+                      {r.displayName ? <div className="text-[10px] text-muted-foreground/70 mt-0.5">{r.id}</div> : null}
                     </Td>
                     <Td className="font-mono text-muted-foreground">{r.repoURL}</Td>
                     <Td><StatusPill phase={r.phase} /></Td>

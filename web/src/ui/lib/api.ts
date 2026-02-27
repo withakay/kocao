@@ -1,11 +1,13 @@
 export type WorkspaceSession = {
   id: string
+  displayName?: string
   repoURL?: string
   phase?: string
 }
 
 export type HarnessRun = {
   id: string
+  displayName?: string
   workspaceSessionID?: string
   repoURL: string
   repoRevision?: string
@@ -77,8 +79,8 @@ export const api = {
     apiFetch<{ workspaceSessions: WorkspaceSession[] }>('/api/v1/workspace-sessions', { token }),
   getWorkspaceSession: (token: string, id: string) =>
     apiFetch<WorkspaceSession>(`/api/v1/workspace-sessions/${encodeURIComponent(id)}`, { token }),
-  createWorkspaceSession: (token: string, repoURL: string) =>
-    apiFetch<WorkspaceSession>('/api/v1/workspace-sessions', { method: 'POST', body: { repoURL }, token }),
+  createWorkspaceSession: (token: string, repoURL: string, displayName?: string) =>
+    apiFetch<WorkspaceSession>('/api/v1/workspace-sessions', { method: 'POST', body: { repoURL, displayName }, token }),
 
   listHarnessRuns: (token: string, workspaceSessionID?: string) => {
     const q = workspaceSessionID ? `?workspaceSessionID=${encodeURIComponent(workspaceSessionID)}` : ''

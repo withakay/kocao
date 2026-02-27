@@ -26,6 +26,9 @@ spec:
             spec:
               type: object
               properties:
+                displayName:
+                  type: string
+                  description: Human-readable adjective-noun name for the session.
                 repoURL:
                   type: string
             status:

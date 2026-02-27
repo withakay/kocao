@@ -4,6 +4,7 @@ const (
 	FinalizerName = "kocao.withakay.github.com/finalizer"
 
 	LabelWorkspaceSessionName = "kocao.withakay.github.com/workspace-session"
+	LabelDisplayName          = "kocao.withakay.github.com/display-name"
 )
 
 const (

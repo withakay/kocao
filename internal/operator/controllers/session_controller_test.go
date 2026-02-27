@@ -54,6 +54,81 @@ func TestSessionReconcile_ActiveAddsFinalizerAndStatus(t *testing.T) {
 	}
 }
 
+func TestSessionReconcile_BackfillsDisplayName(t *testing.T) {
+	scheme := runtime.NewScheme()
+	_ = operatorv1alpha1.AddToScheme(scheme)
+	_ = corev1.AddToScheme(scheme)
+
+	sess := &operatorv1alpha1.Session{
+		TypeMeta: metav1.TypeMeta{APIVersion: operatorv1alpha1.GroupVersion.String(), Kind: "Session"},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "s-noname",
+			Namespace: "default",
+		},
+		Spec: operatorv1alpha1.SessionSpec{RepoURL: "https://example.com/repo"},
+	}
+
+	cl := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(&operatorv1alpha1.Session{}).Build()
+	if err := cl.Create(context.Background(), sess); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	r := &SessionReconciler{Client: cl, Scheme: scheme}
+	_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(sess)})
+	if err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	var got operatorv1alpha1.Session
+	if err := cl.Get(context.Background(), client.ObjectKeyFromObject(sess), &got); err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.Spec.DisplayName == "" {
+		t.Fatal("expected display name to be backfilled, got empty")
+	}
+	// Format: adjective-noun
+	if len(got.Spec.DisplayName) < 3 {
+		t.Fatalf("display name too short: %q", got.Spec.DisplayName)
+	}
+}
+
+func TestSessionReconcile_PreservesExistingDisplayName(t *testing.T) {
+	scheme := runtime.NewScheme()
+	_ = operatorv1alpha1.AddToScheme(scheme)
+	_ = corev1.AddToScheme(scheme)
+
+	sess := &operatorv1alpha1.Session{
+		TypeMeta: metav1.TypeMeta{APIVersion: operatorv1alpha1.GroupVersion.String(), Kind: "Session"},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "s-named",
+			Namespace: "default",
+		},
+		Spec: operatorv1alpha1.SessionSpec{
+			DisplayName: "elegant-galileo",
+			RepoURL:     "https://example.com/repo",
+		},
+	}
+
+	cl := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(&operatorv1alpha1.Session{}).Build()
+	if err := cl.Create(context.Background(), sess); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	r := &SessionReconciler{Client: cl, Scheme: scheme}
+	_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(sess)})
+	if err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	var got operatorv1alpha1.Session
+	if err := cl.Get(context.Background(), client.ObjectKeyFromObject(sess), &got); err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.Spec.DisplayName != "elegant-galileo" {
+		t.Fatalf("expected display name to be preserved as %q, got %q", "elegant-galileo", got.Spec.DisplayName)
+	}
+}
+
 func TestSessionReconcile_CreatesWorkspacePVC(t *testing.T) {
 	scheme := runtime.NewScheme()
 	_ = operatorv1alpha1.AddToScheme(scheme)

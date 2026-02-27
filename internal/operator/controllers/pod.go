@@ -9,7 +9,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-func buildHarnessPod(run *operatorv1alpha1.HarnessRun, workspacePVCName string) *corev1.Pod {
+func buildHarnessPod(run *operatorv1alpha1.HarnessRun, workspacePVCName string, sessionDisplayName string) *corev1.Pod {
 	const (
 		workspaceVolumeName = "workspace"
 		workspaceMountPath  = "/workspace"
@@ -33,17 +33,11 @@ func buildHarnessPod(run *operatorv1alpha1.HarnessRun, workspacePVCName string) 
 	if run.Spec.WorkspaceSessionName != "" {
 		labels[LabelWorkspaceSessionName] = run.Spec.WorkspaceSessionName
 	}
-
-	namePrefix := sanitizeDNSLabel(run.Name)
-	name := namePrefix
-	if len(name) > 59 {
-		name = name[:59]
-		name = strings.Trim(name, "-")
-		if name == "" {
-			name = "run"
-		}
+	if sessionDisplayName != "" {
+		labels[LabelDisplayName] = sessionDisplayName
 	}
-	name += "-pod"
+
+	name := derivePodName(run.Name, sessionDisplayName)
 
 	env := make([]corev1.EnvVar, 0, len(run.Spec.Env)+6)
 	env = append(env, corev1.EnvVar{Name: "KOCAO_REPO_URL", Value: run.Spec.RepoURL})
@@ -167,6 +161,41 @@ func sanitizeDNSLabel(s string) string {
 		out = strings.Trim(out, "-")
 	}
 	return out
+}
+
+// derivePodName produces a human-readable pod name from the session display
+// name and the run ID.  If a display name is available, the result looks like
+// "elegant-galileo-3ef83" (display name + last 5 hex of run ID).  Otherwise it
+// falls back to "{run-name}-pod".
+func derivePodName(runName, sessionDisplayName string) string {
+	if sessionDisplayName != "" {
+		suffix := runIDSuffix(runName, 5)
+		name := sanitizeDNSLabel(sessionDisplayName) + "-" + suffix
+		if len(name) > 63 {
+			name = name[:63]
+			name = strings.Trim(name, "-")
+		}
+		return name
+	}
+	// Fallback: legacy {run-name}-pod naming.
+	prefix := sanitizeDNSLabel(runName)
+	if len(prefix) > 59 {
+		prefix = prefix[:59]
+		prefix = strings.Trim(prefix, "-")
+		if prefix == "" {
+			prefix = "run"
+		}
+	}
+	return prefix + "-pod"
+}
+
+// runIDSuffix returns the last n characters of a run name. If the name is
+// shorter than n, the full name is returned.
+func runIDSuffix(name string, n int) string {
+	if len(name) <= n {
+		return name
+	}
+	return name[len(name)-n:]
 }
 
 func invalidSpecError(field string) error {

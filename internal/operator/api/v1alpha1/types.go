@@ -35,6 +35,10 @@ type Session struct {
 }
 
 type SessionSpec struct {
+	// DisplayName is a human-readable adjective-noun name for the session
+	// (e.g. "elegant-galileo"). Auto-generated if empty on creation.
+	DisplayName string `json:"displayName,omitempty"`
+
 	// RepoURL is an optional default repository URL for runs within the session.
 	RepoURL string `json:"repoURL,omitempty"`
 }

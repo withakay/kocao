@@ -22,7 +22,7 @@ export function RunsPage() {
   )
 
   const runs = useMemo(() => {
-    const all = (q.data?.harnessRuns ?? []).slice().sort((a, b) => b.id.localeCompare(a.id))
+    const all = (q.data?.harnessRuns ?? []).slice().sort((a, b) => (b.displayName ?? b.id).localeCompare(a.displayName ?? a.id))
     const f = filter.trim().toLowerCase()
     if (f === '') return all
     return all.filter((r) =>
@@ -60,7 +60,7 @@ export function RunsPage() {
           <Table label="harness runs table">
             <thead>
               <tr className="border-b border-border/40">
-                <Th>ID</Th>
+                <Th>Name</Th>
                 <Th>Workspace Session</Th>
                 <Th>Repo</Th>
                 <Th className="w-28">Phase</Th>
@@ -73,7 +73,8 @@ export function RunsPage() {
                 runs.map((r) => (
                   <tr key={r.id} className="border-b border-border/20 last:border-b-0 hover:bg-muted/30 transition-colors">
                     <Td className="font-mono">
-                      <Link to="/harness-runs/$harnessRunID" params={{ harnessRunID: r.id }} className="text-primary hover:underline">{r.id}</Link>
+                      <Link to="/harness-runs/$harnessRunID" params={{ harnessRunID: r.id }} className="text-primary hover:underline">{r.displayName ?? r.id}</Link>
+                      {r.displayName ? <div className="text-[10px] text-muted-foreground/70 mt-0.5">{r.id}</div> : null}
                     </Td>
                     <Td className="font-mono">
                       {r.workspaceSessionID ? (

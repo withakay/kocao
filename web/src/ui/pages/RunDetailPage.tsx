@@ -84,7 +84,7 @@ export function RunDetailPage() {
 
   return (
     <>
-      <Topbar title={`Run ${id}`} subtitle="Run lifecycle, attach entry points, and GitHub outcome." />
+      <Topbar title={`Run ${run?.displayName ?? id}`} subtitle="Run lifecycle, attach entry points, and GitHub outcome." />
 
       <div className="flex-1 overflow-y-auto p-4 space-y-3">
         {/* Run Info */}
@@ -101,6 +101,7 @@ export function RunDetailPage() {
                     <Link to="/workspace-sessions/$workspaceSessionID" params={{ workspaceSessionID: run.workspaceSessionID }} className="text-primary hover:underline">{run.workspaceSessionID}</Link>
                 ) : '\u2014'}
               </DetailRow>
+              {run.displayName ? <DetailRow label="Name">{run.displayName}</DetailRow> : null}
               <DetailRow label="Repo">{run.repoURL}</DetailRow>
               <DetailRow label="Revision">{run.repoRevision && run.repoRevision.trim() !== '' ? run.repoRevision : '\u2014'}</DetailRow>
               <DetailRow label="Image">{run.image}</DetailRow>

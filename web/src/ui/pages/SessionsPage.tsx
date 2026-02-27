@@ -25,7 +25,7 @@ export function SessionsPage() {
   )
 
   const sessions = useMemo(
-    () => (q.data?.workspaceSessions ?? []).slice().sort((a, b) => b.id.localeCompare(a.id)),
+    () => (q.data?.workspaceSessions ?? []).slice().sort((a, b) => (b.displayName ?? b.id).localeCompare(a.displayName ?? a.id)),
     [q.data]
   )
 
@@ -81,7 +81,7 @@ export function SessionsPage() {
           <Table label="workspace sessions table">
             <thead>
               <tr className="border-b border-border/40">
-                <Th>ID</Th>
+                <Th>Name</Th>
                 <Th>Repo</Th>
                 <Th className="w-28">Phase</Th>
               </tr>
@@ -93,7 +93,8 @@ export function SessionsPage() {
                 sessions.map((s) => (
                   <tr key={s.id} className="border-b border-border/20 last:border-b-0 hover:bg-muted/30 transition-colors">
                     <Td className="font-mono">
-                      <Link to="/workspace-sessions/$workspaceSessionID" params={{ workspaceSessionID: s.id }} className="text-primary hover:underline">{s.id}</Link>
+                      <Link to="/workspace-sessions/$workspaceSessionID" params={{ workspaceSessionID: s.id }} className="text-primary hover:underline">{s.displayName ?? s.id}</Link>
+                      {s.displayName ? <div className="text-[10px] text-muted-foreground/70 mt-0.5">{s.id}</div> : null}
                     </Td>
                     <Td className="font-mono text-muted-foreground truncate max-w-md" title={cellRepo(s)}>
                       {cellRepo(s)}

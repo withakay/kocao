@@ -215,10 +215,12 @@ func (r *HarnessRunReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 			}
 
 			workspacePVC := ""
+			displayName := ""
 			if sess != nil {
 				workspacePVC = sessionWorkspacePVCName(sess.Name)
+				displayName = sess.Spec.DisplayName
 			}
-			pod := buildHarnessPod(updated, workspacePVC)
+			pod := buildHarnessPod(updated, workspacePVC, displayName)
 			if err := controllerutil.SetControllerReference(updated, pod, r.Scheme); err != nil {
 				return ctrl.Result{}, err
 			}
