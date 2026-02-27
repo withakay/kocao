@@ -1,5 +1,5 @@
 import { useMemo, useState, useEffect } from 'react'
-import { NavLink, Outlet, useLocation } from 'react-router-dom'
+import { Link, Outlet, useRouterState } from '@tanstack/react-router'
 import { cn } from '@/lib/utils'
 import { useSidebarCollapsed, PaletteContext, useAttachLayout } from '../lib/useLayoutState'
 import { useKeyboardShortcuts } from '../lib/useKeyboardShortcuts'
@@ -15,8 +15,7 @@ function isActive(locationPath: string, href: string) {
 }
 
 export function Shell() {
-  const loc = useLocation()
-  const path = loc.pathname
+  const path = useRouterState({ select: (s) => s.location.pathname })
   const { collapsed, toggle: toggleSidebar } = useSidebarCollapsed()
   const [paletteOpen, setPaletteOpen] = useState(false)
   const { toggleInspector, toggleActivity } = useAttachLayout()
@@ -130,12 +129,12 @@ export function Shell() {
               </div>
 
               <nav className="flex flex-col gap-0.5 p-2 flex-1">
-                <NavLink className={() => linkClass('/workspace-sessions')} to="/workspace-sessions">
+                <Link className={linkClass('/workspace-sessions')} to="/workspace-sessions">
                   Sessions
-                </NavLink>
-                <NavLink className={() => linkClass('/harness-runs')} to="/harness-runs">
+                </Link>
+                <Link className={linkClass('/harness-runs')} to="/harness-runs">
                   Runs
-                </NavLink>
+                </Link>
               </nav>
 
               <div className="px-4 py-2 text-[10px] text-muted-foreground/50 font-mono border-t border-border/40">

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Link, useParams, useSearchParams } from 'react-router-dom'
+import { Link, useParams, useSearch } from '@tanstack/react-router'
 import { cn } from '@/lib/utils'
 import { useAuth } from '../auth'
 import { api, isUnauthorizedError } from '../lib/api'
@@ -32,11 +32,11 @@ type ActivityEvent = {
 }
 
 export function AttachPage() {
-  const { workspaceSessionID } = useParams()
+  const { workspaceSessionID } = useParams({ strict: false })
   const id = workspaceSessionID ?? ''
   const { token, invalidateToken } = useAuth()
-  const [sp] = useSearchParams()
-  const role = (sp.get('role') === 'driver' ? 'driver' : 'viewer') as 'viewer' | 'driver'
+  const search = useSearch({ strict: false }) as { role?: 'viewer' | 'driver' }
+  const role = search.role === 'driver' ? 'driver' : 'viewer'
 
   const { fullscreen, inspectorOpen, activityOpen, setFullscreen, setInspectorOpen, setActivityOpen, toggleFullscreen, toggleInspector, toggleActivity } = useAttachLayout()
 
@@ -286,7 +286,7 @@ export function AttachPage() {
                   </span>
                   <div className="flex items-center gap-1.5 ml-auto">
                     <Btn onClick={takeControl} type="button">Seize Control</Btn>
-                    <Link className={btnClass('ghost')} to={`/workspace-sessions/${encodeURIComponent(id)}`}>← Session</Link>
+                    <Link className={btnClass('ghost')} to="/workspace-sessions/$workspaceSessionID" params={{ workspaceSessionID: id }}>← Session</Link>
                     <Btn variant="ghost" onClick={toggleInspector} type="button">Inspector</Btn>
                     <Btn variant="ghost" onClick={toggleActivity} type="button">Activity</Btn>
                     <Btn variant="ghost" onClick={toggleFullscreen} type="button">Fullscreen</Btn>

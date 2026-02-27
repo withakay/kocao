@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useState } from 'react'
-import { Link, useNavigate, useParams } from 'react-router-dom'
+import { Link, useNavigate, useParams } from '@tanstack/react-router'
 import { useAuth } from '../auth'
 import { api, isUnauthorizedError } from '../lib/api'
 import { usePollingQuery } from '../lib/usePolling'
@@ -11,7 +11,7 @@ import {
 } from '../components/primitives'
 
 export function RunDetailPage() {
-  const { harnessRunID } = useParams()
+  const { harnessRunID } = useParams({ strict: false })
   const id = harnessRunID ?? ''
   const { token, invalidateToken } = useAuth()
   const nav = useNavigate()
@@ -58,7 +58,7 @@ export function RunDetailPage() {
     setActionErr(null)
     try {
       const out = await api.resumeHarnessRun(token, id)
-      nav(`/harness-runs/${encodeURIComponent(out.id)}`)
+      nav({ to: '/harness-runs/$harnessRunID', params: { harnessRunID: out.id } })
     } catch (e) {
       if (isUnauthorizedError(e)) { onUnauthorized(); return }
       setActionErr(e instanceof Error ? e.message : String(e))
@@ -69,8 +69,16 @@ export function RunDetailPage() {
 
   const attachLinks = run?.workspaceSessionID
     ? {
-        viewer: `/workspace-sessions/${encodeURIComponent(run.workspaceSessionID)}/attach?role=viewer`,
-        driver: `/workspace-sessions/${encodeURIComponent(run.workspaceSessionID)}/attach?role=driver`,
+        viewer: {
+          to: '/workspace-sessions/$workspaceSessionID/attach' as const,
+          params: { workspaceSessionID: run.workspaceSessionID },
+          search: { role: 'viewer' as const },
+        },
+        driver: {
+          to: '/workspace-sessions/$workspaceSessionID/attach' as const,
+          params: { workspaceSessionID: run.workspaceSessionID },
+          search: { role: 'driver' as const },
+        },
       }
     : null
 
@@ -90,7 +98,7 @@ export function RunDetailPage() {
             <>
               <DetailRow label="Session">
                 {run.workspaceSessionID ? (
-                  <Link to={`/workspace-sessions/${encodeURIComponent(run.workspaceSessionID)}`} className="text-primary hover:underline">{run.workspaceSessionID}</Link>
+                    <Link to="/workspace-sessions/$workspaceSessionID" params={{ workspaceSessionID: run.workspaceSessionID }} className="text-primary hover:underline">{run.workspaceSessionID}</Link>
                 ) : '\u2014'}
               </DetailRow>
               <DetailRow label="Repo">{run.repoURL}</DetailRow>
@@ -134,8 +142,8 @@ export function RunDetailPage() {
             <>
               <p className="text-xs text-muted-foreground mb-2">Attach tokens are ephemeral. Opens a websocket terminal session.</p>
               <div className="flex items-center gap-2">
-                <Link className={btnClass('secondary')} to={attachLinks.viewer}>Open Viewer</Link>
-                <Link className={btnClass('primary')} to={attachLinks.driver}>Open Driver</Link>
+                <Link className={btnClass('secondary')} to={attachLinks.viewer.to} params={attachLinks.viewer.params} search={attachLinks.viewer.search}>Open Viewer</Link>
+                <Link className={btnClass('primary')} to={attachLinks.driver.to} params={attachLinks.driver.params} search={attachLinks.driver.search}>Open Driver</Link>
               </div>
             </>
           ) : (

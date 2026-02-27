@@ -1,23 +1,23 @@
 import { Command } from 'cmdk'
-import { useNavigate, useLocation } from 'react-router-dom'
+import { useNavigate, useRouterState } from '@tanstack/react-router'
 import { usePalette, useSidebarCollapsed, useAttachLayout } from '../lib/useLayoutState'
 
 export function CommandPalette() {
   const { open, setOpen } = usePalette()
   const navigate = useNavigate()
-  const location = useLocation()
+  const pathname = useRouterState({ select: (s) => s.location.pathname })
   const { collapsed, toggle: toggleSidebar } = useSidebarCollapsed()
   const { toggleFullscreen: toggleAttachFullscreen, toggleInspector, toggleActivity } = useAttachLayout()
 
   if (!open) return null
 
-  const go = (path: string) => {
-    navigate(path)
+  const go = (to: '/workspace-sessions' | '/harness-runs') => {
+    navigate({ to })
     setOpen(false)
   }
 
   // Check if we're on the attach page (where fullscreen is available)
-  const isAttachPage = location.pathname.includes('/attach')
+  const isAttachPage = pathname.includes('/attach')
 
   return (
     <div className="fixed inset-0 z-50 flex items-start justify-center pt-[18vh]">
