@@ -15,7 +15,9 @@ import (
 
 	"github.com/gorilla/websocket"
 	operatorv1alpha1 "github.com/withakay/kocao/internal/operator/api/v1alpha1"
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
@@ -30,6 +32,7 @@ func newTestAPI(t *testing.T) (*API, func()) {
 	scheme := runtime.NewScheme()
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 	utilruntime.Must(corev1.AddToScheme(scheme))
+	utilruntime.Must(appsv1.AddToScheme(scheme))
 	utilruntime.Must(operatorv1alpha1.AddToScheme(scheme))
 
 	k8s := fake.NewClientBuilder().WithScheme(scheme).Build()
@@ -48,6 +51,7 @@ func newTestAPIWithAttachOptions(t *testing.T, opts Options) (*API, func()) {
 	scheme := runtime.NewScheme()
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 	utilruntime.Must(corev1.AddToScheme(scheme))
+	utilruntime.Must(appsv1.AddToScheme(scheme))
 	utilruntime.Must(operatorv1alpha1.AddToScheme(scheme))
 
 	k8s := fake.NewClientBuilder().WithScheme(scheme).Build()
@@ -478,3 +482,71 @@ func TestSessionCreate_DuplicateDisplayNameConflict(t *testing.T) {
 		t.Fatalf("status = %d, want 409 (body=%s)", resp.StatusCode, string(b))
 	}
 }
+
+func TestClusterOverview_ReturnsNamespaceState(t *testing.T) {
+	scheme := runtime.NewScheme()
+	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
+	utilruntime.Must(corev1.AddToScheme(scheme))
+	utilruntime.Must(appsv1.AddToScheme(scheme))
+	utilruntime.Must(operatorv1alpha1.AddToScheme(scheme))
+
+	k8s := fake.NewClientBuilder().WithScheme(scheme).WithObjects(
+		&operatorv1alpha1.Session{ObjectMeta: metav1.ObjectMeta{Name: "sess-1", Namespace: "test-ns"}, Spec: operatorv1alpha1.SessionSpec{DisplayName: "calm-morse", RepoURL: "https://example.com/repo"}},
+		&operatorv1alpha1.HarnessRun{ObjectMeta: metav1.ObjectMeta{Name: "run-1", Namespace: "test-ns"}, Spec: operatorv1alpha1.HarnessRunSpec{WorkspaceSessionName: "sess-1", RepoURL: "https://example.com/repo", Image: "kocao/harness-runtime:dev"}},
+		&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "control-plane-api", Namespace: "test-ns"}, Spec: appsv1.DeploymentSpec{Replicas: int32Ptr(1)}, Status: appsv1.DeploymentStatus{ReadyReplicas: 1, AvailableReplicas: 1, UpdatedReplicas: 1}},
+		&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "control-plane-api-abc", Namespace: "test-ns"}, Spec: corev1.PodSpec{NodeName: "node-1", Containers: []corev1.Container{{Name: "api"}}}, Status: corev1.PodStatus{Phase: corev1.PodRunning, ContainerStatuses: []corev1.ContainerStatus{{Name: "api", Ready: true, RestartCount: 2}}}},
+		&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: "control-plane-config", Namespace: "test-ns"}, Data: map[string]string{"CP_ENV": "dev", "CP_AUDIT_PATH": "/tmp/audit", "CP_BOOTSTRAP_TOKEN": "present"}},
+	).Build()
+
+	api, err := New("test-ns", "", "", nil, k8s, Options{Env: "test"})
+	if err != nil {
+		t.Fatalf("New() error: %v", err)
+	}
+	if err := api.Tokens.Create(context.Background(), "t-cluster", "cluster", []string{"cluster:read"}); err != nil {
+		t.Fatalf("create token: %v", err)
+	}
+
+	srv := httptest.NewServer(api.Handler())
+	defer srv.Close()
+
+	resp, b := doJSON(t, srv.Client(), http.MethodGet, srv.URL+"/api/v1/cluster-overview", "cluster", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", resp.StatusCode, string(b))
+	}
+
+	var out clusterOverviewResponse
+	if err := json.Unmarshal(b, &out); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if out.Namespace != "test-ns" {
+		t.Fatalf("namespace = %q, want test-ns", out.Namespace)
+	}
+	if out.Summary.SessionCount != 1 || out.Summary.HarnessRunCount != 1 {
+		t.Fatalf("unexpected summary: %+v", out.Summary)
+	}
+	if len(out.Pods) != 1 || len(out.Deployments) != 1 {
+		t.Fatalf("unexpected payload counts: pods=%d deployments=%d", len(out.Pods), len(out.Deployments))
+	}
+	if !out.Config.BootstrapTokenDetected {
+		t.Fatal("expected bootstrap token indicator")
+	}
+}
+
+func TestPodLogs_NoClientset_Returns503(t *testing.T) {
+	api, cleanup := newTestAPI(t)
+	defer cleanup()
+
+	if err := api.Tokens.Create(context.Background(), "t-cluster", "cluster", []string{"cluster:read"}); err != nil {
+		t.Fatalf("create token: %v", err)
+	}
+
+	srv := httptest.NewServer(api.Handler())
+	defer srv.Close()
+
+	resp, b := doJSON(t, srv.Client(), http.MethodGet, srv.URL+"/api/v1/pods/example/logs", "cluster", nil)
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503 (body=%s)", resp.StatusCode, string(b))
+	}
+}
+
+func int32Ptr(v int32) *int32 { return &v }

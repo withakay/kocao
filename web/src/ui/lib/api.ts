@@ -30,6 +30,56 @@ export type AuditEvent = {
   metadata?: unknown
 }
 
+export type ClusterSummary = {
+  sessionCount: number
+  harnessRunCount: number
+  podCount: number
+  runningPods: number
+  pendingPods: number
+  failedPods: number
+}
+
+export type ClusterDeploymentStatus = {
+  name: string
+  readyReplicas: number
+  availableReplicas: number
+  desiredReplicas: number
+  updatedReplicas: number
+  unavailableReplicas: number
+}
+
+export type ClusterPodStatus = {
+  name: string
+  phase: string
+  ready: string
+  restarts: number
+  nodeName?: string
+  ageSeconds: number
+}
+
+export type ClusterConfigSnapshot = {
+  environment?: string
+  auditPathConfigured: boolean
+  bootstrapTokenDetected: boolean
+  gitHubCIDRsConfigured: boolean
+}
+
+export type ClusterOverview = {
+  namespace: string
+  collectedAt: string
+  summary: ClusterSummary
+  deployments: ClusterDeploymentStatus[]
+  pods: ClusterPodStatus[]
+  config: ClusterConfigSnapshot
+}
+
+export type PodLogs = {
+  podName: string
+  container?: string
+  tailLines: number
+  logs: string
+}
+
 type FetchOptions = {
   method?: string
   body?: unknown
@@ -118,6 +168,17 @@ export const api = {
 
   listAudit: (token: string, limit = 100) =>
     apiFetch<{ events: AuditEvent[] }>(`/api/v1/audit?limit=${encodeURIComponent(String(limit))}`, { token }),
+
+  getClusterOverview: (token: string) =>
+    apiFetch<ClusterOverview>('/api/v1/cluster-overview', { token }),
+
+  getPodLogs: (token: string, podName: string, opts?: { container?: string; tailLines?: number }) => {
+    const qs = new URLSearchParams()
+    if (opts?.container && opts.container.trim() !== '') qs.set('container', opts.container.trim())
+    if (opts?.tailLines && opts.tailLines > 0) qs.set('tailLines', String(opts.tailLines))
+    const suffix = qs.toString() ? `?${qs.toString()}` : ''
+    return apiFetch<PodLogs>(`/api/v1/pods/${encodeURIComponent(podName)}/logs${suffix}`, { token })
+  },
 
   createAttachToken: (token: string, workspaceSessionID: string, role: 'viewer' | 'driver') =>
     apiFetch<{ token: string; expiresAt: string; workspaceSessionID: string; clientID: string; role: string }>(
