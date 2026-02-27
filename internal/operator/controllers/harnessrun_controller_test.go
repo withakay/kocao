@@ -393,6 +393,204 @@ func TestHarnessRunReconcile_TTLDeletesAfterCompletion(t *testing.T) {
 	}
 }
 
+// --- Agent credential injection tests (002-05) ---
+
+func TestBuildHarnessPod_NoAgentAuth(t *testing.T) {
+	run := &operatorv1alpha1.HarnessRun{
+		ObjectMeta: metav1.ObjectMeta{Name: "run-noauth", Namespace: "default"},
+		Spec: operatorv1alpha1.HarnessRunSpec{
+			RepoURL: "https://example.com/repo",
+			Image:   "busybox",
+		},
+	}
+	pod := buildHarnessPod(run, "", "")
+
+	// No envFrom should exist.
+	if len(pod.Spec.Containers[0].EnvFrom) != 0 {
+		t.Fatalf("expected no envFrom, got %d entries", len(pod.Spec.Containers[0].EnvFrom))
+	}
+	// No agent-oauth volume should exist.
+	for _, v := range pod.Spec.Volumes {
+		if v.Name == "agent-oauth" {
+			t.Fatalf("unexpected agent-oauth volume")
+		}
+	}
+}
+
+func TestBuildHarnessPod_ApiKeySecretOnly(t *testing.T) {
+	run := &operatorv1alpha1.HarnessRun{
+		ObjectMeta: metav1.ObjectMeta{Name: "run-apikey", Namespace: "default"},
+		Spec: operatorv1alpha1.HarnessRunSpec{
+			RepoURL: "https://example.com/repo",
+			Image:   "busybox",
+			AgentAuth: &operatorv1alpha1.AgentAuthSpec{
+				ApiKeySecretName: "my-api-keys",
+			},
+		},
+	}
+	pod := buildHarnessPod(run, "", "")
+
+	// Should have envFrom referencing the secret.
+	if len(pod.Spec.Containers[0].EnvFrom) != 1 {
+		t.Fatalf("expected 1 envFrom, got %d", len(pod.Spec.Containers[0].EnvFrom))
+	}
+	ef := pod.Spec.Containers[0].EnvFrom[0]
+	if ef.SecretRef == nil || ef.SecretRef.Name != "my-api-keys" {
+		t.Fatalf("expected envFrom secretRef=my-api-keys, got %#v", ef)
+	}
+	if ef.SecretRef.Optional == nil || *ef.SecretRef.Optional != true {
+		t.Fatalf("expected envFrom to be optional")
+	}
+
+	// No agent-oauth volume.
+	for _, v := range pod.Spec.Volumes {
+		if v.Name == "agent-oauth" {
+			t.Fatalf("unexpected agent-oauth volume")
+		}
+	}
+}
+
+func TestBuildHarnessPod_OauthSecretOnly(t *testing.T) {
+	run := &operatorv1alpha1.HarnessRun{
+		ObjectMeta: metav1.ObjectMeta{Name: "run-oauth", Namespace: "default"},
+		Spec: operatorv1alpha1.HarnessRunSpec{
+			RepoURL: "https://example.com/repo",
+			Image:   "busybox",
+			AgentAuth: &operatorv1alpha1.AgentAuthSpec{
+				OauthSecretName: "my-oauth",
+			},
+		},
+	}
+	pod := buildHarnessPod(run, "", "")
+
+	// No envFrom (no API key secret).
+	if len(pod.Spec.Containers[0].EnvFrom) != 0 {
+		t.Fatalf("expected no envFrom, got %d", len(pod.Spec.Containers[0].EnvFrom))
+	}
+
+	// Should have agent-oauth volume.
+	var vol *corev1.Volume
+	for i, v := range pod.Spec.Volumes {
+		if v.Name == "agent-oauth" {
+			vol = &pod.Spec.Volumes[i]
+			break
+		}
+	}
+	if vol == nil {
+		t.Fatalf("expected agent-oauth volume, got volumes=%#v", pod.Spec.Volumes)
+	}
+	if vol.Secret == nil || vol.Secret.SecretName != "my-oauth" {
+		t.Fatalf("expected agent-oauth volume to reference my-oauth secret")
+	}
+	if vol.Secret.DefaultMode == nil || *vol.Secret.DefaultMode != 0600 {
+		t.Fatalf("expected defaultMode=0600, got %v", vol.Secret.DefaultMode)
+	}
+	if vol.Secret.Optional == nil || *vol.Secret.Optional != true {
+		t.Fatalf("expected agent-oauth volume to be optional")
+	}
+
+	// Check items mapping.
+	itemMap := map[string]string{}
+	for _, item := range vol.Secret.Items {
+		itemMap[item.Key] = item.Path
+	}
+	if itemMap["opencode-auth.json"] != "opencode/auth.json" {
+		t.Fatalf("expected opencode-auth.json mapping, got %v", itemMap)
+	}
+	if itemMap["codex-auth.json"] != "codex/auth.json" {
+		t.Fatalf("expected codex-auth.json mapping, got %v", itemMap)
+	}
+
+	// Check volume mounts.
+	mounts := map[string]corev1.VolumeMount{}
+	for _, m := range pod.Spec.Containers[0].VolumeMounts {
+		if m.Name == "agent-oauth" {
+			mounts[m.MountPath] = m
+		}
+	}
+	if m, ok := mounts["/home/kocao/.local/share/opencode/auth.json"]; !ok {
+		t.Fatalf("expected opencode auth mount")
+	} else if m.SubPath != "opencode/auth.json" || !m.ReadOnly {
+		t.Fatalf("unexpected opencode mount: %#v", m)
+	}
+	if m, ok := mounts["/home/kocao/.codex/auth.json"]; !ok {
+		t.Fatalf("expected codex auth mount")
+	} else if m.SubPath != "codex/auth.json" || !m.ReadOnly {
+		t.Fatalf("unexpected codex mount: %#v", m)
+	}
+}
+
+func TestBuildHarnessPod_BothApiKeyAndOauth(t *testing.T) {
+	run := &operatorv1alpha1.HarnessRun{
+		ObjectMeta: metav1.ObjectMeta{Name: "run-both", Namespace: "default"},
+		Spec: operatorv1alpha1.HarnessRunSpec{
+			RepoURL: "https://example.com/repo",
+			Image:   "busybox",
+			AgentAuth: &operatorv1alpha1.AgentAuthSpec{
+				ApiKeySecretName: "my-api-keys",
+				OauthSecretName:  "my-oauth",
+			},
+		},
+	}
+	pod := buildHarnessPod(run, "", "")
+
+	// EnvFrom should reference the API key secret.
+	if len(pod.Spec.Containers[0].EnvFrom) != 1 {
+		t.Fatalf("expected 1 envFrom, got %d", len(pod.Spec.Containers[0].EnvFrom))
+	}
+	if pod.Spec.Containers[0].EnvFrom[0].SecretRef.Name != "my-api-keys" {
+		t.Fatalf("expected envFrom=my-api-keys")
+	}
+
+	// agent-oauth volume should exist.
+	hasOauthVol := false
+	for _, v := range pod.Spec.Volumes {
+		if v.Name == "agent-oauth" {
+			hasOauthVol = true
+			break
+		}
+	}
+	if !hasOauthVol {
+		t.Fatalf("expected agent-oauth volume")
+	}
+
+	// Both mounts should exist.
+	oauthMounts := 0
+	for _, m := range pod.Spec.Containers[0].VolumeMounts {
+		if m.Name == "agent-oauth" {
+			oauthMounts++
+		}
+	}
+	if oauthMounts != 2 {
+		t.Fatalf("expected 2 agent-oauth mounts, got %d", oauthMounts)
+	}
+}
+
+func TestBuildHarnessPod_EmptySecretNamesIgnored(t *testing.T) {
+	run := &operatorv1alpha1.HarnessRun{
+		ObjectMeta: metav1.ObjectMeta{Name: "run-empty", Namespace: "default"},
+		Spec: operatorv1alpha1.HarnessRunSpec{
+			RepoURL: "https://example.com/repo",
+			Image:   "busybox",
+			AgentAuth: &operatorv1alpha1.AgentAuthSpec{
+				ApiKeySecretName: "  ",
+				OauthSecretName:  "",
+			},
+		},
+	}
+	pod := buildHarnessPod(run, "", "")
+
+	// Empty/whitespace names should be treated like nil: no envFrom, no volumes.
+	if len(pod.Spec.Containers[0].EnvFrom) != 0 {
+		t.Fatalf("expected no envFrom for empty secret name, got %d", len(pod.Spec.Containers[0].EnvFrom))
+	}
+	for _, v := range pod.Spec.Volumes {
+		if v.Name == "agent-oauth" {
+			t.Fatalf("unexpected agent-oauth volume for empty secret name")
+		}
+	}
+}
+
 func TestHarnessRunReconcile_WithSession_CreatesPVCMountAndEgressNetworkPolicy(t *testing.T) {
 	scheme := runtime.NewScheme()
 	_ = corev1.AddToScheme(scheme)

@@ -5,6 +5,7 @@ namespace: kocao-system
 
 resources:
   - ../../base
+  - agent-secrets.yaml
 
 configMapGenerator:
   - name: control-plane-config

@@ -15,6 +15,8 @@ func buildHarnessPod(run *operatorv1alpha1.HarnessRun, workspacePVCName string, 
 		workspaceMountPath  = "/workspace"
 		gitAuthVolumeName   = "git-auth"
 		gitAuthMountPath    = "/var/run/secrets/kocao/git"
+
+		agentOauthVolumeName = "agent-oauth"
 	)
 
 	// Hardened defaults: run as non-root with a restrictive security context.
@@ -90,6 +92,48 @@ func buildHarnessPod(run *operatorv1alpha1.HarnessRun, workspacePVCName string, 
 		}
 	}
 
+	// Agent credential injection (tier-1: API key env vars, tier-2: OAuth file mounts).
+	var envFrom []corev1.EnvFromSource
+	if run.Spec.AgentAuth != nil {
+		if secretName := strings.TrimSpace(run.Spec.AgentAuth.ApiKeySecretName); secretName != "" {
+			envFrom = append(envFrom, corev1.EnvFromSource{
+				SecretRef: &corev1.SecretEnvSource{
+					LocalObjectReference: corev1.LocalObjectReference{Name: secretName},
+					Optional:             boolPtr(true),
+				},
+			})
+		}
+		if secretName := strings.TrimSpace(run.Spec.AgentAuth.OauthSecretName); secretName != "" {
+			oauthMode := int32(0600)
+			volumes = append(volumes, corev1.Volume{
+				Name: agentOauthVolumeName,
+				VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{
+					SecretName:  secretName,
+					DefaultMode: &oauthMode,
+					Optional:    boolPtr(true),
+					Items: []corev1.KeyToPath{
+						{Key: "opencode-auth.json", Path: "opencode/auth.json"},
+						{Key: "codex-auth.json", Path: "codex/auth.json"},
+					},
+				}},
+			})
+			// OpenCode auth: /home/kocao/.local/share/opencode/auth.json
+			volumeMounts = append(volumeMounts, corev1.VolumeMount{
+				Name:      agentOauthVolumeName,
+				MountPath: "/home/kocao/.local/share/opencode/auth.json",
+				SubPath:   "opencode/auth.json",
+				ReadOnly:  true,
+			})
+			// Codex CLI auth: /home/kocao/.codex/auth.json
+			volumeMounts = append(volumeMounts, corev1.VolumeMount{
+				Name:      agentOauthVolumeName,
+				MountPath: "/home/kocao/.codex/auth.json",
+				SubPath:   "codex/auth.json",
+				ReadOnly:  true,
+			})
+		}
+	}
+
 	container := corev1.Container{
 		Name:         "harness",
 		Image:        run.Spec.Image,
@@ -97,6 +141,7 @@ func buildHarnessPod(run *operatorv1alpha1.HarnessRun, workspacePVCName string, 
 		Args:         run.Spec.Args,
 		WorkingDir:   run.Spec.WorkingDir,
 		Env:          env,
+		EnvFrom:      envFrom,
 		VolumeMounts: volumeMounts,
 		SecurityContext: &corev1.SecurityContext{
 			RunAsNonRoot:             &runAsNonRoot,
@@ -196,6 +241,10 @@ func runIDSuffix(name string, n int) string {
 		return name
 	}
 	return name[len(name)-n:]
+}
+
+func boolPtr(b bool) *bool {
+	return &b
 }
 
 func invalidSpecError(field string) error {

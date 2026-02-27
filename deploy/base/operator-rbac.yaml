@@ -18,6 +18,12 @@ rules:
       - patch
       - update
   - apiGroups:
+      - ""
+    resources:
+      - secrets
+    verbs:
+      - get
+  - apiGroups:
       - networking.k8s.io
     resources:
       - networkpolicies
