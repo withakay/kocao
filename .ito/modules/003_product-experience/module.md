@@ -20,4 +20,4 @@ Deliver the interactive attach and UI workflow that turns orchestrated runs into
 - [x] 003-07_add-ide-terminal-experience
 - [x] 003-08_desktop-app-ux
 - [x] 003-09_attach-inspector-and-foldable-terminal
-- [ ] 003-10_spa-docs-caddy-edge
+- [x] 003-10_spa-docs-caddy-edge
