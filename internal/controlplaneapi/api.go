@@ -3,16 +3,18 @@ package controlplaneapi
 import (
 	"context"
 	"errors"
+	"net/http"
+	"strconv"
+	"strings"
+
 	"github.com/withakay/kocao/internal/namegen"
 	operatorv1alpha1 "github.com/withakay/kocao/internal/operator/api/v1alpha1"
 	"github.com/withakay/kocao/internal/operator/controllers"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
-	"net/http"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"strconv"
-	"strings"
 )
 
 const (
@@ -24,6 +26,7 @@ type API struct {
 	Env       string
 	Namespace string
 	K8s       client.Client
+	Clientset kubernetes.Interface
 	Auth      *Authenticator
 	Tokens    *TokenStore
 	Audit     *AuditStore
@@ -192,6 +195,23 @@ func (a *API) serveAPI(w http.ResponseWriter, r *http.Request) {
 		}, a.handleAuditList)
 		return
 	case len(segs) == 1 && segs[0] == "audit":
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	case len(segs) == 1 && segs[0] == "cluster-overview" && r.Method == http.MethodGet:
+		a.serveAuthz(w, r, []string{"cluster:read"}, func(_ *http.Request) (string, string, string) {
+			return "cluster.overview", "cluster", a.Namespace
+		}, a.handleClusterOverview)
+		return
+	case len(segs) == 1 && segs[0] == "cluster-overview":
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	case len(segs) == 3 && segs[0] == "pods" && segs[2] == "logs" && r.Method == http.MethodGet:
+		podName := strings.TrimSpace(segs[1])
+		a.serveAuthz(w, r, []string{"cluster:read"}, func(_ *http.Request) (string, string, string) {
+			return "pod.logs", "pod", podName
+		}, func(w http.ResponseWriter, r *http.Request) { a.handlePodLogs(w, r, podName) })
+		return
+	case len(segs) == 3 && segs[0] == "pods" && segs[2] == "logs":
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	default:
@@ -715,10 +735,20 @@ func New(namespace, auditPath, bootstrapToken string, restCfg *rest.Config, k8s 
 	if err := tokens.EnsureBootstrapToken(context.Background(), bootstrapToken); err != nil {
 		return nil, err
 	}
+	var cs kubernetes.Interface
+	if restCfg != nil {
+		clientset, err := kubernetes.NewForConfig(restCfg)
+		if err != nil {
+			return nil, err
+		}
+		cs = clientset
+	}
+
 	api := &API{
 		Env:           env,
 		Namespace:     namespace,
 		K8s:           k8s,
+		Clientset:     cs,
 		Auth:          newAuthenticator(tokens),
 		Tokens:        tokens,
 		Audit:         newAuditStore(auditPath),

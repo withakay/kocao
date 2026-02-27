@@ -19,7 +19,9 @@ var openAPISpec = []byte(`{
     "/api/v1/workspace-sessions/{workspaceSessionID}/attach-token": {"post": {"security": [{"bearerAuth": []}] }},
     "/api/v1/workspace-sessions/{workspaceSessionID}/attach": {"get": {"security": [{"bearerAuth": []}] }},
     "/api/v1/workspace-sessions/{workspaceSessionID}/egress-override": {"patch": {"security": [{"bearerAuth": []}] }},
-    "/api/v1/audit": {"get": {"security": [{"bearerAuth": []}] }}
+    "/api/v1/audit": {"get": {"security": [{"bearerAuth": []}] }},
+    "/api/v1/cluster-overview": {"get": {"security": [{"bearerAuth": []}] }},
+    "/api/v1/pods/{podName}/logs": {"get": {"security": [{"bearerAuth": []}] }}
   },
   "components": {
     "securitySchemes": {

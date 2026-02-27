@@ -21,3 +21,4 @@ Deliver the interactive attach and UI workflow that turns orchestrated runs into
 - [x] 003-08_desktop-app-ux
 - [x] 003-09_attach-inspector-and-foldable-terminal
 - [x] 003-10_spa-docs-caddy-edge
+- [ ] 003-11_cluster-observability-dashboard

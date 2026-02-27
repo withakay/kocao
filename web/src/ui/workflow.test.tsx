@@ -19,6 +19,41 @@ type HarnessRun = {
   pullRequestStatus?: string
 }
 
+type ClusterOverview = {
+  namespace: string
+  collectedAt: string
+  summary: {
+    sessionCount: number
+    harnessRunCount: number
+    podCount: number
+    runningPods: number
+    pendingPods: number
+    failedPods: number
+  }
+  deployments: Array<{
+    name: string
+    readyReplicas: number
+    availableReplicas: number
+    desiredReplicas: number
+    updatedReplicas: number
+    unavailableReplicas: number
+  }>
+  pods: Array<{
+    name: string
+    phase: string
+    ready: string
+    restarts: number
+    nodeName?: string
+    ageSeconds: number
+  }>
+  config: {
+    environment?: string
+    auditPathConfigured: boolean
+    bootstrapTokenDetected: boolean
+    gitHubCIDRsConfigured: boolean
+  }
+}
+
 describe('workflow-ui-github', () => {
   it('stores token in session storage by default and local storage when remembered', async () => {
     localStorage.removeItem('kocao.apiToken')
@@ -299,6 +334,56 @@ describe('shell-layout', () => {
 
     // Palette should not be visible initially
     expect(screen.queryByPlaceholderText('Type a command...')).toBeNull()
+
+    unmount()
+  })
+
+  it('renders cluster dashboard route with pod status', async () => {
+    sessionStorage.setItem('kocao.apiToken', 't-full')
+    window.location.hash = '#/cluster'
+
+    const overview: ClusterOverview = {
+      namespace: 'kocao-system',
+      collectedAt: new Date().toISOString(),
+      summary: {
+        sessionCount: 2,
+        harnessRunCount: 3,
+        podCount: 2,
+        runningPods: 1,
+        pendingPods: 1,
+        failedPods: 0,
+      },
+      deployments: [
+        {
+          name: 'control-plane-api',
+          readyReplicas: 1,
+          availableReplicas: 1,
+          desiredReplicas: 1,
+          updatedReplicas: 1,
+          unavailableReplicas: 0,
+        },
+      ],
+      pods: [
+        { name: 'control-plane-api-abc', phase: 'Running', ready: '2/2', restarts: 0, nodeName: 'node-a', ageSeconds: 35 },
+      ],
+      config: {
+        environment: 'dev',
+        auditPathConfigured: true,
+        bootstrapTokenDetected: true,
+        gitHubCIDRsConfigured: false,
+      },
+    }
+
+    server.use(
+      http.get('/api/v1/cluster-overview', () => HttpResponse.json(overview)),
+      http.get('/api/v1/pods/:name/logs', () => HttpResponse.json({ podName: 'control-plane-api-abc', tailLines: 200, logs: 'ok' })),
+    )
+
+    const { unmount } = render(<App />)
+
+    await screen.findByRole('heading', { name: 'Cluster' })
+    await screen.findByText('control-plane-api-abc')
+    await screen.findByText('kocao-system')
 
     unmount()
   })
