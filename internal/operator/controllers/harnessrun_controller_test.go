@@ -489,16 +489,10 @@ func TestBuildHarnessPod_OauthSecretOnly(t *testing.T) {
 		t.Fatalf("expected agent-oauth volume to be optional")
 	}
 
-	// Check items mapping.
-	itemMap := map[string]string{}
-	for _, item := range vol.Secret.Items {
-		itemMap[item.Key] = item.Path
-	}
-	if itemMap["opencode-auth.json"] != "opencode/auth.json" {
-		t.Fatalf("expected opencode-auth.json mapping, got %v", itemMap)
-	}
-	if itemMap["codex-auth.json"] != "codex/auth.json" {
-		t.Fatalf("expected codex-auth.json mapping, got %v", itemMap)
+	// No explicit Items list — SubPath mounts pick keys directly, so
+	// partial Secrets (only one CLI's key) degrade gracefully.
+	if len(vol.Secret.Items) != 0 {
+		t.Fatalf("expected no explicit Items (rely on SubPath), got %d items", len(vol.Secret.Items))
 	}
 
 	// Check volume mounts.
@@ -510,12 +504,12 @@ func TestBuildHarnessPod_OauthSecretOnly(t *testing.T) {
 	}
 	if m, ok := mounts["/home/kocao/.local/share/opencode/auth.json"]; !ok {
 		t.Fatalf("expected opencode auth mount")
-	} else if m.SubPath != "opencode/auth.json" || !m.ReadOnly {
+	} else if m.SubPath != "opencode-auth.json" || !m.ReadOnly {
 		t.Fatalf("unexpected opencode mount: %#v", m)
 	}
 	if m, ok := mounts["/home/kocao/.codex/auth.json"]; !ok {
 		t.Fatalf("expected codex auth mount")
-	} else if m.SubPath != "codex/auth.json" || !m.ReadOnly {
+	} else if m.SubPath != "codex-auth.json" || !m.ReadOnly {
 		t.Fatalf("unexpected codex mount: %#v", m)
 	}
 }
@@ -588,6 +582,88 @@ func TestBuildHarnessPod_EmptySecretNamesIgnored(t *testing.T) {
 		if v.Name == "agent-oauth" {
 			t.Fatalf("unexpected agent-oauth volume for empty secret name")
 		}
+	}
+}
+
+func TestHarnessRunReconcile_AgentAuthInjectsBothTiers(t *testing.T) {
+	scheme := runtime.NewScheme()
+	_ = corev1.AddToScheme(scheme)
+	_ = networkingv1.AddToScheme(scheme)
+	_ = operatorv1alpha1.AddToScheme(scheme)
+
+	run := &operatorv1alpha1.HarnessRun{
+		TypeMeta:   metav1.TypeMeta{APIVersion: operatorv1alpha1.GroupVersion.String(), Kind: "HarnessRun"},
+		ObjectMeta: metav1.ObjectMeta{Name: "run-agent-auth", Namespace: "default"},
+		Spec: operatorv1alpha1.HarnessRunSpec{
+			RepoURL: "https://example.com/repo",
+			Image:   "busybox",
+			AgentAuth: &operatorv1alpha1.AgentAuthSpec{
+				ApiKeySecretName: "my-api-keys",
+				OauthSecretName:  "my-oauth",
+			},
+		},
+	}
+
+	cl := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(&operatorv1alpha1.HarnessRun{}, &corev1.Pod{}).Build()
+	if err := cl.Create(context.Background(), run); err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	r := &HarnessRunReconciler{Client: cl, Scheme: scheme, Clock: clocktesting.NewFakeClock(time.Unix(1, 0))}
+
+	_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(run)})
+	if err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	var updated operatorv1alpha1.HarnessRun
+	if err := cl.Get(context.Background(), client.ObjectKeyFromObject(run), &updated); err != nil {
+		t.Fatalf("get run: %v", err)
+	}
+	if updated.Status.PodName == "" {
+		t.Fatalf("expected podName to be set")
+	}
+
+	var pod corev1.Pod
+	if err := cl.Get(context.Background(), client.ObjectKey{Namespace: "default", Name: updated.Status.PodName}, &pod); err != nil {
+		t.Fatalf("get pod: %v", err)
+	}
+
+	// Tier 1: envFrom referencing api-key Secret.
+	if len(pod.Spec.Containers[0].EnvFrom) != 1 {
+		t.Fatalf("expected 1 envFrom, got %d", len(pod.Spec.Containers[0].EnvFrom))
+	}
+	if pod.Spec.Containers[0].EnvFrom[0].SecretRef == nil || pod.Spec.Containers[0].EnvFrom[0].SecretRef.Name != "my-api-keys" {
+		t.Fatalf("expected envFrom=my-api-keys, got %#v", pod.Spec.Containers[0].EnvFrom[0])
+	}
+
+	// Tier 2: agent-oauth volume.
+	hasOauth := false
+	for _, v := range pod.Spec.Volumes {
+		if v.Name == "agent-oauth" && v.Secret != nil && v.Secret.SecretName == "my-oauth" {
+			hasOauth = true
+		}
+	}
+	if !hasOauth {
+		t.Fatalf("expected agent-oauth volume")
+	}
+
+	// Tier 2: volume mounts.
+	oauthMountPaths := map[string]bool{}
+	for _, m := range pod.Spec.Containers[0].VolumeMounts {
+		if m.Name == "agent-oauth" {
+			oauthMountPaths[m.MountPath] = true
+		}
+	}
+	if !oauthMountPaths["/home/kocao/.local/share/opencode/auth.json"] {
+		t.Fatalf("missing opencode auth mount")
+	}
+	if !oauthMountPaths["/home/kocao/.codex/auth.json"] {
+		t.Fatalf("missing codex auth mount")
+	}
+
+	// Verify the run still transitions to Starting phase normally.
+	if updated.Status.Phase != operatorv1alpha1.HarnessRunPhaseStarting {
+		t.Fatalf("expected Starting phase, got %q", updated.Status.Phase)
 	}
 }
 

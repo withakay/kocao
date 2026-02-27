@@ -105,30 +105,31 @@ func buildHarnessPod(run *operatorv1alpha1.HarnessRun, workspacePVCName string, 
 		}
 		if secretName := strings.TrimSpace(run.Spec.AgentAuth.OauthSecretName); secretName != "" {
 			oauthMode := int32(0600)
+			// No explicit Items list: the Secret is projected as a directory and
+			// individual SubPath mounts pick specific keys. This way, if only
+			// one CLI's auth key exists in the Secret, the other SubPath mount
+			// simply resolves to an empty file — the pod starts regardless of
+			// which keys the user populates.
 			volumes = append(volumes, corev1.Volume{
 				Name: agentOauthVolumeName,
 				VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{
 					SecretName:  secretName,
 					DefaultMode: &oauthMode,
 					Optional:    boolPtr(true),
-					Items: []corev1.KeyToPath{
-						{Key: "opencode-auth.json", Path: "opencode/auth.json"},
-						{Key: "codex-auth.json", Path: "codex/auth.json"},
-					},
 				}},
 			})
 			// OpenCode auth: /home/kocao/.local/share/opencode/auth.json
 			volumeMounts = append(volumeMounts, corev1.VolumeMount{
 				Name:      agentOauthVolumeName,
 				MountPath: "/home/kocao/.local/share/opencode/auth.json",
-				SubPath:   "opencode/auth.json",
+				SubPath:   "opencode-auth.json",
 				ReadOnly:  true,
 			})
 			// Codex CLI auth: /home/kocao/.codex/auth.json
 			volumeMounts = append(volumeMounts, corev1.VolumeMount{
 				Name:      agentOauthVolumeName,
 				MountPath: "/home/kocao/.codex/auth.json",
-				SubPath:   "codex/auth.json",
+				SubPath:   "codex-auth.json",
 				ReadOnly:  true,
 			})
 		}
