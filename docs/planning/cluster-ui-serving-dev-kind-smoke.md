@@ -15,6 +15,12 @@ make deploy
 ```bash
 curl -i http://localhost:30080/healthz
 curl -i http://localhost:30080/readyz
+curl -i http://localhost:30080/
+curl -i http://localhost:30080/docs
+curl -i http://localhost:30080/api/v1/openapi.json
+curl -i http://localhost:30080/api/v1/scalar
+
+# compatibility redirects
 curl -i http://localhost:30080/openapi.json
 curl -i http://localhost:30080/scalar
 ```

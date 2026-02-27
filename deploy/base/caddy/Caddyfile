@@ -4,22 +4,68 @@
 }
 
 :8081 {
-	@attachws {
-		path_regexp attach ^/api/v1/workspace-sessions/[^/]+/attach$
-		header Connection *Upgrade*
-		header Upgrade websocket
+	route {
+		# Legacy compatibility redirects.
+		@legacyScalar path /scalar /scalar/
+		redir @legacyScalar /api/v1/scalar 308
+
+		@legacyOpenAPI path /openapi.json
+		redir @legacyOpenAPI /api/v1/openapi.json 308
+
+		# Attach websocket upgrade proxy.
+		@attachws {
+			path_regexp attach ^/api/v1/workspace-sessions/[^/]+/attach$
+			header Connection *Upgrade*
+			header Upgrade websocket
+		}
+		handle @attachws {
+			reverse_proxy 127.0.0.1:8080
+		}
+
+		# Versioned OpenAPI endpoint proxies to API native route.
+		handle /api/v1/openapi.json {
+			rewrite * /openapi.json
+			reverse_proxy 127.0.0.1:8080
+		}
+
+		# Versioned Scalar endpoint served by edge static content.
+		handle /api/v1/scalar {
+			rewrite * /scalar.html
+			root * /srv
+			file_server
+		}
+
+		# API and health endpoints.
+		handle /api/v1/* {
+			reverse_proxy 127.0.0.1:8080
+		}
+
+		handle /healthz {
+			reverse_proxy 127.0.0.1:8080
+		}
+
+		handle /readyz {
+			reverse_proxy 127.0.0.1:8080
+		}
+
+		# Static docs pages.
+		handle /docs {
+			rewrite * /docs/index.html
+			root * /srv
+			file_server
+		}
+
+		handle /docs/* {
+			root * /srv
+			try_files {path} {path}/index.html /docs/index.html
+			file_server
+		}
+
+		# SPA + static assets fallback.
+		handle {
+			root * /srv
+			try_files {path} /index.html
+			file_server
+		}
 	}
-	reverse_proxy @attachws 127.0.0.1:8080
-
-	@api path /api/v1/* /openapi.json /healthz /readyz
-	reverse_proxy @api 127.0.0.1:8080
-
-	@scalar path /scalar
-	rewrite @scalar /scalar.html
-
-	@root path /
-	rewrite @root /index.html
-
-	root * /srv
-	file_server
 }

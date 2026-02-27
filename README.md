@@ -24,6 +24,17 @@ make deploy
 - `make kind-load-images`: load images into kind
 - `make deploy` / `make undeploy`: apply kustomize overlay to cluster
 
+## Cluster web edge
+
+The control-plane deployment includes a Caddy web edge container (`kocao/control-plane-web`) that serves:
+
+- SPA: `/`
+- Docs portal: `/docs`
+- Scalar API reference: `/api/v1/scalar`
+- OpenAPI JSON: `/api/v1/openapi.json`
+
+Legacy `/scalar` and `/openapi.json` are redirected to versioned paths.
+
 ## Control-plane configuration
 
 Environment variables:

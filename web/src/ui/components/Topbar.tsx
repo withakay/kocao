@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useAuth } from '../auth'
-import { Btn, Input, ErrorBanner } from './primitives'
+import { Btn, Input, ErrorBanner, btnClass } from './primitives'
 
 export function Topbar({ title, subtitle }: { title: string; subtitle?: string }) {
   const { token, remember, notice, setRemember, setToken } = useAuth()
@@ -18,6 +18,12 @@ export function Topbar({ title, subtitle }: { title: string; subtitle?: string }
         {subtitle ? <p className="text-[11px] text-muted-foreground truncate">{subtitle}</p> : null}
       </div>
       <div className="flex items-center gap-1.5 shrink-0">
+        <a className={btnClass('ghost')} href="/docs" target="_blank" rel="noreferrer">
+          Docs
+        </a>
+        <a className={btnClass('ghost')} href="/api/v1/scalar" target="_blank" rel="noreferrer">
+          API
+        </a>
         <Input
           className="w-56 !py-1 !text-xs"
           type={reveal ? 'text' : 'password'}
