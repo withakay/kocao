@@ -35,6 +35,8 @@ bin/
 web/node_modules/
 web/dist/
 web/.vite/
+web/.playwright-cli/
+web/naming-check.yaml
 *.tsbuildinfo
 
 # Editor/IDE
