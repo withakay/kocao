@@ -71,6 +71,22 @@ spec:
                       type: string
                     usernameKey:
                       type: string
+                agentAuth:
+                  type: object
+                  description: >-
+                    Configures credential injection for agent CLIs.
+                    Both fields are optional.
+                  properties:
+                    apiKeySecretName:
+                      type: string
+                      description: >-
+                        Name of a Secret whose data keys are injected as
+                        environment variables (e.g. ANTHROPIC_API_KEY).
+                    oauthSecretName:
+                      type: string
+                      description: >-
+                        Name of a Secret whose data keys are projected as
+                        auth files at paths expected by each CLI.
                 egressMode:
                   type: string
                 ttlSecondsAfterFinished:

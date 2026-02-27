@@ -36,7 +36,9 @@
   "tools": {
     "bash": "bash --version",
     "clang": "clang --version",
+    "claude": "claude --version",
     "cmake": "cmake --version",
+    "codex": "codex --version",
     "curl": "curl --version",
     "fd": "fd --version",
     "gcc": "gcc --version",
@@ -46,6 +48,7 @@
     "make": "make --version",
     "mise": "mise --version",
     "nvim": "nvim --version",
+    "opencode": "opencode version",
     "pkg-config": "pkg-config --version",
     "rg": "rg --version",
     "tmux": "tmux -V",

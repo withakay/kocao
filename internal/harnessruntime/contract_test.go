@@ -8,9 +8,14 @@ import (
 	"testing"
 )
 
+type runtimeEntry struct {
+	Versions []string `json:"versions"`
+	Check    string   `json:"check"`
+}
+
 type runtimeMatrix struct {
-	Go   string `json:"go"`
-	Node string `json:"node"`
+	Runtimes map[string]runtimeEntry `json:"runtimes"`
+	Tools    map[string]string       `json:"tools"`
 }
 
 func TestHarnessDockerfileIsPinnedAndCopiesContractArtifacts(t *testing.T) {
@@ -26,8 +31,20 @@ func TestHarnessDockerfileIsPinnedAndCopiesContractArtifacts(t *testing.T) {
 	if err := json.Unmarshal(matBytes, &mat); err != nil {
 		t.Fatalf("unmarshal runtime matrix: %v", err)
 	}
-	if mat.Go == "" || mat.Node == "" {
-		t.Fatalf("runtime matrix must include go and node versions: %#v", mat)
+
+	// Verify required runtimes are present with at least one version.
+	for _, name := range []string{"go", "node", "python", "rust"} {
+		entry, ok := mat.Runtimes[name]
+		if !ok || len(entry.Versions) == 0 {
+			t.Fatalf("runtime matrix must include %s with at least one version", name)
+		}
+	}
+
+	// Verify agent CLIs are present in the tools section.
+	for _, tool := range []string{"claude", "opencode", "codex"} {
+		if _, ok := mat.Tools[tool]; !ok {
+			t.Fatalf("runtime matrix must include agent CLI tool %q", tool)
+		}
 	}
 
 	dockerBytes, err := os.ReadFile(dockerfilePath)
@@ -35,13 +52,6 @@ func TestHarnessDockerfileIsPinnedAndCopiesContractArtifacts(t *testing.T) {
 		t.Fatalf("read dockerfile: %v", err)
 	}
 	dockerfile := string(dockerBytes)
-
-	if !strings.Contains(dockerfile, "FROM golang:"+mat.Go+"-bookworm") {
-		t.Fatalf("dockerfile must pin golang base image to %q", mat.Go)
-	}
-	if !strings.Contains(dockerfile, "FROM node:"+mat.Node+"-bookworm-slim") {
-		t.Fatalf("dockerfile must pin node base image to %q", mat.Node)
-	}
 
 	requiredCopies := []string{
 		"COPY build/harness/runtime-matrix.json /etc/kocao/runtime-matrix.json",

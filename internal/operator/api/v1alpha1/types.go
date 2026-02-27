@@ -60,6 +60,21 @@ type EnvVar struct {
 	Value string `json:"value,omitempty"`
 }
 
+// AgentAuthSpec configures credential injection for agent CLIs.
+// Both fields are optional: when a Secret name is provided, the operator injects
+// credentials into the harness pod via env vars (API keys) or file mounts (OAuth).
+type AgentAuthSpec struct {
+	// ApiKeySecretName references a Secret whose data keys are injected as
+	// environment variables (e.g. ANTHROPIC_API_KEY, OPENAI_API_KEY,
+	// CLAUDE_CODE_OAUTH_TOKEN, GITHUB_TOKEN, OPENROUTER_API_KEY).
+	ApiKeySecretName string `json:"apiKeySecretName,omitempty"`
+	// OauthSecretName references a Secret whose data keys are projected as
+	// auth files at paths expected by each CLI:
+	//   opencode-auth.json → /home/kocao/.local/share/opencode/auth.json
+	//   codex-auth.json    → /home/kocao/.codex/auth.json
+	OauthSecretName string `json:"oauthSecretName,omitempty"`
+}
+
 // GitAuthSpec configures secure Git credential injection for HTTPS clones.
 // The referenced Secret MUST exist in the same namespace as the HarnessRun.
 //
@@ -106,6 +121,11 @@ type HarnessRunSpec struct {
 
 	// GitAuth references a Secret used to authenticate Git operations.
 	GitAuth *GitAuthSpec `json:"gitAuth,omitempty"`
+
+	// AgentAuth configures credential injection for agent CLIs (Claude Code,
+	// OpenCode, Codex). Both tier-1 (API key env vars) and tier-2 (OAuth file
+	// mounts) are supported. Optional — pods start without credentials if nil.
+	AgentAuth *AgentAuthSpec `json:"agentAuth,omitempty"`
 
 	// EgressMode controls the outbound network policy for the run Pod.
 	//
