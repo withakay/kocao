@@ -1,22 +1,15 @@
 ## ADDED Requirements
 
-### Requirement: Token Persistence Is Opt-In
-The UI SHALL NOT persist API tokens across browser restarts by default.
+### Requirement: Cluster Dashboard Navigation
+The web UI SHALL expose the cluster dashboard through shell navigation and command palette actions.
 
-#### Scenario: Default token storage
-- **WHEN** a user enters an API token in the UI
-- **THEN** the token is stored only for the current browser session unless the user explicitly opts in to persistence
+#### Scenario: User navigates from shell
+- **WHEN** a user clicks the Cluster entry in sidebar or selects Cluster in the command palette
+- **THEN** the UI navigates to the `/cluster` route
 
-### Requirement: No Secrets in URLs
-The UI SHALL avoid placing secrets (API tokens, attach tokens) in URLs.
+### Requirement: Cluster Config Visibility
+The web UI SHALL present non-secret runtime configuration indicators relevant to cluster operations.
 
-#### Scenario: Attach does not include token in URL
-- **WHEN** a user opens an attach session
-- **THEN** the websocket connection is established without a token in the URL query string
-
-### Requirement: Auth Failure Handling
-The UI SHALL handle authorization failures safely.
-
-#### Scenario: Invalid token is cleared
-- **WHEN** the API returns HTTP 401 for an authenticated request
-- **THEN** the UI prompts the user to re-authenticate and clears any stored token
+#### Scenario: User reviews runtime config indicators
+- **WHEN** the cluster dashboard loads
+- **THEN** the UI shows safe config indicators (for example environment and feature toggles) without revealing secret values
