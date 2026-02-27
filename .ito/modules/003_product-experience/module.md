@@ -6,6 +6,7 @@ Deliver the interactive attach and UI workflow that turns orchestrated runs into
 ## Scope
 - attach-session
 - workflow-ui-github
+- web-ui
 - terminal-engine-selection
 - ide-terminal-experience
 
@@ -19,3 +20,4 @@ Deliver the interactive attach and UI workflow that turns orchestrated runs into
 - [x] 003-07_add-ide-terminal-experience
 - [x] 003-08_desktop-app-ux
 - [x] 003-09_attach-inspector-and-foldable-terminal
+- [ ] 003-10_spa-docs-caddy-edge
