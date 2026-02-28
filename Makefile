@@ -21,6 +21,7 @@ help:
 		"  test                Run Go tests" \
 		"  lint                gofmt (check) + go vet" \
 		"  build               Build Go binaries" \
+		"  build-cli           Build kocao CLI binary" \
 		"  kind-up             Create local kind cluster" \
 		"  kind-down           Delete local kind cluster" \
 		"  images              Build local Docker images" \
@@ -70,6 +71,12 @@ build:
 	@mkdir -p bin
 	go build -o bin/control-plane-api ./cmd/control-plane-api
 	go build -o bin/control-plane-operator ./cmd/control-plane-operator
+	go build -o bin/kocao ./cmd/kocao
+
+.PHONY: build-cli
+build-cli:
+	@mkdir -p bin
+	go build -o bin/kocao ./cmd/kocao
 
 .PHONY: kind-up
 kind-up: tools

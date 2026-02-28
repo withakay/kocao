@@ -19,10 +19,57 @@ make deploy
 - `make bootstrap`: install local tools and download deps
 - `make test`: run Go tests
 - `make lint`: gofmt + go vet
+- `make build-cli`: build the `kocao` CLI (`bin/kocao`)
 - `make kind-up` / `make kind-down`: manage local kind cluster
 - `make images`: build local Docker images
 - `make kind-load-images`: load images into kind
 - `make deploy` / `make undeploy`: apply kustomize overlay to cluster
+
+## CLI
+
+Build:
+
+```bash
+make build-cli
+```
+
+Configure:
+
+```bash
+export KOCAO_API_URL="http://127.0.0.1:8080"
+export KOCAO_TOKEN="<bearer-token>"
+```
+
+Optional config file (`.json` only):
+
+```json
+{
+  "api_url": "http://127.0.0.1:8080",
+  "token": "<bearer-token>",
+  "timeout": "15s",
+  "verbose": false
+}
+```
+
+Default file lookup order (later wins):
+
+1. `~/.config/kocao/settings.json`
+2. `settings.json` in the same directory as the `kocao` executable
+3. `--config /path/to/settings.json` (if provided)
+4. Environment variables (`KOCAO_*`)
+5. Command-line flags
+
+Examples:
+
+```bash
+./bin/kocao sessions ls
+./bin/kocao sessions get <workspace-session-id>
+./bin/kocao sessions status <workspace-session-id>
+./bin/kocao sessions logs <workspace-session-id> --tail 200
+./bin/kocao sessions logs <workspace-session-id> --follow
+./bin/kocao sessions attach <workspace-session-id>
+./bin/kocao sessions attach <workspace-session-id> --driver
+```
 
 ## Cluster web edge
 
