@@ -9,7 +9,7 @@ import type { ButtonHTMLAttributes, InputHTMLAttributes, ReactNode, SelectHTMLAt
 type ButtonVariant = 'primary' | 'secondary' | 'danger' | 'ghost'
 
 const btnBase =
-  'inline-flex items-center justify-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed select-none whitespace-nowrap'
+  'inline-flex items-center justify-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed select-none whitespace-nowrap'
 
 const btnVariants: Record<ButtonVariant, string> = {
   primary: 'bg-primary text-primary-foreground hover:bg-primary/85 active:bg-primary/75',
@@ -39,7 +39,7 @@ export function btnClass(variant: ButtonVariant = 'secondary') {
 /* ------------------------------------------------------------------ */
 
 const fieldBase =
-  'w-full rounded-md border border-input bg-background px-2.5 py-1.5 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring/40 focus:border-ring'
+  'w-full rounded-md border border-input bg-background px-2.5 py-1.5 text-[15px] text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring/40 focus:border-ring'
 
 export function Input({ className, ...props }: InputHTMLAttributes<HTMLInputElement>) {
   return <input className={cn(fieldBase, className)} {...props} />
@@ -68,7 +68,7 @@ export function Card({ className, children }: { className?: string; children: Re
 export function CardHeader({ title, right }: { title: string; right?: ReactNode }) {
   return (
     <div className="flex items-center justify-between mb-1.5">
-      <h2 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">{title}</h2>
+      <h2 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">{title}</h2>
       {right}
     </div>
   )
@@ -81,7 +81,7 @@ export function CardHeader({ title, right }: { title: string; right?: ReactNode 
 export function FormRow({ label, children, hint }: { label: string; children: ReactNode; hint?: ReactNode }) {
   return (
     <div className="flex items-start gap-3 mb-1.5">
-      <div className="text-xs text-muted-foreground w-20 shrink-0 pt-1.5 text-right">{label}</div>
+      <div className="text-sm text-muted-foreground w-24 shrink-0 pt-1.5 text-right">{label}</div>
       <div className="flex-1 min-w-0">
         {children}
         {hint ? <div className="mt-0.5 text-[11px] text-muted-foreground/70">{hint}</div> : null}
@@ -95,7 +95,7 @@ export function FormRow({ label, children, hint }: { label: string; children: Re
 /* ------------------------------------------------------------------ */
 
 export function FieldLabel({ children }: { children: ReactNode }) {
-  return <span className="text-xs text-muted-foreground">{children}</span>
+  return <span className="text-sm text-muted-foreground">{children}</span>
 }
 
 export function FieldValue({ children, mono = true }: { children: ReactNode; mono?: boolean }) {
@@ -105,7 +105,7 @@ export function FieldValue({ children, mono = true }: { children: ReactNode; mon
 export function DetailRow({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div className="flex items-baseline gap-2 py-1">
-      <div className="text-xs text-muted-foreground w-20 shrink-0 text-right">{label}</div>
+      <div className="text-sm text-muted-foreground w-24 shrink-0 text-right">{label}</div>
       <div className="text-sm font-mono min-w-0 break-all">{children}</div>
     </div>
   )
@@ -117,7 +117,7 @@ export function DetailRow({ label, children }: { label: string; children: ReactN
 
 export function ErrorBanner({ children }: { children: ReactNode }) {
   return (
-    <div className="mt-2 rounded-md bg-destructive/10 border border-destructive/20 px-3 py-1.5 text-xs text-destructive">
+    <div className="mt-2 rounded-md bg-destructive/10 border border-destructive/20 px-3 py-1.5 text-sm text-destructive">
       {children}
     </div>
   )
@@ -125,7 +125,7 @@ export function ErrorBanner({ children }: { children: ReactNode }) {
 
 export function NoticeBanner({ children }: { children: ReactNode }) {
   return (
-    <div className="rounded-md bg-status-warn/10 border border-status-warn/20 px-3 py-1.5 text-xs text-status-warn">
+    <div className="rounded-md bg-status-warn/10 border border-status-warn/20 px-3 py-1.5 text-sm text-status-warn">
       {children}
     </div>
   )
@@ -147,7 +147,7 @@ const badgeVariants: Record<BadgeVariant, string> = {
 
 export function Badge({ variant = 'neutral', children }: { variant?: BadgeVariant; children: ReactNode }) {
   return (
-    <span className={cn('inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium', badgeVariants[variant])}>
+    <span className={cn('inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs font-medium', badgeVariants[variant])}>
       {children}
     </span>
   )
@@ -172,7 +172,7 @@ export function ScopeBadge({ scope }: { scope: string }) {
 export function Table({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div className="overflow-x-auto">
-      <table className="w-full text-sm" aria-label={label}>
+      <table className="w-full text-[15px]" aria-label={label}>
         {children}
       </table>
     </div>
@@ -180,17 +180,17 @@ export function Table({ label, children }: { label: string; children: ReactNode 
 }
 
 export function Th({ children, className, ...props }: ThHTMLAttributes<HTMLTableCellElement>) {
-  return <th className={cn('py-1 pr-3 text-[11px] font-medium text-muted-foreground text-left', className)} {...props}>{children}</th>
+  return <th className={cn('py-1 pr-3 text-xs font-medium text-muted-foreground text-left', className)} {...props}>{children}</th>
 }
 
 export function Td({ children, className, ...props }: TdHTMLAttributes<HTMLTableCellElement>) {
-  return <td className={cn('py-1 pr-3 text-sm', className)} {...props}>{children}</td>
+  return <td className={cn('py-1 pr-3 text-[15px]', className)} {...props}>{children}</td>
 }
 
 export function EmptyRow({ cols, loading, message }: { cols: number; loading: boolean; message: string }) {
   return (
     <tr>
-      <td colSpan={cols} className="py-4 text-center text-xs text-muted-foreground">
+      <td colSpan={cols} className="py-4 text-center text-sm text-muted-foreground">
         {loading ? 'Loading\u2026' : message}
       </td>
     </tr>
@@ -281,7 +281,7 @@ export function CollapsibleSection({
         </svg>
 
         {/* Title */}
-        <h2 className="flex-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+        <h2 className="flex-1 text-sm font-semibold uppercase tracking-wider text-muted-foreground">
           {title}
         </h2>
 
