@@ -9,7 +9,7 @@ var openAPISpec = []byte(`{
   "info": {"title": "kocao control-plane api", "version": "v1"},
   "paths": {
     "/api/v1/workspace-sessions": {"get": {"security": [{"bearerAuth": []}]}, "post": {"security": [{"bearerAuth": []}] }},
-    "/api/v1/workspace-sessions/{workspaceSessionID}": {"get": {"security": [{"bearerAuth": []}] }},
+    "/api/v1/workspace-sessions/{workspaceSessionID}": {"get": {"security": [{"bearerAuth": []}] }, "delete": {"security": [{"bearerAuth": []}] }}, 
     "/api/v1/workspace-sessions/{workspaceSessionID}/harness-runs": {"post": {"security": [{"bearerAuth": []}] }},
     "/api/v1/harness-runs": {"get": {"security": [{"bearerAuth": []}] }},
     "/api/v1/harness-runs/{harnessRunID}": {"get": {"security": [{"bearerAuth": []}] }},

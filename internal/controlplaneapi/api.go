@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/withakay/kocao/internal/namegen"
 	operatorv1alpha1 "github.com/withakay/kocao/internal/operator/api/v1alpha1"
@@ -99,6 +100,12 @@ func (a *API) serveAPI(w http.ResponseWriter, r *http.Request) {
 		a.serveAuthz(w, r, []string{"workspace-session:read"}, func(_ *http.Request) (string, string, string) {
 			return "workspace-session.get", "workspace-session", id
 		}, func(w http.ResponseWriter, r *http.Request) { a.handleSessionGet(w, r, id) })
+		return
+	case len(segs) == 2 && segs[0] == "workspace-sessions" && r.Method == http.MethodDelete:
+		id := segs[1]
+		a.serveAuthz(w, r, []string{"workspace-session:write"}, func(_ *http.Request) (string, string, string) {
+			return "workspace-session.delete", "workspace-session", id
+		}, func(w http.ResponseWriter, r *http.Request) { a.handleSessionDelete(w, r, id) })
 		return
 	case len(segs) == 2 && segs[0] == "workspace-sessions":
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -230,10 +237,15 @@ type sessionResponse struct {
 	DisplayName string                        `json:"displayName,omitempty"`
 	RepoURL     string                        `json:"repoURL,omitempty"`
 	Phase       operatorv1alpha1.SessionPhase `json:"phase,omitempty"`
+	CreatedAt   string                        `json:"createdAt,omitempty"`
 }
 
 func sessionToResponse(s *operatorv1alpha1.Session) sessionResponse {
-	return sessionResponse{ID: s.Name, DisplayName: s.Spec.DisplayName, RepoURL: s.Spec.RepoURL, Phase: s.Status.Phase}
+	createdAt := ""
+	if !s.CreationTimestamp.IsZero() {
+		createdAt = s.CreationTimestamp.Time.UTC().Format(time.RFC3339)
+	}
+	return sessionResponse{ID: s.Name, DisplayName: s.Spec.DisplayName, RepoURL: s.Spec.RepoURL, Phase: s.Status.Phase, CreatedAt: createdAt}
 }
 
 func (a *API) handleSessionsList(w http.ResponseWriter, r *http.Request) {
@@ -314,6 +326,24 @@ func (a *API) handleSessionGet(w http.ResponseWriter, r *http.Request, id string
 		return
 	}
 	writeJSON(w, http.StatusOK, sessionToResponse(&sess))
+}
+
+func (a *API) handleSessionDelete(w http.ResponseWriter, r *http.Request, id string) {
+	var sess operatorv1alpha1.Session
+	err := a.K8s.Get(r.Context(), client.ObjectKey{Namespace: a.Namespace, Name: id}, &sess)
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			writeError(w, http.StatusNotFound, "workspace session not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "get workspace session failed")
+		return
+	}
+	if err := a.K8s.Delete(r.Context(), &sess); err != nil {
+		writeError(w, http.StatusInternalServerError, "delete workspace session failed")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"deleted": true})
 }
 
 type runCreateRequest struct {
@@ -456,16 +486,20 @@ func (a *API) handleSessionRunsCreate(w http.ResponseWriter, r *http.Request, wo
 		TypeMeta:   metav1.TypeMeta{APIVersion: operatorv1alpha1.GroupVersion.String(), Kind: "HarnessRun"},
 		ObjectMeta: metav1.ObjectMeta{Name: id, Namespace: a.Namespace},
 		Spec: operatorv1alpha1.HarnessRunSpec{
-			WorkspaceSessionName:    workspaceSessionID,
-			RepoURL:                 req.RepoURL,
-			RepoRevision:            req.RepoRevision,
-			Image:                   req.Image,
-			EgressMode:              egressMode,
-			Command:                 req.Command,
-			Args:                    req.Args,
-			WorkingDir:              req.WorkingDir,
-			Env:                     req.Env,
-			GitAuth:                 req.GitAuth,
+			WorkspaceSessionName: workspaceSessionID,
+			RepoURL:              req.RepoURL,
+			RepoRevision:         req.RepoRevision,
+			Image:                req.Image,
+			EgressMode:           egressMode,
+			Command:              req.Command,
+			Args:                 req.Args,
+			WorkingDir:           req.WorkingDir,
+			Env:                  req.Env,
+			GitAuth:              req.GitAuth,
+			AgentAuth: &operatorv1alpha1.AgentAuthSpec{
+				ApiKeySecretName: "kocao-agent-api-keys",
+				OauthSecretName:  "kocao-agent-oauth",
+			},
 			TTLSecondsAfterFinished: req.TTLSecondsAfterFinished,
 		},
 	}

@@ -483,6 +483,38 @@ func TestSessionCreate_DuplicateDisplayNameConflict(t *testing.T) {
 	}
 }
 
+func TestSessionDelete_DeletesSession(t *testing.T) {
+	api, cleanup := newTestAPI(t)
+	defer cleanup()
+
+	if err := api.Tokens.Create(context.Background(), "t-full", "full", []string{"workspace-session:write", "workspace-session:read"}); err != nil {
+		t.Fatalf("create token: %v", err)
+	}
+
+	srv := httptest.NewServer(api.Handler())
+	defer srv.Close()
+
+	resp, b := doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/workspace-sessions", "full", map[string]any{"repoURL": "https://example.com/repo"})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create session status = %d, want 201 (body=%s)", resp.StatusCode, string(b))
+	}
+	var sess sessionResponse
+	_ = json.Unmarshal(b, &sess)
+	if sess.ID == "" {
+		t.Fatal("expected session ID")
+	}
+
+	resp, b = doJSON(t, srv.Client(), http.MethodDelete, srv.URL+"/api/v1/workspace-sessions/"+sess.ID, "full", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("delete session status = %d, want 200 (body=%s)", resp.StatusCode, string(b))
+	}
+
+	resp, _ = doJSON(t, srv.Client(), http.MethodGet, srv.URL+"/api/v1/workspace-sessions/"+sess.ID, "full", nil)
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("get deleted session status = %d, want 404", resp.StatusCode)
+	}
+}
+
 func TestClusterOverview_ReturnsNamespaceState(t *testing.T) {
 	scheme := runtime.NewScheme()
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
