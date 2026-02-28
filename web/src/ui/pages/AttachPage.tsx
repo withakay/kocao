@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useParams, useSearch } from '@tanstack/react-router'
 import { cn } from '@/lib/utils'
 import { useAuth } from '../auth'
@@ -6,10 +6,14 @@ import { api, isUnauthorizedError } from '../lib/api'
 import { base64DecodeToBytes, base64EncodeBytes } from '../lib/base64'
 import { useAttachLayout } from '../lib/useLayoutState'
 import { Topbar } from '../components/Topbar'
-import { GhosttyTerminal, type TerminalHandle } from '../components/GhosttyTerminal'
 import { ResizablePanel } from '../components/ResizablePanel'
 import { InspectorPanel } from '../components/InspectorPanel'
 import { Btn, btnClass, Badge, Card, ErrorBanner } from '../components/primitives'
+import {
+  type TerminalAdapter,
+  type TerminalEngineType,
+  createTerminalAdapter,
+} from '../lib/terminal-adapter'
 
 type AttachMsg = {
   type: string
@@ -31,6 +35,26 @@ type ActivityEvent = {
   message: string
 }
 
+// ---------------------------------------------------------------------------
+// Cookie helpers for per-session engine persistence
+// ---------------------------------------------------------------------------
+
+function getEngineCookie(sessionID: string): TerminalEngineType | null {
+  const prefix = `kocao.termEngine.${sessionID}=`
+  const match = document.cookie.split('; ').find((c) => c.startsWith(prefix))
+  if (!match) return null
+  const val = match.slice(prefix.length)
+  return val === 'ghostty' ? 'ghostty' : val === 'xterm' ? 'xterm' : null
+}
+
+function setEngineCookie(sessionID: string, engine: TerminalEngineType) {
+  document.cookie = `kocao.termEngine.${sessionID}=${engine}; path=/; max-age=${60 * 60 * 24 * 30}; SameSite=Lax`
+}
+
+// ---------------------------------------------------------------------------
+// Component
+// ---------------------------------------------------------------------------
+
 export function AttachPage() {
   const { workspaceSessionID } = useParams({ strict: false })
   const id = workspaceSessionID ?? ''
@@ -44,11 +68,19 @@ export function AttachPage() {
   const [err, setErr] = useState<string | null>(null)
   const [hello, setHello] = useState<{ clientID: string; role: string; driverID: string; leaseMS: number } | null>(null)
   const [driverState, setDriverState] = useState<{ driverID: string; leaseMS: number } | null>(null)
-  const [engineName, setEngineName] = useState<string | null>(null)
   const [activityEvents, setActivityEvents] = useState<ActivityEvent[]>([])
 
+  // Terminal engine state — per-session, restored from cookie
+  const [engine, setEngine] = useState<TerminalEngineType>(() => getEngineCookie(id) ?? 'xterm')
+
   const wsRef = useRef<WebSocket | null>(null)
-  const termRef = useRef<TerminalHandle>(null)
+  const termContainerRef = useRef<HTMLDivElement | null>(null)
+  const adapterRef = useRef<TerminalAdapter | null>(null)
+  const decoder = useMemo(() => new TextDecoder('utf-8'), [])
+  // Buffer to accumulate output before adapter is ready or during engine switch
+  const outputBufferRef = useRef<string[]>([])
+  // Unsubscribe from onData
+  const onDataUnsub = useRef<(() => void) | null>(null)
   const activityIdRef = useRef(1)
 
   const addActivityEvent = useCallback((type: string, message: string) => {
@@ -61,24 +93,93 @@ export function AttachPage() {
     invalidateToken('Bearer token rejected (401). Please re-enter a valid token in the top bar.')
   }, [invalidateToken])
 
-  const handleTerminalResize = useCallback((dims: { cols: number; rows: number }) => {
-    const ws = wsRef.current
-    if (!ws || ws.readyState !== WebSocket.OPEN) return
-    ws.send(JSON.stringify({ type: 'resize', cols: dims.cols, rows: dims.rows }))
-  }, [])
+  // -----------------------------------------------------------------------
+  // Mount / swap terminal adapter when engine changes
+  // -----------------------------------------------------------------------
+  useEffect(() => {
+    const container = termContainerRef.current
+    if (!container) return
 
-  const handleTerminalInput = useCallback((data: string) => {
-    const ws = wsRef.current
-    if (!ws || ws.readyState !== WebSocket.OPEN) return
-    const bytes = new TextEncoder().encode(data)
-    ws.send(JSON.stringify({ type: 'stdin', data: base64EncodeBytes(bytes) }))
-  }, [])
+    let cancelled = false
 
+    const mount = async () => {
+      // Tear down previous adapter
+      if (onDataUnsub.current) {
+        onDataUnsub.current()
+        onDataUnsub.current = null
+      }
+      if (adapterRef.current) {
+        adapterRef.current.dispose()
+        adapterRef.current = null
+      }
+      // Clear container
+      container.innerHTML = ''
+
+      const adapter = await createTerminalAdapter(engine)
+      if (cancelled) {
+        adapter.dispose()
+        return
+      }
+      adapterRef.current = adapter
+      adapter.open(container)
+
+      // Replay buffered output
+      for (const chunk of outputBufferRef.current) {
+        adapter.write(chunk)
+      }
+
+      // Wire user input → websocket (driver only sends via terminal)
+      if (role === 'driver') {
+        onDataUnsub.current = adapter.onData((data) => {
+          const ws = wsRef.current
+          if (!ws || ws.readyState !== WebSocket.OPEN) return
+          const bytes = new TextEncoder().encode(data)
+          ws.send(JSON.stringify({ type: 'stdin', data: base64EncodeBytes(bytes) }))
+        })
+      }
+
+      // Fit on resize
+      const onResize = () => adapter.fit()
+      window.addEventListener('resize', onResize)
+
+      // Store cleanup for next swap
+      return () => {
+        window.removeEventListener('resize', onResize)
+      }
+    }
+
+    let resizeCleanup: (() => void) | undefined
+    mount().then((c) => {
+      resizeCleanup = c ?? undefined
+    })
+
+    return () => {
+      cancelled = true
+      resizeCleanup?.()
+      if (onDataUnsub.current) {
+        onDataUnsub.current()
+        onDataUnsub.current = null
+      }
+      if (adapterRef.current) {
+        adapterRef.current.dispose()
+        adapterRef.current = null
+      }
+    }
+  }, [engine, role])
+
+  // -----------------------------------------------------------------------
+  // Websocket attach transport (engine-agnostic)
+  // -----------------------------------------------------------------------
   useEffect(() => {
     if (token.trim() === '' || id === '') return
     let alive = true
     let keepaliveTimer: number | null = null
     let ws: WebSocket | null = null
+
+    const writeToTerminal = (s: string) => {
+      outputBufferRef.current.push(s)
+      adapterRef.current?.write(s)
+    }
 
     const run = async () => {
       setStatus('setting cookie')
@@ -94,13 +195,9 @@ export function AttachPage() {
         wsRef.current = ws
 
         ws.onopen = () => {
+          writeToTerminal('[connected]\r\n')
           setStatus('connected')
           addActivityEvent('connected', 'WebSocket connected')
-
-          const dims = termRef.current?.dimensions()
-          if (dims && dims.cols > 0 && dims.rows > 0) {
-            ws?.send(JSON.stringify({ type: 'resize', cols: dims.cols, rows: dims.rows }))
-          }
 
           keepaliveTimer = window.setInterval(() => {
             try {
@@ -120,12 +217,13 @@ export function AttachPage() {
           }
 
           if (m.type === 'stdout' && m.data) {
-            termRef.current?.write(base64DecodeToBytes(m.data))
+            const bytes = base64DecodeToBytes(m.data)
+            writeToTerminal(decoder.decode(bytes))
             return
           }
           if (m.type === 'error') {
             const msg = m.message ?? 'unknown'
-            termRef.current?.write(new TextEncoder().encode(`\r\n[error] ${msg}\r\n`))
+            writeToTerminal(`\r\n[error] ${msg}\r\n`)
             addActivityEvent('error', msg)
             return
           }
@@ -140,7 +238,7 @@ export function AttachPage() {
             return
           }
           if (m.type === 'backend_closed') {
-            termRef.current?.write(new TextEncoder().encode('\r\n[backend closed]\r\n'))
+            writeToTerminal('\r\n[backend closed]\r\n')
             addActivityEvent('backend_closed', 'Backend closed session')
             return
           }
@@ -151,7 +249,7 @@ export function AttachPage() {
           addActivityEvent('error', 'WebSocket error')
         }
         ws.onclose = () => {
-          termRef.current?.write(new TextEncoder().encode('\r\n[disconnected]\r\n'))
+          writeToTerminal('\r\n[disconnected]\r\n')
           setStatus('disconnected')
           addActivityEvent('disconnected', 'WebSocket disconnected')
           if (keepaliveTimer !== null) window.clearInterval(keepaliveTimer)
@@ -177,7 +275,7 @@ export function AttachPage() {
       ws?.close()
       wsRef.current = null
     }
-  }, [token, id, role, onUnauthorized, addActivityEvent])
+  }, [token, id, role, onUnauthorized, addActivityEvent, decoder])
 
   const takeControl = useCallback(() => {
     const ws = wsRef.current
@@ -191,10 +289,38 @@ export function AttachPage() {
   }, [])
 
   const handlePanelResize = useCallback(() => {
-    termRef.current?.fit()
+    adapterRef.current?.fit()
   }, [])
 
+  const handleEngineChange = (next: TerminalEngineType) => {
+    setEngine(next)
+    setEngineCookie(id, next)
+  }
+
   const statusVariant = status === 'connected' ? 'ok' : status === 'error' || status === 'disconnected' ? 'bad' : 'neutral'
+
+  const engineSelector = (
+    <span className="inline-flex items-center gap-1.5">
+      <label htmlFor="engine-select" className="text-[10px] text-muted-foreground">Engine:</label>
+      <select
+        id="engine-select"
+        className="rounded-md border border-input bg-background px-1.5 py-0.5 text-[10px] font-mono text-foreground focus:outline-none focus:ring-2 focus:ring-ring/40"
+        value={engine}
+        onChange={(e) => handleEngineChange(e.target.value as TerminalEngineType)}
+      >
+        <option value="xterm">xterm.js</option>
+        <option value="ghostty">ghostty-web (experimental)</option>
+      </select>
+    </span>
+  )
+
+  const terminalPanel = (
+    <div
+      className="flex-1 min-h-0"
+      ref={termContainerRef}
+      data-testid="terminal-container"
+    />
+  )
 
   const activityPanel = (
     <>
@@ -248,21 +374,14 @@ export function AttachPage() {
               <div className="flex items-center gap-2 px-3 py-1.5 border-b border-border/40 bg-card/50 shrink-0">
                 <Badge variant={statusVariant}>{status}</Badge>
                 <Badge variant={role === 'driver' ? 'info' : 'neutral'}>{role}</Badge>
-                {engineName && <Badge variant="neutral">{engineName}</Badge>}
+                {engineSelector}
                 <span className="text-[10px] font-mono text-muted-foreground flex-1">{hello?.clientID ?? ''} | {id}</span>
                 <Btn variant="ghost" onClick={toggleInspector} type="button">Inspector</Btn>
                 <Btn variant="ghost" onClick={toggleActivity} type="button">Activity</Btn>
                 <Btn variant="ghost" onClick={toggleFullscreen} type="button">Exit Fullscreen</Btn>
               </div>
               <div className="flex flex-col min-h-0 flex-1 rounded-none border-0 bg-card overflow-hidden">
-                <GhosttyTerminal
-                  ref={termRef}
-                  className="flex-1 min-h-0"
-                  onInput={handleTerminalInput}
-                  onResize={handleTerminalResize}
-                  onReady={setEngineName}
-                  disableInput={role !== 'driver'}
-                />
+                {terminalPanel}
                 {activityPanel}
               </div>
             </div>
@@ -280,7 +399,7 @@ export function AttachPage() {
                 <div className="flex items-center gap-3 flex-wrap">
                   <Badge variant={statusVariant}>{status}</Badge>
                   <Badge variant={role === 'driver' ? 'info' : 'neutral'}>{role}</Badge>
-                  {engineName && <Badge variant="neutral">{engineName}</Badge>}
+                  {engineSelector}
                   <span className="text-[10px] font-mono text-muted-foreground">
                     client: {hello?.clientID ?? '…'} | driver: {driverState?.driverID ?? hello?.driverID ?? '—'} | lease: {String(driverState?.leaseMS ?? hello?.leaseMS ?? 0)}ms
                   </span>
@@ -297,14 +416,7 @@ export function AttachPage() {
               </Card>
 
               <div className="flex flex-col min-h-0 rounded-lg border border-border/60 bg-card overflow-hidden">
-                <GhosttyTerminal
-                  ref={termRef}
-                  className="flex-1 min-h-0"
-                  onInput={handleTerminalInput}
-                  onResize={handleTerminalResize}
-                  onReady={setEngineName}
-                  disableInput={role !== 'driver'}
-                />
+                {terminalPanel}
                 {activityPanel}
               </div>
             </ResizablePanel>
@@ -318,7 +430,7 @@ export function AttachPage() {
             <InspectorRow label="Role" value={role} badge={role === 'driver' ? 'info' : 'neutral'} />
             <InspectorRow label="Driver ID" value={driverState?.driverID ?? hello?.driverID ?? '—'} />
             <InspectorRow label="Lease" value={`${String(driverState?.leaseMS ?? hello?.leaseMS ?? 0)}ms`} />
-            <InspectorRow label="Engine" value={engineName ?? '—'} />
+            <InspectorRow label="Engine" value={engine} />
             <div>
               <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground mb-1.5">WebSocket Status</div>
               <Badge variant={statusVariant}>{status}</Badge>

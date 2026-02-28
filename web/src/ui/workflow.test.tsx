@@ -5,6 +5,22 @@ import { describe, expect, it, vi } from 'vitest'
 import { server } from '../test/server'
 import { App } from './App'
 
+// Mock terminal adapter factory — avoids loading real xterm/ghostty WASM in jsdom
+vi.mock('./lib/terminal-adapter', async (importOriginal) => {
+  const original = await importOriginal<typeof import('../lib/terminal-adapter')>()
+  return {
+    ...original,
+    createTerminalAdapter: vi.fn(async () => ({
+      open: () => {},
+      write: () => {},
+      onData: () => () => {},
+      fit: () => {},
+      dispose: () => {},
+    })),
+  }
+})
+
+
 type WorkspaceSession = { id: string; repoURL?: string; phase?: string }
 type HarnessRun = {
   id: string
@@ -386,6 +402,141 @@ describe('shell-layout', () => {
     await screen.findByText('kocao-system')
 
     unmount()
+  })
+})
+
+
+describe('terminal-engine-selection', () => {
+  function stubWebSocket(urls: string[]) {
+    class MockWebSocket {
+      readonly url: string
+      readyState = 1
+      onopen: ((ev: any) => void) | null = null
+      onmessage: ((ev: any) => void) | null = null
+      onerror: ((ev: any) => void) | null = null
+      onclose: ((ev: any) => void) | null = null
+
+      constructor(url: string) {
+        this.url = url
+        urls.push(url)
+        setTimeout(() => {
+          this.onopen?.({})
+        }, 0)
+      }
+
+      send(_data: any) {
+        // no-op
+      }
+
+      close() {
+        this.readyState = 3
+        this.onclose?.({})
+      }
+    }
+    vi.stubGlobal('WebSocket', MockWebSocket)
+  }
+
+  function attachHandlers() {
+    return [
+      http.get('/api/v1/audit', () => HttpResponse.json({ events: [] })),
+      http.get('/api/v1/harness-runs/:id', () => new HttpResponse('not found', { status: 404 })),
+      http.post('/api/v1/workspace-sessions/:id/attach-cookie', (ctx: any) =>
+        HttpResponse.json(
+          {
+            expiresAt: new Date().toISOString(),
+            workspaceSessionID: String(ctx.params.id),
+            clientID: 'cli-1',
+            role: 'viewer',
+          },
+          { status: 201 },
+        ),
+      ),
+    ]
+  }
+
+  it('shows engine selector with xterm as default', async () => {
+    sessionStorage.setItem('kocao.apiToken', 't-full')
+    window.location.hash = '#/workspace-sessions/sess-1/attach?role=viewer'
+    document.cookie = 'kocao.termEngine.sess-1=; max-age=0'
+
+    const urls: string[] = []
+    stubWebSocket(urls)
+    server.use(...attachHandlers())
+
+    try {
+      const { unmount } = render(<App />)
+
+      const select = await screen.findByLabelText('Engine:')
+      expect(select).toBeTruthy()
+      expect((select as HTMLSelectElement).value).toBe('xterm')
+
+      const options = Array.from((select as HTMLSelectElement).options).map((o) => o.text)
+      expect(options).toContain('xterm.js')
+      expect(options).toContain('ghostty-web (experimental)')
+
+      unmount()
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('persists engine choice in cookie and restores on reload', async () => {
+    sessionStorage.setItem('kocao.apiToken', 't-full')
+    window.location.hash = '#/workspace-sessions/sess-2/attach?role=viewer'
+    document.cookie = 'kocao.termEngine.sess-2=; max-age=0'
+
+    const urls: string[] = []
+    stubWebSocket(urls)
+    server.use(...attachHandlers())
+
+    try {
+      const { unmount } = render(<App />)
+
+      const select = await screen.findByLabelText('Engine:')
+      await userEvent.selectOptions(select, 'ghostty')
+
+      expect((select as HTMLSelectElement).value).toBe('ghostty')
+      expect(document.cookie).toContain('kocao.termEngine.sess-2=ghostty')
+
+      unmount()
+
+      // Re-render — cookie should restore ghostty
+      const { unmount: unmount2 } = render(<App />)
+      const select2 = await screen.findByLabelText('Engine:')
+      expect((select2 as HTMLSelectElement).value).toBe('ghostty')
+      unmount2()
+    } finally {
+      document.cookie = 'kocao.termEngine.sess-2=; max-age=0'
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('switching engine does not reconnect websocket', async () => {
+    sessionStorage.setItem('kocao.apiToken', 't-full')
+    window.location.hash = '#/workspace-sessions/sess-3/attach?role=driver'
+    document.cookie = 'kocao.termEngine.sess-3=; max-age=0'
+
+    const urls: string[] = []
+    stubWebSocket(urls)
+    server.use(...attachHandlers())
+
+    try {
+      const { unmount } = render(<App />)
+
+      await screen.findByText('connected')
+      const wsCountBefore = urls.length
+
+      const select = await screen.findByLabelText('Engine:')
+      await userEvent.selectOptions(select, 'ghostty')
+
+      // Engine switch should NOT create a new websocket connection
+      expect(urls.length).toBe(wsCountBefore)
+
+      unmount()
+    } finally {
+      document.cookie = 'kocao.termEngine.sess-3=; max-age=0'
+      vi.unstubAllGlobals()
+    }
   })
 })
 
