@@ -10,16 +10,16 @@ export function SidebarNav() {
 
   const linkClass = (href: string) =>
     cn(
-      'px-3 py-1.5 rounded-md text-xs font-medium transition-colors flex items-center gap-2',
+      'px-3 py-1.5 rounded-md text-sm font-medium transition-colors flex items-center gap-2',
       isActive(path, href)
-        ? 'bg-primary/15 text-primary'
+        ? 'bg-sidebar-accent text-sidebar-foreground'
         : 'text-muted-foreground hover:bg-secondary hover:text-foreground',
     )
 
   return (
     <nav className="flex flex-col gap-3 p-2 flex-1">
       <div>
-        <div className="px-3 mb-1 text-[10px] font-medium uppercase tracking-[0.18em] text-muted-foreground/60">
+        <div className="px-3 mb-1 text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground/70">
           Workspace
         </div>
         <div className="flex flex-col gap-0.5">
@@ -39,7 +39,7 @@ export function SidebarNav() {
       </div>
 
       <div>
-        <div className="px-3 mb-1 text-[10px] font-medium uppercase tracking-[0.18em] text-muted-foreground/60">
+        <div className="px-3 mb-1 text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground/70">
           Account
         </div>
         <div className="flex flex-col gap-0.5">
