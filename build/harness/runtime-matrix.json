@@ -48,7 +48,7 @@
     "make": "make --version",
     "mise": "mise --version",
     "nvim": "nvim --version",
-    "opencode": "opencode version",
+    "opencode": "opencode --version",
     "pkg-config": "pkg-config --version",
     "rg": "rg --version",
     "tmux": "tmux -V",

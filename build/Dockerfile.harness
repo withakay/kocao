@@ -85,17 +85,17 @@ RUN for v in 1.93.1 1.92.0 1.91.1; do \
 # NOTE: The installer script is fetched at build time. The version ARG pins
 # the binary version but not the installer content. For production builds,
 # consider vendoring the installer or adding checksum verification.
-ARG CLAUDE_CODE_VERSION=1.0.3
-RUN curl -fsSL https://claude.ai/install.sh | bash -s -- --version "${CLAUDE_CODE_VERSION}" \
+ARG CLAUDE_CODE_VERSION=2.1.62
+RUN curl -fsSL https://claude.ai/install.sh | bash -s -- "${CLAUDE_CODE_VERSION}" \
   && claude --version
 
 # OpenCode — installed via npm (Node is already available via mise).
-ARG OPENCODE_VERSION=0.5.6
+ARG OPENCODE_VERSION=1.2.15
 RUN npm install -g "opencode-ai@${OPENCODE_VERSION}" \
-  && opencode version
+  && opencode --version
 
 # Codex CLI — installed via npm.
-ARG CODEX_VERSION=0.1.2505301758
+ARG CODEX_VERSION=0.106.0
 RUN npm install -g "@openai/codex@${CODEX_VERSION}" \
   && codex --version
 
