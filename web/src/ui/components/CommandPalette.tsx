@@ -32,22 +32,22 @@ export function CommandPalette() {
 
       <div className="relative w-full max-w-lg">
         <Command
-          className="rounded-xl border border-white/[0.06] bg-[#0a0a0a]/95 shadow-2xl shadow-black/50 overflow-hidden"
+          className="rounded-xl border border-border/60 bg-card/95 shadow-2xl shadow-black/50 overflow-hidden"
           onKeyDown={(e: React.KeyboardEvent) => {
             if (e.key === 'Escape') setOpen(false)
           }}
         >
           <Command.Input
             placeholder="Type a command or search..."
-            className="w-full border-b border-white/[0.06] bg-transparent px-5 py-3.5 text-base text-white/80 placeholder:text-white/30 outline-none"
+            className="w-full border-b border-border/60 bg-transparent px-5 py-3.5 text-base text-foreground/85 placeholder:text-muted-foreground/60 outline-none"
             autoFocus
           />
           <Command.List className="max-h-64 overflow-y-auto p-1.5">
-            <Command.Empty className="px-4 py-4 text-center text-xs text-white/30">
+            <Command.Empty className="px-4 py-4 text-center text-xs text-muted-foreground/70">
               No results.
             </Command.Empty>
 
-            <Command.Group heading="Navigation" className="[&_[cmdk-group-heading]]:px-4 [&_[cmdk-group-heading]]:py-2 [&_[cmdk-group-heading]]:text-[10px] [&_[cmdk-group-heading]]:font-medium [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-[0.15em] [&_[cmdk-group-heading]]:text-white/25">
+            <Command.Group heading="Navigation" className="[&_[cmdk-group-heading]]:px-4 [&_[cmdk-group-heading]]:py-2 [&_[cmdk-group-heading]]:text-[10px] [&_[cmdk-group-heading]]:font-medium [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-[0.15em] [&_[cmdk-group-heading]]:text-muted-foreground/60">
               <Item onSelect={() => go('/workspace-sessions')} icon={<ArrowRightIcon />}>
                 Go to Sessions
               </Item>
@@ -62,9 +62,9 @@ export function CommandPalette() {
               </Item>
             </Command.Group>
 
-            <Command.Separator className="my-1 h-px bg-white/[0.04]" />
+            <Command.Separator className="my-1 h-px bg-border/40" />
 
-            <Command.Group heading="Layout" className="[&_[cmdk-group-heading]]:px-4 [&_[cmdk-group-heading]]:py-2 [&_[cmdk-group-heading]]:text-[10px] [&_[cmdk-group-heading]]:font-medium [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-[0.15em] [&_[cmdk-group-heading]]:text-white/25">
+            <Command.Group heading="Layout" className="[&_[cmdk-group-heading]]:px-4 [&_[cmdk-group-heading]]:py-2 [&_[cmdk-group-heading]]:text-[10px] [&_[cmdk-group-heading]]:font-medium [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-[0.15em] [&_[cmdk-group-heading]]:text-muted-foreground/60">
               <Item onSelect={() => { toggleSidebar(); setOpen(false) }} icon={<PanelsIcon />} shortcut="Cmd+\\">
                 Toggle Sidebar
               </Item>
@@ -83,19 +83,19 @@ export function CommandPalette() {
               )}
             </Command.Group>
 
-            <Command.Separator className="my-1 h-px bg-white/[0.04]" />
+            <Command.Separator className="my-1 h-px bg-border/40" />
 
-            <Command.Group heading="Actions" className="[&_[cmdk-group-heading]]:px-4 [&_[cmdk-group-heading]]:py-2 [&_[cmdk-group-heading]]:text-[10px] [&_[cmdk-group-heading]]:font-medium [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-[0.15em] [&_[cmdk-group-heading]]:text-white/25">
+            <Command.Group heading="Actions" className="[&_[cmdk-group-heading]]:px-4 [&_[cmdk-group-heading]]:py-2 [&_[cmdk-group-heading]]:text-[10px] [&_[cmdk-group-heading]]:font-medium [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-[0.15em] [&_[cmdk-group-heading]]:text-muted-foreground/60">
               <Item onSelect={() => { window.location.reload() }} icon={<RefreshIcon />} shortcut="Cmd+R">
                 Refresh Data
               </Item>
             </Command.Group>
           </Command.List>
 
-          <div className="border-t border-white/[0.04] px-4 py-2 text-[10px] text-white/20 flex gap-3">
-            <span><kbd className="text-[10px] font-mono bg-white/[0.06] border border-white/[0.06] rounded px-1.5 py-0.5 text-white/40">Esc</kbd> close</span>
-            <span><kbd className="text-[10px] font-mono bg-white/[0.06] border border-white/[0.06] rounded px-1.5 py-0.5 text-white/40">&uarr;&darr;</kbd> navigate</span>
-            <span><kbd className="text-[10px] font-mono bg-white/[0.06] border border-white/[0.06] rounded px-1.5 py-0.5 text-white/40">Enter</kbd> select</span>
+          <div className="border-t border-border/60 px-4 py-2 text-[10px] text-muted-foreground/70 flex gap-3">
+            <span><kbd className="text-[10px] font-mono bg-muted/50 border border-border/60 rounded px-1.5 py-0.5 text-muted-foreground/80">Esc</kbd> close</span>
+            <span><kbd className="text-[10px] font-mono bg-muted/50 border border-border/60 rounded px-1.5 py-0.5 text-muted-foreground/80">&uarr;&darr;</kbd> navigate</span>
+            <span><kbd className="text-[10px] font-mono bg-muted/50 border border-border/60 rounded px-1.5 py-0.5 text-muted-foreground/80">Enter</kbd> select</span>
           </div>
         </Command>
       </div>
@@ -107,11 +107,11 @@ function Item({ children, onSelect, icon, shortcut }: { children: React.ReactNod
   return (
     <Command.Item
       onSelect={onSelect}
-      className="rounded-lg px-4 py-2.5 text-sm text-white/80 cursor-pointer aria-selected:bg-white/[0.06] aria-selected:text-white transition-colors flex items-center gap-3"
+      className="rounded-lg px-4 py-2.5 text-sm text-foreground/85 cursor-pointer aria-selected:bg-secondary/70 aria-selected:text-foreground transition-colors flex items-center gap-3"
     >
       {icon && <span className="shrink-0">{icon}</span>}
       <span className="flex-1">{children}</span>
-      {shortcut && <kbd className="text-[10px] font-mono bg-white/[0.06] border border-white/[0.06] rounded px-1.5 py-0.5 text-white/40">{shortcut}</kbd>}
+      {shortcut && <kbd className="text-[10px] font-mono bg-muted/50 border border-border/60 rounded px-1.5 py-0.5 text-muted-foreground/80">{shortcut}</kbd>}
     </Command.Item>
   )
 }
