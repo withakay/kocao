@@ -7,7 +7,7 @@ import { App } from './App'
 
 // Mock terminal adapter factory — avoids loading real xterm/ghostty WASM in jsdom
 vi.mock('./lib/terminal-adapter', async (importOriginal) => {
-  const original = await importOriginal<typeof import('../lib/terminal-adapter')>()
+  const original = await importOriginal<typeof import('./lib/terminal-adapter')>()
   return {
     ...original,
     createTerminalAdapter: vi.fn(async () => ({
@@ -74,12 +74,7 @@ describe('workflow-ui-github', () => {
   it('stores token in session storage by default and local storage when remembered', async () => {
     localStorage.removeItem('kocao.apiToken')
     sessionStorage.removeItem('kocao.apiToken')
-    window.location.hash = '#/workspace-sessions'
-
-    server.use(
-      http.get('/api/v1/audit', () => HttpResponse.json({ events: [] })),
-      http.get('/api/v1/workspace-sessions', () => HttpResponse.json({ workspaceSessions: [] }))
-    )
+    window.location.hash = '#/settings'
 
     const { unmount } = render(<App />)
 
@@ -305,7 +300,7 @@ describe('auth-failures', () => {
     expect(sessionStorage.getItem('kocao.apiToken')).toBeNull()
     expect(localStorage.getItem('kocao.apiToken')).toBeNull()
 
-    await screen.findByText('No bearer token set. Auth required for API calls.')
+    await screen.findByText(/No bearer token set\./)
 
     unmount()
   })

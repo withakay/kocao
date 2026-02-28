@@ -1,18 +1,16 @@
 import { useMemo, useState, useEffect } from 'react'
-import { Link, Outlet, useRouterState } from '@tanstack/react-router'
+import { Outlet, useRouterState } from '@tanstack/react-router'
 import { cn } from '@/lib/utils'
 import { useSidebarCollapsed, PaletteContext, useAttachLayout } from '../lib/useLayoutState'
 import { useKeyboardShortcuts } from '../lib/useKeyboardShortcuts'
 import { CommandPalette } from './CommandPalette'
+import { SidebarNav } from './SidebarNav'
 
 const SIDEBAR_STORAGE_KEY = 'kocao.sidebar.width'
 const DEFAULT_SIDEBAR_WIDTH = 208 // w-52 in pixels
 const MIN_SIDEBAR_WIDTH = 180
 const MAX_SIDEBAR_WIDTH = 320
 
-function isActive(locationPath: string, href: string) {
-  return locationPath === href || locationPath.startsWith(href + '/')
-}
 
 export function Shell() {
   const path = useRouterState({ select: (s) => s.location.pathname })
@@ -97,13 +95,6 @@ export function Shell() {
 
   useKeyboardShortcuts(shortcuts)
 
-  const linkClass = (href: string) =>
-    cn(
-      'px-3 py-1.5 rounded-md text-xs font-medium transition-colors',
-      isActive(path, href)
-        ? 'bg-primary/15 text-primary'
-        : 'text-muted-foreground hover:bg-secondary hover:text-foreground',
-    )
 
   const paletteCtx = useMemo(() => ({
     open: paletteOpen,
@@ -128,17 +119,7 @@ export function Shell() {
                 </div>
               </div>
 
-              <nav className="flex flex-col gap-0.5 p-2 flex-1">
-                <Link className={linkClass('/workspace-sessions')} to="/workspace-sessions">
-                  Sessions
-                </Link>
-                <Link className={linkClass('/harness-runs')} to="/harness-runs">
-                  Runs
-                </Link>
-                <Link className={linkClass('/cluster')} to="/cluster">
-                  Cluster
-                </Link>
-              </nav>
+              <SidebarNav />
 
               <div className="px-4 py-2 text-[10px] text-muted-foreground/50 font-mono border-t border-border/40">
                 api: localhost:30080

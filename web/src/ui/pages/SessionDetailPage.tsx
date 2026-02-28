@@ -17,7 +17,7 @@ export function SessionDetailPage() {
   const nav = useNavigate()
 
   const onUnauthorized = useCallback(() => {
-    invalidateToken('Bearer token rejected (401). Please re-enter a valid token in the top bar.')
+    invalidateToken('Bearer token rejected (401). Please re-enter a valid token in Settings.')
   }, [invalidateToken])
 
   const sessQ = usePollingQuery(
@@ -50,6 +50,28 @@ export function SessionDetailPage() {
   const [egressMode, setEgressMode] = useState<'restricted' | 'full'>('restricted')
   const [starting, setStarting] = useState(false)
   const [startErr, setStartErr] = useState<string | null>(null)
+
+  const [deleting, setDeleting] = useState(false)
+  const [deleteErr, setDeleteErr] = useState<string | null>(null)
+
+  const killSession = useCallback(async () => {
+    if (token.trim() === '' || id === '') return
+    const name = sessQ.data?.displayName ?? id
+    if (!window.confirm(`Kill workspace session "${name}"? This will terminate active runs and delete the session.`)) {
+      return
+    }
+    setDeleting(true)
+    setDeleteErr(null)
+    try {
+      await api.deleteWorkspaceSession(token, id)
+      nav({ to: '/workspace-sessions' })
+    } catch (e) {
+      if (isUnauthorizedError(e)) { onUnauthorized(); return }
+      setDeleteErr(e instanceof Error ? e.message : String(e))
+    } finally {
+      setDeleting(false)
+    }
+  }, [token, id, nav, sessQ.data, onUnauthorized])
 
   const start = useCallback(async () => {
     setStarting(true)
@@ -92,7 +114,15 @@ export function SessionDetailPage() {
 
   return (
     <>
-      <Topbar title={`Session ${sess?.displayName ?? id}`} subtitle="Session context, harness run dispatch, and audit trail." />
+      <Topbar
+        title={`Session ${sess?.displayName ?? id}`}
+        subtitle="Session context, harness run dispatch, and audit trail."
+        right={sess && (sess.phase ?? '').toLowerCase() === 'active' ? (
+          <Btn variant="danger" disabled={deleting || token.trim() === ''} onClick={killSession} type="button">
+            {deleting ? 'Killing…' : 'Kill session'}
+          </Btn>
+        ) : null}
+      />
 
       <div className="flex-1 overflow-y-auto p-4 space-y-3">
         {/* Session Info */}
@@ -113,6 +143,7 @@ export function SessionDetailPage() {
             <div className="text-xs text-muted-foreground">{sessQ.loading ? 'Loading\u2026' : sessQ.error ?? 'No data.'}</div>
           )}
           {sessQ.error ? <ErrorBanner>{sessQ.error}</ErrorBanner> : null}
+          {deleteErr ? <ErrorBanner>{deleteErr}</ErrorBanner> : null}
         </CollapsibleSection>
 
         {/* Start Harness Run */}

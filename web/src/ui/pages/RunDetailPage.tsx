@@ -19,7 +19,7 @@ export function RunDetailPage() {
   const [acting, setActing] = useState(false)
 
   const onUnauthorized = useCallback(() => {
-    invalidateToken('Bearer token rejected (401). Please re-enter a valid token in the top bar.')
+    invalidateToken('Bearer token rejected (401). Please re-enter a valid token in Settings.')
   }, [invalidateToken])
 
   const runQ = usePollingQuery(

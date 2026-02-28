@@ -11,7 +11,7 @@ export function CommandPalette() {
 
   if (!open) return null
 
-  const go = (to: '/workspace-sessions' | '/harness-runs' | '/cluster') => {
+  const go = (to: '/workspace-sessions' | '/harness-runs' | '/cluster' | '/settings') => {
     navigate({ to })
     setOpen(false)
   }
@@ -56,6 +56,9 @@ export function CommandPalette() {
               </Item>
               <Item onSelect={() => go('/cluster')} icon={<ArrowRightIcon />}>
                 Go to Cluster
+              </Item>
+              <Item onSelect={() => go('/settings')} icon={<ArrowRightIcon />}>
+                Go to Settings
               </Item>
             </Command.Group>
 

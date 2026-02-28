@@ -17,6 +17,7 @@ import { RunsPage } from './pages/RunsPage'
 import { RunDetailPage } from './pages/RunDetailPage'
 import { AttachPage } from './pages/AttachPage'
 import { ClusterPage } from './pages/ClusterPage'
+import { SettingsPage } from './pages/SettingsPage'
 
 const rootRoute = createRootRoute({
   component: () => (
@@ -77,6 +78,12 @@ const clusterRoute = createRoute({
   component: ClusterPage,
 })
 
+const settingsRoute = createRoute({
+  getParentRoute: () => shellRoute,
+  path: '/settings',
+  component: SettingsPage,
+})
+
 const routeTree = rootRoute.addChildren([
   shellRoute.addChildren([
     indexRoute,
@@ -86,6 +93,7 @@ const routeTree = rootRoute.addChildren([
     runsRoute,
     runDetailRoute,
     clusterRoute,
+    settingsRoute,
   ]),
 ])
 
