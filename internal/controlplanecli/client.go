@@ -47,6 +47,7 @@ type AttachTokenResponse struct {
 	WorkspaceSessionID string `json:"workspaceSessionID"`
 	ClientID           string `json:"clientID"`
 	Role               string `json:"role"`
+	Mode               string `json:"mode,omitempty"`
 }
 
 type Client struct {
@@ -222,9 +223,9 @@ func (c *Client) GetPodLogs(ctx context.Context, podName string, container strin
 	return out, nil
 }
 
-func (c *Client) CreateAttachToken(ctx context.Context, workspaceSessionID string, role string) (AttachTokenResponse, error) {
+func (c *Client) CreateAttachToken(ctx context.Context, workspaceSessionID string, role string, mode string) (AttachTokenResponse, error) {
 	var out AttachTokenResponse
-	body := map[string]string{"role": role}
+	body := map[string]string{"role": role, "mode": mode}
 	route := "/api/v1/workspace-sessions/" + url.PathEscape(strings.TrimSpace(workspaceSessionID)) + "/attach-token"
 	if err := c.doJSON(ctx, http.MethodPost, route, nil, body, &out); err != nil {
 		return AttachTokenResponse{}, err

@@ -29,6 +29,7 @@ const (
 	attachClaimWorkspaceSessionID = "attach.workspaceSessionID"
 	attachClaimClientID           = "attach.clientID"
 	attachClaimRole               = "attach.role"
+	attachClaimMode               = "attach.mode"
 
 	attachCookieName = "kocao_attach"
 )
@@ -65,9 +66,29 @@ func normalizeAttachRole(v string) (AttachRole, bool) {
 	}
 }
 
+type AttachMode string
+
+const (
+	AttachModeExclusive     AttachMode = "exclusive"
+	AttachModeCollaborative AttachMode = "collab"
+)
+
+func normalizeAttachMode(v string) (AttachMode, bool) {
+	s := strings.ToLower(strings.TrimSpace(v))
+	switch s {
+	case "", "exclusive", "single", "single-driver":
+		return AttachModeExclusive, true
+	case "collab", "collaborative", "shared":
+		return AttachModeCollaborative, true
+	default:
+		return "", false
+	}
+}
+
 type attachTokenRequest struct {
 	Role     string `json:"role,omitempty"`
 	ClientID string `json:"clientID,omitempty"`
+	Mode     string `json:"mode,omitempty"`
 }
 
 type attachTokenResponse struct {
@@ -76,6 +97,7 @@ type attachTokenResponse struct {
 	WorkspaceSessionID string    `json:"workspaceSessionID"`
 	ClientID           string    `json:"clientID"`
 	Role               string    `json:"role"`
+	Mode               string    `json:"mode"`
 }
 
 type attachCookieResponse struct {
@@ -83,6 +105,7 @@ type attachCookieResponse struct {
 	WorkspaceSessionID string    `json:"workspaceSessionID"`
 	ClientID           string    `json:"clientID"`
 	Role               string    `json:"role"`
+	Mode               string    `json:"mode"`
 }
 
 type attachMsg struct {
@@ -95,6 +118,7 @@ type attachMsg struct {
 	WorkspaceSessionID string `json:"workspaceSessionID,omitempty"`
 	ClientID           string `json:"clientID,omitempty"`
 	Role               string `json:"role,omitempty"`
+	Mode               string `json:"mode,omitempty"`
 	DriverID           string `json:"driverID,omitempty"`
 	LeaseMS            int64  `json:"leaseMS,omitempty"`
 }
@@ -115,6 +139,7 @@ type attachSession struct {
 
 	mu      sync.Mutex
 	clients map[string]*attachClient
+	mode    AttachMode
 
 	driverClientID   string
 	driverLeaseUntil time.Time
@@ -127,7 +152,7 @@ type attachSession struct {
 	cleanupTimer *time.Timer
 }
 
-func newAttachSession(ns, sessionID string, restCfg *rest.Config) (*attachSession, error) {
+func newAttachSession(ns, sessionID string, mode AttachMode, restCfg *rest.Config) (*attachSession, error) {
 	if restCfg == nil {
 		return nil, errors.New("rest config required")
 	}
@@ -142,6 +167,7 @@ func newAttachSession(ns, sessionID string, restCfg *rest.Config) (*attachSessio
 		clientset: cs,
 		clients:   map[string]*attachClient{},
 		sizeCh:    make(chan remotecommand.TerminalSize, 8),
+		mode:      mode,
 	}, nil
 }
 
@@ -176,6 +202,14 @@ func (s *attachSession) currentDriverLocked(now time.Time) (string, time.Duratio
 func (s *attachSession) refreshLeaseLocked(now time.Time, clientID string) {
 	s.driverClientID = clientID
 	s.driverLeaseUntil = now.Add(attachDriverLease)
+}
+
+func (s *attachSession) stateLocked(now time.Time) attachMsg {
+	if s.mode == AttachModeCollaborative {
+		return attachMsg{Type: "state", Mode: string(s.mode), DriverID: "shared", LeaseMS: 0}
+	}
+	driverID, lease := s.currentDriverLocked(now)
+	return attachMsg{Type: "state", Mode: string(s.mode), DriverID: driverID, LeaseMS: lease.Milliseconds()}
 }
 
 func (s *attachSession) ensureBackendLocked(ctx context.Context, podName string) error {
@@ -272,7 +306,7 @@ func newAttachService(ns string, restCfg *rest.Config, k8s client.Client, tokens
 	return &AttachService{namespace: ns, restCfg: restCfg, k8s: k8s, tokens: tokens, audit: audit, sessions: map[string]*attachSession{}}
 }
 
-func (s *AttachService) issueToken(ctx context.Context, principalID string, workspaceSessionID string, role AttachRole, clientID string) (attachTokenResponse, error) {
+func (s *AttachService) issueToken(ctx context.Context, principalID string, workspaceSessionID string, role AttachRole, mode AttachMode, clientID string) (attachTokenResponse, error) {
 	if strings.TrimSpace(clientID) == "" {
 		clientID = newID()
 	}
@@ -282,32 +316,34 @@ func (s *AttachService) issueToken(ctx context.Context, principalID string, work
 		attachClaimWorkspaceSessionID: workspaceSessionID,
 		attachClaimClientID:           clientID,
 		attachClaimRole:               string(role),
+		attachClaimMode:               string(mode),
 	}
 	if err := s.tokens.CreateWithClaims(ctx, "attach-"+principalID, raw, []string{"attach:connect"}, exp, claims); err != nil {
 		return attachTokenResponse{}, err
 	}
-	return attachTokenResponse{Token: raw, ExpiresAt: exp, WorkspaceSessionID: workspaceSessionID, ClientID: clientID, Role: string(role)}, nil
+	return attachTokenResponse{Token: raw, ExpiresAt: exp, WorkspaceSessionID: workspaceSessionID, ClientID: clientID, Role: string(role), Mode: string(mode)}, nil
 }
 
-func (s *AttachService) claimsFromToken(ctx context.Context, raw string) (string, string, AttachRole, string, error) {
+func (s *AttachService) claimsFromToken(ctx context.Context, raw string) (string, string, AttachRole, AttachMode, string, error) {
 	rec, err := s.tokens.Lookup(ctx, raw)
 	if err != nil {
-		return "", "", "", "", err
+		return "", "", "", "", "", err
 	}
 	if rec == nil || rec.Claims == nil {
-		return "", "", "", "", errors.New("invalid token")
+		return "", "", "", "", "", errors.New("invalid token")
 	}
 	workspaceSessionID := strings.TrimSpace(rec.Claims[attachClaimWorkspaceSessionID])
 	clientID := strings.TrimSpace(rec.Claims[attachClaimClientID])
 	role, ok := normalizeAttachRole(rec.Claims[attachClaimRole])
-	if workspaceSessionID == "" || clientID == "" || !ok {
-		return "", "", "", "", errors.New("invalid token claims")
+	mode, modeOK := normalizeAttachMode(rec.Claims[attachClaimMode])
+	if workspaceSessionID == "" || clientID == "" || !ok || !modeOK {
+		return "", "", "", "", "", errors.New("invalid token claims")
 	}
 	actor := strings.TrimPrefix(rec.ID, "attach-")
 	if strings.TrimSpace(actor) == "" {
 		actor = rec.ID
 	}
-	return workspaceSessionID, clientID, role, actor, nil
+	return workspaceSessionID, clientID, role, mode, actor, nil
 }
 
 func (s *AttachService) findAttachPod(ctx context.Context, workspaceSessionID string) (string, error) {
@@ -491,6 +527,11 @@ func (a *API) handleAttachTokenIssue(w http.ResponseWriter, r *http.Request, wor
 		writeError(w, http.StatusBadRequest, "invalid role")
 		return
 	}
+	mode, modeOK := normalizeAttachMode(req.Mode)
+	if !modeOK {
+		writeError(w, http.StatusBadRequest, "invalid mode")
+		return
+	}
 	if role == AttachRoleDriver {
 		p, _ := principalFrom(r.Context())
 		if p == nil || !hasScope(p.Scopes, "control:write") {
@@ -499,12 +540,12 @@ func (a *API) handleAttachTokenIssue(w http.ResponseWriter, r *http.Request, wor
 		}
 	}
 	p := principal(r.Context())
-	resp, err := a.Attach.issueToken(r.Context(), p, workspaceSessionID, role, req.ClientID)
+	resp, err := a.Attach.issueToken(r.Context(), p, workspaceSessionID, role, mode, req.ClientID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "issue attach token failed")
 		return
 	}
-	a.Audit.Append(r.Context(), p, "attach.token.issued", "workspace-session", workspaceSessionID, "allowed", map[string]any{"role": resp.Role})
+	a.Audit.Append(r.Context(), p, "attach.token.issued", "workspace-session", workspaceSessionID, "allowed", map[string]any{"role": resp.Role, "mode": resp.Mode})
 	writeJSON(w, http.StatusCreated, resp)
 }
 
@@ -542,6 +583,11 @@ func (a *API) handleAttachCookieIssue(w http.ResponseWriter, r *http.Request, wo
 		writeError(w, http.StatusBadRequest, "invalid role")
 		return
 	}
+	mode, modeOK := normalizeAttachMode(req.Mode)
+	if !modeOK {
+		writeError(w, http.StatusBadRequest, "invalid mode")
+		return
+	}
 	if role == AttachRoleDriver {
 		p, _ := principalFrom(r.Context())
 		if p == nil || !hasScope(p.Scopes, "control:write") {
@@ -550,7 +596,7 @@ func (a *API) handleAttachCookieIssue(w http.ResponseWriter, r *http.Request, wo
 		}
 	}
 	p := principal(r.Context())
-	resp, err := a.Attach.issueToken(r.Context(), p, workspaceSessionID, role, req.ClientID)
+	resp, err := a.Attach.issueToken(r.Context(), p, workspaceSessionID, role, mode, req.ClientID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "issue attach token failed")
 		return
@@ -573,8 +619,8 @@ func (a *API) handleAttachCookieIssue(w http.ResponseWriter, r *http.Request, wo
 		Expires:  resp.ExpiresAt,
 	})
 
-	a.Audit.Append(r.Context(), p, "attach.cookie.issued", "workspace-session", workspaceSessionID, "allowed", map[string]any{"role": resp.Role})
-	writeJSON(w, http.StatusCreated, attachCookieResponse{ExpiresAt: resp.ExpiresAt, WorkspaceSessionID: resp.WorkspaceSessionID, ClientID: resp.ClientID, Role: resp.Role})
+	a.Audit.Append(r.Context(), p, "attach.cookie.issued", "workspace-session", workspaceSessionID, "allowed", map[string]any{"role": resp.Role, "mode": resp.Mode})
+	writeJSON(w, http.StatusCreated, attachCookieResponse{ExpiresAt: resp.ExpiresAt, WorkspaceSessionID: resp.WorkspaceSessionID, ClientID: resp.ClientID, Role: resp.Role, Mode: resp.Mode})
 }
 
 func isHTTPSRequest(r *http.Request) bool {
@@ -609,7 +655,7 @@ func (a *API) handleAttachWS(w http.ResponseWriter, r *http.Request, workspaceSe
 		return
 	}
 
-	claimedWorkspaceSessionID, clientID, role, actor, err := a.Attach.claimsFromToken(r.Context(), tok)
+	claimedWorkspaceSessionID, clientID, role, mode, actor, err := a.Attach.claimsFromToken(r.Context(), tok)
 	if err != nil {
 		writeError(w, http.StatusUnauthorized, "invalid attach token")
 		return
@@ -625,10 +671,10 @@ func (a *API) handleAttachWS(w http.ResponseWriter, r *http.Request, workspaceSe
 		return
 	}
 
-	a.Attach.handleConn(r.Context(), actor, workspaceSessionID, clientID, role, conn)
+	a.Attach.handleConn(r.Context(), actor, workspaceSessionID, clientID, role, mode, conn)
 }
 
-func (s *AttachService) handleConn(ctx context.Context, actor, workspaceSessionID, clientID string, role AttachRole, conn *websocket.Conn) {
+func (s *AttachService) handleConn(ctx context.Context, actor, workspaceSessionID, clientID string, role AttachRole, mode AttachMode, conn *websocket.Conn) {
 	defer func() { _ = conn.Close() }()
 
 	conn.SetReadLimit(attachWSReadLimit)
@@ -641,7 +687,7 @@ func (s *AttachService) handleConn(ctx context.Context, actor, workspaceSessionI
 	s.mu.Lock()
 	sess, ok := s.sessions[workspaceSessionID]
 	if !ok {
-		created, err := newAttachSession(s.namespace, workspaceSessionID, s.restCfg)
+		created, err := newAttachSession(s.namespace, workspaceSessionID, mode, s.restCfg)
 		if err != nil {
 			s.mu.Unlock()
 			_ = conn.WriteJSON(attachMsg{Type: "error", Message: "attach not available"})
@@ -651,6 +697,23 @@ func (s *AttachService) handleConn(ctx context.Context, actor, workspaceSessionI
 		s.sessions[workspaceSessionID] = sess
 	}
 	s.mu.Unlock()
+
+	sess.mu.Lock()
+	if sess.mode != mode {
+		if len(sess.clients) == 0 {
+			sess.mode = mode
+			sess.driverClientID = ""
+			sess.driverLeaseUntil = time.Time{}
+		} else {
+			sess.mu.Unlock()
+			_ = conn.WriteJSON(attachMsg{Type: "error", Message: "attach mode mismatch"})
+			if s.audit != nil {
+				s.audit.Append(ctx, actor, "attach.connect", "workspace-session", workspaceSessionID, "denied", map[string]any{"clientID": clientID, "role": string(role), "mode": string(mode), "reason": "mode_mismatch"})
+			}
+			return
+		}
+	}
+	sess.mu.Unlock()
 
 	cli := &attachClient{conn: conn, clientID: clientID, maxRole: role, role: role, send: make(chan attachMsg, 64)}
 
@@ -686,21 +749,33 @@ func (s *AttachService) handleConn(ctx context.Context, actor, workspaceSessionI
 		sess.cleanupTimer.Stop()
 		sess.cleanupTimer = nil
 	}
-	curDriver, _ := sess.currentDriverLocked(now)
 	roleVia := "join"
-	// Driver reconnect gets the role even if token is viewer.
-	if sess.driverClientID == clientID && curDriver == clientID {
-		cli.role = AttachRoleDriver
-		sess.refreshLeaseLocked(now, clientID)
-		roleVia = "reconnect"
-	} else if cli.maxRole == AttachRoleDriver && curDriver == "" {
-		// No active driver; driver-capable token can claim the lease.
-		cli.role = AttachRoleDriver
-		sess.refreshLeaseLocked(now, clientID)
-		roleVia = "claim"
+	if sess.mode == AttachModeCollaborative {
+		if cli.maxRole == AttachRoleDriver {
+			cli.role = AttachRoleDriver
+			roleVia = "join_collab"
+		} else {
+			cli.role = AttachRoleViewer
+			roleVia = "join_collab_viewer"
+		}
+		sess.driverClientID = ""
+		sess.driverLeaseUntil = time.Time{}
 	} else {
-		// Active lease held by someone else; join as viewer until lease transfer.
-		cli.role = AttachRoleViewer
+		curDriver, _ := sess.currentDriverLocked(now)
+		// Driver reconnect gets the role even if token is viewer.
+		if sess.driverClientID == clientID && curDriver == clientID {
+			cli.role = AttachRoleDriver
+			sess.refreshLeaseLocked(now, clientID)
+			roleVia = "reconnect"
+		} else if cli.maxRole == AttachRoleDriver && curDriver == "" {
+			// No active driver; driver-capable token can claim the lease.
+			cli.role = AttachRoleDriver
+			sess.refreshLeaseLocked(now, clientID)
+			roleVia = "claim"
+		} else {
+			// Active lease held by someone else; join as viewer until lease transfer.
+			cli.role = AttachRoleViewer
+		}
 	}
 	sess.clients[clientID] = cli
 	if sess.backendCancel == nil {
@@ -709,18 +784,19 @@ func (s *AttachService) handleConn(ctx context.Context, actor, workspaceSessionI
 			_ = sess.ensureBackendLocked(ctx, podName)
 		}
 	}
-	driverID, lease := sess.currentDriverLocked(now)
-	sess.broadcastLocked(attachMsg{Type: "state", DriverID: driverID, LeaseMS: lease.Milliseconds()})
+	state := sess.stateLocked(now)
+	sessMode := sess.mode
+	sess.broadcastLocked(state)
 	sess.mu.Unlock()
 
 	if s.audit != nil {
-		s.audit.Append(ctx, actor, "attach.connect", "workspace-session", workspaceSessionID, "allowed", map[string]any{"clientID": clientID, "role": string(cli.role), "via": roleVia})
+		s.audit.Append(ctx, actor, "attach.connect", "workspace-session", workspaceSessionID, "allowed", map[string]any{"clientID": clientID, "role": string(cli.role), "mode": string(sessMode), "via": roleVia})
 		if cli.role == AttachRoleDriver {
-			s.audit.Append(ctx, actor, "attach.control.acquired", "workspace-session", workspaceSessionID, "allowed", map[string]any{"clientID": clientID, "via": roleVia})
+			s.audit.Append(ctx, actor, "attach.control.acquired", "workspace-session", workspaceSessionID, "allowed", map[string]any{"clientID": clientID, "mode": string(sessMode), "via": roleVia})
 		}
 	}
 
-	cli.send <- attachMsg{Type: "hello", WorkspaceSessionID: workspaceSessionID, ClientID: clientID, Role: string(cli.role), DriverID: driverID, LeaseMS: lease.Milliseconds()}
+	cli.send <- attachMsg{Type: "hello", WorkspaceSessionID: workspaceSessionID, ClientID: clientID, Role: string(cli.role), Mode: string(sessMode), DriverID: state.DriverID, LeaseMS: state.LeaseMS}
 
 	for {
 		var m attachMsg
@@ -732,12 +808,12 @@ func (s *AttachService) handleConn(ctx context.Context, actor, workspaceSessionI
 		case "keepalive":
 			now := time.Now()
 			sess.mu.Lock()
-			if sess.driverClientID == clientID {
+			if sess.mode == AttachModeExclusive && sess.driverClientID == clientID {
 				sess.refreshLeaseLocked(now, clientID)
 			}
-			driverID, lease := sess.currentDriverLocked(now)
+			state := sess.stateLocked(now)
 			sess.mu.Unlock()
-			cli.send <- attachMsg{Type: "state", DriverID: driverID, LeaseMS: lease.Milliseconds()}
+			cli.send <- state
 		case "resize":
 			if m.Cols > 0 && m.Rows > 0 {
 				select {
@@ -755,19 +831,24 @@ func (s *AttachService) handleConn(ctx context.Context, actor, workspaceSessionI
 			}
 			now := time.Now()
 			sess.mu.Lock()
-			cur, _ := sess.currentDriverLocked(now)
 			changed := false
-			if cur == "" || cur == clientID {
-				sess.refreshLeaseLocked(now, clientID)
+			if sess.mode == AttachModeCollaborative {
 				cli.role = AttachRoleDriver
-				cur = clientID
 				changed = true
+			} else {
+				cur, _ := sess.currentDriverLocked(now)
+				if cur == "" || cur == clientID {
+					sess.refreshLeaseLocked(now, clientID)
+					cli.role = AttachRoleDriver
+					changed = true
+				}
 			}
-			lease := time.Until(sess.driverLeaseUntil)
-			sess.broadcastLocked(attachMsg{Type: "state", DriverID: cur, LeaseMS: lease.Milliseconds()})
+			state := sess.stateLocked(now)
+			sess.broadcastLocked(state)
+			sessMode := sess.mode
 			sess.mu.Unlock()
 			if changed && s.audit != nil {
-				s.audit.Append(ctx, actor, "attach.control.acquired", "workspace-session", workspaceSessionID, "allowed", map[string]any{"clientID": clientID, "via": "take_control"})
+				s.audit.Append(ctx, actor, "attach.control.acquired", "workspace-session", workspaceSessionID, "allowed", map[string]any{"clientID": clientID, "mode": string(sessMode), "via": "take_control"})
 			}
 		case "stdin":
 			payload, err := base64.StdEncoding.DecodeString(m.Data)
@@ -777,23 +858,35 @@ func (s *AttachService) handleConn(ctx context.Context, actor, workspaceSessionI
 			}
 			now := time.Now()
 			sess.mu.Lock()
-			cur, _ := sess.currentDriverLocked(now)
-			w := sess.stdinW
-			if cur == clientID {
-				sess.refreshLeaseLocked(now, clientID)
+			allowed := false
+			reason := "read_only"
+			if sess.mode == AttachModeCollaborative {
+				if cli.role == AttachRoleDriver {
+					allowed = true
+				} else {
+					reason = "insufficient_role"
+				}
+			} else {
+				cur, _ := sess.currentDriverLocked(now)
+				if cur == clientID {
+					sess.refreshLeaseLocked(now, clientID)
+					allowed = true
+				}
 			}
-			lease := time.Until(sess.driverLeaseUntil)
-			sess.broadcastLocked(attachMsg{Type: "state", DriverID: sess.driverClientID, LeaseMS: lease.Milliseconds()})
+			w := sess.stdinW
+			state := sess.stateLocked(now)
+			sess.broadcastLocked(state)
+			sessMode := sess.mode
 			sess.mu.Unlock()
-			if cur != clientID {
+			if !allowed {
 				cli.send <- attachMsg{Type: "error", Message: "read-only"}
 				if s.audit != nil {
-					s.audit.Append(ctx, actor, "attach.stdin", "workspace-session", workspaceSessionID, "denied", map[string]any{"clientID": clientID, "bytes": len(payload), "reason": "read_only"})
+					s.audit.Append(ctx, actor, "attach.stdin", "workspace-session", workspaceSessionID, "denied", map[string]any{"clientID": clientID, "bytes": len(payload), "mode": string(sessMode), "reason": reason})
 				}
 				continue
 			}
 			if s.audit != nil {
-				s.audit.Append(ctx, actor, "attach.stdin", "workspace-session", workspaceSessionID, "allowed", map[string]any{"clientID": clientID, "bytes": len(payload)})
+				s.audit.Append(ctx, actor, "attach.stdin", "workspace-session", workspaceSessionID, "allowed", map[string]any{"clientID": clientID, "bytes": len(payload), "mode": string(sessMode)})
 			}
 			if w == nil {
 				podName, err := s.findAttachPod(ctx, workspaceSessionID)

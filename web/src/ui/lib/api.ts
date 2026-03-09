@@ -183,15 +183,15 @@ export const api = {
     return apiFetch<PodLogs>(`/api/v1/pods/${encodeURIComponent(podName)}/logs${suffix}`, { token })
   },
 
-  createAttachToken: (token: string, workspaceSessionID: string, role: 'viewer' | 'driver') =>
-    apiFetch<{ token: string; expiresAt: string; workspaceSessionID: string; clientID: string; role: string }>(
+  createAttachToken: (token: string, workspaceSessionID: string, role: 'viewer' | 'driver', mode: 'exclusive' | 'collab' = 'exclusive') =>
+    apiFetch<{ token: string; expiresAt: string; workspaceSessionID: string; clientID: string; role: string; mode?: string }>(
       `/api/v1/workspace-sessions/${encodeURIComponent(workspaceSessionID)}/attach-token`,
-      { method: 'POST', token, body: { role } }
+      { method: 'POST', token, body: { role, mode } }
     ),
 
-  createAttachCookie: (token: string, workspaceSessionID: string, role: 'viewer' | 'driver') =>
-    apiFetch<{ expiresAt: string; workspaceSessionID: string; clientID: string; role: string }>(
+  createAttachCookie: (token: string, workspaceSessionID: string, role: 'viewer' | 'driver', mode: 'exclusive' | 'collab' = 'exclusive') =>
+    apiFetch<{ expiresAt: string; workspaceSessionID: string; clientID: string; role: string; mode?: string }>(
       `/api/v1/workspace-sessions/${encodeURIComponent(workspaceSessionID)}/attach-cookie`,
-      { method: 'POST', token, body: { role }, credentials: 'include' }
+      { method: 'POST', token, body: { role, mode }, credentials: 'include' }
     )
 }

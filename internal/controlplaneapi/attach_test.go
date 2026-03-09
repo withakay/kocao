@@ -255,6 +255,109 @@ func TestAttachToken_RoleEnforcementAndTakeControl(t *testing.T) {
 	}
 }
 
+func TestAttachToken_CollabMode_AllowsMultipleDriverInputs(t *testing.T) {
+	api, cleanup := newTestAPIWithAttach(t)
+	defer cleanup()
+
+	if err := api.Tokens.Create(context.Background(), "t-full", "full", []string{"workspace-session:write", "workspace-session:read", "harness-run:write", "harness-run:read", "control:write"}); err != nil {
+		t.Fatalf("create token: %v", err)
+	}
+
+	srv := httptest.NewServer(api.Handler())
+	defer srv.Close()
+
+	resp, b := doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/workspace-sessions", "full", map[string]any{"repoURL": "https://example.com/repo"})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create session status = %d (body=%s)", resp.StatusCode, string(b))
+	}
+	var sess sessionResponse
+	_ = json.Unmarshal(b, &sess)
+
+	resp, _ = doJSON(t, srv.Client(), http.MethodPatch, srv.URL+"/api/v1/workspace-sessions/"+sess.ID+"/attach-control", "full", map[string]any{"enabled": true})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("attach-control status = %d, want 200", resp.StatusCode)
+	}
+
+	resp, b = doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/workspace-sessions/"+sess.ID+"/attach-token", "full", map[string]any{"role": "driver", "mode": "collab"})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("attach-token(driver collab 1) status = %d (body=%s)", resp.StatusCode, string(b))
+	}
+	var tok1 attachTokenResponse
+	_ = json.Unmarshal(b, &tok1)
+	if tok1.Mode != string(AttachModeCollaborative) {
+		t.Fatalf("token mode = %q, want %q", tok1.Mode, AttachModeCollaborative)
+	}
+
+	resp, b = doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/workspace-sessions/"+sess.ID+"/attach-token", "full", map[string]any{"role": "driver", "mode": "collab"})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("attach-token(driver collab 2) status = %d (body=%s)", resp.StatusCode, string(b))
+	}
+	var tok2 attachTokenResponse
+	_ = json.Unmarshal(b, &tok2)
+
+	c1, _, err := websocket.DefaultDialer.Dial(wsURL(srv.URL, "/api/v1/workspace-sessions/"+sess.ID+"/attach", url.Values{"token": []string{tok1.Token}}), nil)
+	if err != nil {
+		t.Fatalf("dial collab driver1: %v", err)
+	}
+	defer func() { _ = c1.Close() }()
+	hello1 := readMsgType(t, c1, "hello")
+	if hello1.Mode != string(AttachModeCollaborative) {
+		t.Fatalf("hello mode = %q, want %q", hello1.Mode, AttachModeCollaborative)
+	}
+	if hello1.Role != string(AttachRoleDriver) {
+		t.Fatalf("hello role = %q, want %q", hello1.Role, AttachRoleDriver)
+	}
+
+	c2, _, err := websocket.DefaultDialer.Dial(wsURL(srv.URL, "/api/v1/workspace-sessions/"+sess.ID+"/attach", url.Values{"token": []string{tok2.Token}}), nil)
+	if err != nil {
+		t.Fatalf("dial collab driver2: %v", err)
+	}
+	defer func() { _ = c2.Close() }()
+	hello2 := readMsgType(t, c2, "hello")
+	if hello2.Mode != string(AttachModeCollaborative) {
+		t.Fatalf("hello mode = %q, want %q", hello2.Mode, AttachModeCollaborative)
+	}
+	if hello2.Role != string(AttachRoleDriver) {
+		t.Fatalf("hello role = %q, want %q", hello2.Role, AttachRoleDriver)
+	}
+
+	if err := c1.WriteJSON(attachMsg{Type: "stdin", Data: base64.StdEncoding.EncodeToString([]byte("echo one\n"))}); err != nil {
+		t.Fatalf("write stdin1: %v", err)
+	}
+	if err := c2.WriteJSON(attachMsg{Type: "stdin", Data: base64.StdEncoding.EncodeToString([]byte("echo two\n"))}); err != nil {
+		t.Fatalf("write stdin2: %v", err)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	found := map[string]bool{}
+	for time.Now().Before(deadline) {
+		evs, err := api.Audit.List(context.Background(), 400)
+		if err != nil {
+			t.Fatalf("audit list: %v", err)
+		}
+		for _, e := range evs {
+			if e.Action != "attach.stdin" || e.Outcome != "allowed" {
+				continue
+			}
+			var meta map[string]any
+			_ = json.Unmarshal(e.Metadata, &meta)
+			cid, _ := meta["clientID"].(string)
+			mode, _ := meta["mode"].(string)
+			if mode != string(AttachModeCollaborative) {
+				continue
+			}
+			if cid == tok1.ClientID || cid == tok2.ClientID {
+				found[cid] = true
+			}
+		}
+		if found[tok1.ClientID] && found[tok2.ClientID] {
+			return
+		}
+		time.Sleep(15 * time.Millisecond)
+	}
+	t.Fatalf("expected attach.stdin allowed audit events for both collab drivers (found=%v)", found)
+}
+
 func TestAttachWS_ReadLimit_ClosesConnection(t *testing.T) {
 	oldLimit := attachWSReadLimit
 	oldPongWait := attachWSPongWait

@@ -69,6 +69,7 @@ Examples:
 ./bin/kocao sessions logs <workspace-session-id> --follow
 ./bin/kocao sessions attach <workspace-session-id>
 ./bin/kocao sessions attach <workspace-session-id> --driver
+./bin/kocao sessions attach <workspace-session-id> --driver --collab
 ```
 
 ## Cluster web edge

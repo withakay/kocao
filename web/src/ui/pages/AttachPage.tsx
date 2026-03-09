@@ -24,6 +24,7 @@ type AttachMsg = {
   workspaceSessionID?: string
   clientID?: string
   role?: string
+  mode?: string
   driverID?: string
   leaseMS?: number
 }
@@ -59,15 +60,16 @@ export function AttachPage() {
   const { workspaceSessionID } = useParams({ strict: false })
   const id = workspaceSessionID ?? ''
   const { token, invalidateToken } = useAuth()
-  const search = useSearch({ strict: false }) as { role?: 'viewer' | 'driver' }
+  const search = useSearch({ strict: false }) as { role?: 'viewer' | 'driver'; mode?: 'exclusive' | 'collab' }
   const role = search.role === 'driver' ? 'driver' : 'viewer'
+  const mode = search.mode === 'collab' ? 'collab' : 'exclusive'
 
   const { fullscreen, inspectorOpen, activityOpen, setFullscreen, setInspectorOpen, setActivityOpen, toggleFullscreen, toggleInspector, toggleActivity } = useAttachLayout()
 
   const [status, setStatus] = useState('initializing')
   const [err, setErr] = useState<string | null>(null)
-  const [hello, setHello] = useState<{ clientID: string; role: string; driverID: string; leaseMS: number } | null>(null)
-  const [driverState, setDriverState] = useState<{ driverID: string; leaseMS: number } | null>(null)
+  const [hello, setHello] = useState<{ clientID: string; role: string; mode: string; driverID: string; leaseMS: number } | null>(null)
+  const [driverState, setDriverState] = useState<{ mode: string; driverID: string; leaseMS: number } | null>(null)
   const [activityEvents, setActivityEvents] = useState<ActivityEvent[]>([])
 
   // Terminal engine state — per-session, restored from cookie
@@ -184,7 +186,7 @@ export function AttachPage() {
     const run = async () => {
       setStatus('setting cookie')
       try {
-        await api.createAttachCookie(token, id, role)
+        await api.createAttachCookie(token, id, role, mode)
         if (!alive) return
         setStatus('connecting')
 
@@ -228,13 +230,13 @@ export function AttachPage() {
             return
           }
           if (m.type === 'hello') {
-            setHello({ clientID: m.clientID ?? '', role: m.role ?? '', driverID: m.driverID ?? '', leaseMS: m.leaseMS ?? 0 })
-            addActivityEvent('hello', `Client ${m.clientID ?? '-'} (${m.role ?? '-'})`)
+            setHello({ clientID: m.clientID ?? '', role: m.role ?? '', mode: m.mode ?? '', driverID: m.driverID ?? '', leaseMS: m.leaseMS ?? 0 })
+            addActivityEvent('hello', `Client ${m.clientID ?? '-'} (${m.role ?? '-'}, ${m.mode ?? '-'})`)
             return
           }
           if (m.type === 'state') {
-            setDriverState({ driverID: m.driverID ?? '', leaseMS: m.leaseMS ?? 0 })
-            addActivityEvent('state', `Driver ${m.driverID ?? '-'} lease ${m.leaseMS ?? 0}ms`)
+            setDriverState({ mode: m.mode ?? '', driverID: m.driverID ?? '', leaseMS: m.leaseMS ?? 0 })
+            addActivityEvent('state', `Mode ${m.mode ?? '-'} driver ${m.driverID ?? '-'} lease ${m.leaseMS ?? 0}ms`)
             return
           }
           if (m.type === 'backend_closed') {
@@ -275,7 +277,7 @@ export function AttachPage() {
       ws?.close()
       wsRef.current = null
     }
-  }, [token, id, role, onUnauthorized, addActivityEvent, decoder])
+  }, [token, id, role, mode, onUnauthorized, addActivityEvent, decoder])
 
   const takeControl = useCallback(() => {
     const ws = wsRef.current

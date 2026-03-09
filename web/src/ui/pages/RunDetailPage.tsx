@@ -79,6 +79,11 @@ export function RunDetailPage() {
           params: { workspaceSessionID: run.workspaceSessionID },
           search: { role: 'driver' as const },
         },
+        collabDriver: {
+          to: '/workspace-sessions/$workspaceSessionID/attach' as const,
+          params: { workspaceSessionID: run.workspaceSessionID },
+          search: { role: 'driver' as const, mode: 'collab' as const },
+        },
       }
     : null
 
@@ -145,6 +150,7 @@ export function RunDetailPage() {
               <div className="flex items-center gap-2">
                 <Link className={btnClass('secondary')} to={attachLinks.viewer.to} params={attachLinks.viewer.params} search={attachLinks.viewer.search}>Open Viewer</Link>
                 <Link className={btnClass('primary')} to={attachLinks.driver.to} params={attachLinks.driver.params} search={attachLinks.driver.search}>Open Driver</Link>
+                <Link className={btnClass('secondary')} to={attachLinks.collabDriver.to} params={attachLinks.collabDriver.params} search={attachLinks.collabDriver.search}>Open Collab Driver</Link>
               </div>
             </>
           ) : (

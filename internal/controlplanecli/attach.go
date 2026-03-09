@@ -27,20 +27,22 @@ type attachMessage struct {
 	Rows    int    `json:"rows,omitempty"`
 	Message string `json:"message,omitempty"`
 	Role    string `json:"role,omitempty"`
+	Mode    string `json:"mode,omitempty"`
 }
 
 func runSessionAttachCommand(cfg Config, args []string, stdout io.Writer, stderr io.Writer) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: kocao sessions attach <workspace-session-id> [--driver]")
+		return fmt.Errorf("usage: kocao sessions attach <workspace-session-id> [--driver] [--collab]")
 	}
 	sessionID := strings.TrimSpace(args[0])
 	if sessionID == "" || strings.HasPrefix(sessionID, "-") {
-		return fmt.Errorf("usage: kocao sessions attach <workspace-session-id> [--driver]")
+		return fmt.Errorf("usage: kocao sessions attach <workspace-session-id> [--driver] [--collab]")
 	}
 
 	fs := flag.NewFlagSet("kocao sessions attach", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	driver := fs.Bool("driver", false, "request driver role")
+	collab := fs.Bool("collab", false, "enable collaborative multi-writer attach mode")
 	if err := fs.Parse(args[1:]); err != nil {
 		return err
 	}
@@ -60,16 +62,20 @@ func runSessionAttachCommand(cfg Config, args []string, stdout io.Writer, stderr
 	if *driver {
 		role = "driver"
 	}
-	return attachSession(ctx, client, sessionID, role, stdout, stderr)
+	mode := "exclusive"
+	if *collab {
+		mode = "collab"
+	}
+	return attachSession(ctx, client, sessionID, role, mode, stdout, stderr)
 }
 
-func attachSession(ctx context.Context, client *Client, workspaceSessionID string, role string, stdout io.Writer, stderr io.Writer) error {
+func attachSession(ctx context.Context, client *Client, workspaceSessionID string, role string, mode string, stdout io.Writer, stderr io.Writer) error {
 	fd := int(os.Stdin.Fd())
 	if !term.IsTerminal(fd) {
 		return fmt.Errorf("attach requires an interactive terminal (TTY)")
 	}
 
-	tok, err := client.CreateAttachToken(ctx, workspaceSessionID, role)
+	tok, err := client.CreateAttachToken(ctx, workspaceSessionID, role, mode)
 	if err != nil {
 		return err
 	}
@@ -107,7 +113,9 @@ func attachSession(ctx context.Context, client *Client, workspaceSessionID strin
 	go attachResize(ctx, fd, sendCh)
 	if role == "driver" {
 		go attachStdin(ctx, sendCh, errCh)
-		sendCh <- attachMessage{Type: "take_control"}
+		if !strings.EqualFold(mode, "collab") {
+			sendCh <- attachMessage{Type: "take_control"}
+		}
 	}
 
 	select {
@@ -176,6 +184,9 @@ func attachReader(ctx context.Context, conn *websocket.Conn, stdout io.Writer, s
 			errCh <- io.EOF
 			return
 		case "hello":
+			if strings.EqualFold(m.Mode, "collab") || strings.EqualFold(m.Mode, "collaborative") {
+				_, _ = fmt.Fprintln(stderr, "\r\nconnected in collaborative mode")
+			}
 			if strings.EqualFold(m.Role, "viewer") {
 				_, _ = fmt.Fprintln(stderr, "\r\nconnected in viewer mode (read-only)")
 			}

@@ -181,7 +181,7 @@ func writeSessionsUsage(w io.Writer) {
 	_, _ = fmt.Fprintln(w, "  kocao sessions get <workspace-session-id> [--json]")
 	_, _ = fmt.Fprintln(w, "  kocao sessions status <workspace-session-id> [--json]")
 	_, _ = fmt.Fprintln(w, "  kocao sessions logs <workspace-session-id> [--tail N] [--container NAME] [--follow] [--json]")
-	_, _ = fmt.Fprintln(w, "  kocao sessions attach <workspace-session-id> [--driver]")
+	_, _ = fmt.Fprintln(w, "  kocao sessions attach <workspace-session-id> [--driver] [--collab]")
 }
 
 func writeSessionsTable(w io.Writer, sessions []WorkspaceSession) error {
