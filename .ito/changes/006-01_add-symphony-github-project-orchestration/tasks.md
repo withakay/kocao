@@ -63,7 +63,7 @@ ______________________________________________________________________
 - **Verify**: `go test ./internal/operator/...`
 - **Done When**: The controller claims eligible work, avoids duplicate execution, and records retry/reconcile outcomes in tests.
 - **Updated At**: 2026-03-09
-- **Status**: [ ] pending
+- **Status**: [x] complete
 
 ### Task 2.3: Materialize claims as Session and HarnessRun execution
 

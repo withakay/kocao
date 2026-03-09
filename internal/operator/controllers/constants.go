@@ -32,4 +32,7 @@ const (
 	ConditionSucceeded = "Succeeded"
 	ConditionFailed    = "Failed"
 	ConditionSession   = "WorkspaceSessionReady"
+	ConditionConfig    = "ConfigReady"
+	ConditionSource    = "SourceSynced"
+	ConditionLifecycle = "OrchestrationReady"
 )

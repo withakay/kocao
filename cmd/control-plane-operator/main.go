@@ -70,6 +70,13 @@ func main() {
 		fmt.Fprintf(os.Stderr, "unable to create harnessrun controller: %v\n", err)
 		os.Exit(1)
 	}
+	if err := (&operatorcontrollers.SymphonyProjectReconciler{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+	}).SetupWithManager(mgr); err != nil {
+		fmt.Fprintf(os.Stderr, "unable to create symphony project controller: %v\n", err)
+		os.Exit(1)
+	}
 
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
 		fmt.Fprintf(os.Stderr, "unable to set up health check: %v\n", err)
