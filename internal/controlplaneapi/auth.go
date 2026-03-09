@@ -6,6 +6,19 @@ import (
 	"strings"
 )
 
+const (
+	ScopeWorkspaceSessionRead   = "workspace-session:read"
+	ScopeWorkspaceSessionWrite  = "workspace-session:write"
+	ScopeHarnessRunRead         = "harness-run:read"
+	ScopeHarnessRunWrite        = "harness-run:write"
+	ScopeControlWrite           = "control:write"
+	ScopeAuditRead              = "audit:read"
+	ScopeClusterRead            = "cluster:read"
+	ScopeSymphonyProjectRead    = "symphony-project:read"
+	ScopeSymphonyProjectWrite   = "symphony-project:write"
+	ScopeSymphonyProjectControl = "symphony-project:control"
+)
+
 type Authenticator struct {
 	tokens *TokenStore
 }

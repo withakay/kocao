@@ -1,6 +1,9 @@
 package v1alpha1
 
 import (
+	"fmt"
+	"strings"
+
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 )
@@ -21,6 +24,25 @@ const (
 	HarnessRunPhaseRunning   HarnessRunPhase = "Running"
 	HarnessRunPhaseSucceeded HarnessRunPhase = "Succeeded"
 	HarnessRunPhaseFailed    HarnessRunPhase = "Failed"
+)
+
+type SymphonyProjectPhase string
+
+const (
+	SymphonyProjectPhasePending SymphonyProjectPhase = "Pending"
+	SymphonyProjectPhaseReady   SymphonyProjectPhase = "Ready"
+	SymphonyProjectPhasePaused  SymphonyProjectPhase = "Paused"
+	SymphonyProjectPhaseError   SymphonyProjectPhase = "Error"
+)
+
+const (
+	DefaultSymphonyPollIntervalSeconds = 60
+	DefaultSymphonyMaxConcurrentItems  = 1
+	DefaultSymphonyRetryBaseDelay      = 60
+	DefaultSymphonyRetryMaxDelay       = 900
+	DefaultSymphonyRecentSkipLimit     = 20
+	DefaultSymphonyRecentErrorLimit    = 20
+	DefaultSymphonyActiveStateLimit    = 20
 )
 
 // Session describes a long-lived orchestration container for HarnessRuns.
@@ -73,6 +95,234 @@ type AgentAuthSpec struct {
 	//   opencode-auth.json → /home/kocao/.local/share/opencode/auth.json
 	//   codex-auth.json    → /home/kocao/.codex/auth.json
 	OauthSecretName string `json:"oauthSecretName,omitempty"`
+}
+
+type SecretKeyRef struct {
+	Name string `json:"name"`
+	Key  string `json:"key,omitempty"`
+}
+
+type GitHubProjectRef struct {
+	Owner  string `json:"owner"`
+	Number int64  `json:"number"`
+}
+
+type SymphonyProjectSourceSpec struct {
+	Project         GitHubProjectRef `json:"project"`
+	TokenSecretRef  SecretKeyRef     `json:"tokenSecretRef"`
+	ActiveStates    []string         `json:"activeStates,omitempty"`
+	TerminalStates  []string         `json:"terminalStates,omitempty"`
+	FieldName       string           `json:"fieldName,omitempty"`
+	PollIntervalSec int32            `json:"pollIntervalSeconds,omitempty"`
+}
+
+type SymphonyProjectRepositorySpec struct {
+	Owner      string         `json:"owner"`
+	Name       string         `json:"name"`
+	RepoURL    string         `json:"repoURL,omitempty"`
+	Branch     string         `json:"branch,omitempty"`
+	GitAuth    *GitAuthSpec   `json:"gitAuth,omitempty"`
+	AgentAuth  *AgentAuthSpec `json:"agentAuth,omitempty"`
+	EgressMode string         `json:"egressMode,omitempty"`
+}
+
+func (in SymphonyProjectRepositorySpec) RepositoryKey() string {
+	owner := strings.TrimSpace(strings.ToLower(in.Owner))
+	name := strings.TrimSpace(strings.ToLower(in.Name))
+	if owner == "" || name == "" {
+		return ""
+	}
+	return owner + "/" + name
+}
+
+type SymphonyProjectRuntimeSpec struct {
+	Image                   string   `json:"image"`
+	Command                 []string `json:"command,omitempty"`
+	Args                    []string `json:"args,omitempty"`
+	WorkingDir              string   `json:"workingDir,omitempty"`
+	Env                     []EnvVar `json:"env,omitempty"`
+	MaxConcurrentItems      int32    `json:"maxConcurrentItems,omitempty"`
+	RetryBaseDelaySeconds   int32    `json:"retryBaseDelaySeconds,omitempty"`
+	RetryMaxDelaySeconds    int32    `json:"retryMaxDelaySeconds,omitempty"`
+	TTLSecondsAfterFinished *int32   `json:"ttlSecondsAfterFinished,omitempty"`
+	RecentSkipLimit         int32    `json:"recentSkipLimit,omitempty"`
+	RecentErrorLimit        int32    `json:"recentErrorLimit,omitempty"`
+	ActiveStatusItemLimit   int32    `json:"activeStatusItemLimit,omitempty"`
+	DefaultRepoRevision     string   `json:"defaultRepoRevision,omitempty"`
+	DefaultEgressMode       string   `json:"defaultEgressMode,omitempty"`
+}
+
+type SymphonyProjectSpec struct {
+	Paused       bool                            `json:"paused,omitempty"`
+	Source       SymphonyProjectSourceSpec       `json:"source"`
+	Repositories []SymphonyProjectRepositorySpec `json:"repositories"`
+	Runtime      SymphonyProjectRuntimeSpec      `json:"runtime"`
+}
+
+type SymphonyProjectIssueRefStatus struct {
+	Repository string `json:"repository,omitempty"`
+	Number     int64  `json:"number,omitempty"`
+	NodeID     string `json:"nodeId,omitempty"`
+	URL        string `json:"url,omitempty"`
+	Title      string `json:"title,omitempty"`
+}
+
+type SymphonyProjectRunRefStatus struct {
+	SessionName    string `json:"sessionName,omitempty"`
+	HarnessRunName string `json:"harnessRunName,omitempty"`
+}
+
+type SymphonyProjectClaimStatus struct {
+	ItemID          string                        `json:"itemId,omitempty"`
+	Issue           SymphonyProjectIssueRefStatus `json:"issue,omitempty"`
+	Attempt         int32                         `json:"attempt,omitempty"`
+	Phase           string                        `json:"phase,omitempty"`
+	ClaimedAt       *metav1.Time                  `json:"claimedAt,omitempty"`
+	LastUpdatedTime *metav1.Time                  `json:"lastUpdatedTime,omitempty"`
+	RunRef          SymphonyProjectRunRefStatus   `json:"runRef,omitempty"`
+}
+
+type SymphonyProjectRetryStatus struct {
+	ItemID        string                        `json:"itemId,omitempty"`
+	Issue         SymphonyProjectIssueRefStatus `json:"issue,omitempty"`
+	Attempt       int32                         `json:"attempt,omitempty"`
+	Reason        string                        `json:"reason,omitempty"`
+	ReadyAt       *metav1.Time                  `json:"readyAt,omitempty"`
+	LastErrorTime *metav1.Time                  `json:"lastErrorTime,omitempty"`
+}
+
+type SymphonyProjectSkipStatus struct {
+	ItemID       string                        `json:"itemId,omitempty"`
+	Issue        SymphonyProjectIssueRefStatus `json:"issue,omitempty"`
+	Repository   string                        `json:"repository,omitempty"`
+	Reason       string                        `json:"reason,omitempty"`
+	Message      string                        `json:"message,omitempty"`
+	ObservedTime *metav1.Time                  `json:"observedTime,omitempty"`
+}
+
+type SymphonyProjectStatus struct {
+	ObservedGeneration int64                        `json:"observedGeneration,omitempty"`
+	Phase              SymphonyProjectPhase         `json:"phase,omitempty"`
+	Conditions         []metav1.Condition           `json:"conditions,omitempty"`
+	ResolvedFieldName  string                       `json:"resolvedFieldName,omitempty"`
+	LastSyncTime       *metav1.Time                 `json:"lastSyncTime,omitempty"`
+	LastSuccessfulSync *metav1.Time                 `json:"lastSuccessfulSyncTime,omitempty"`
+	NextSyncTime       *metav1.Time                 `json:"nextSyncTime,omitempty"`
+	ActiveClaims       []SymphonyProjectClaimStatus `json:"activeClaims,omitempty"`
+	RetryQueue         []SymphonyProjectRetryStatus `json:"retryQueue,omitempty"`
+	RecentSkips        []SymphonyProjectSkipStatus  `json:"recentSkips,omitempty"`
+	UnsupportedRepos   []string                     `json:"unsupportedRepositories,omitempty"`
+	LastError          string                       `json:"lastError,omitempty"`
+	EligibleItems      int32                        `json:"eligibleItems,omitempty"`
+	RunningItems       int32                        `json:"runningItems,omitempty"`
+	RetryingItems      int32                        `json:"retryingItems,omitempty"`
+	CompletedItems     int32                        `json:"completedItems,omitempty"`
+	FailedItems        int32                        `json:"failedItems,omitempty"`
+	SkippedItems       int32                        `json:"skippedItems,omitempty"`
+}
+
+type SymphonyProject struct {
+	metav1.TypeMeta   `json:",inline"`
+	metav1.ObjectMeta `json:"metadata,omitempty"`
+
+	Spec   SymphonyProjectSpec   `json:"spec,omitempty"`
+	Status SymphonyProjectStatus `json:"status,omitempty"`
+}
+
+type SymphonyProjectList struct {
+	metav1.TypeMeta `json:",inline"`
+	metav1.ListMeta `json:"metadata,omitempty"`
+	Items           []SymphonyProject `json:"items"`
+}
+
+func (in *SymphonyProject) ApplyDefaults() {
+	if in == nil {
+		return
+	}
+	if in.Spec.Source.PollIntervalSec <= 0 {
+		in.Spec.Source.PollIntervalSec = DefaultSymphonyPollIntervalSeconds
+	}
+	if in.Spec.Runtime.MaxConcurrentItems <= 0 {
+		in.Spec.Runtime.MaxConcurrentItems = DefaultSymphonyMaxConcurrentItems
+	}
+	if in.Spec.Runtime.RetryBaseDelaySeconds <= 0 {
+		in.Spec.Runtime.RetryBaseDelaySeconds = DefaultSymphonyRetryBaseDelay
+	}
+	if in.Spec.Runtime.RetryMaxDelaySeconds <= 0 {
+		in.Spec.Runtime.RetryMaxDelaySeconds = DefaultSymphonyRetryMaxDelay
+	}
+	if in.Spec.Runtime.RecentSkipLimit <= 0 {
+		in.Spec.Runtime.RecentSkipLimit = DefaultSymphonyRecentSkipLimit
+	}
+	if in.Spec.Runtime.RecentErrorLimit <= 0 {
+		in.Spec.Runtime.RecentErrorLimit = DefaultSymphonyRecentErrorLimit
+	}
+	if in.Spec.Runtime.ActiveStatusItemLimit <= 0 {
+		in.Spec.Runtime.ActiveStatusItemLimit = DefaultSymphonyActiveStateLimit
+	}
+	if strings.TrimSpace(in.Spec.Runtime.DefaultEgressMode) == "" {
+		in.Spec.Runtime.DefaultEgressMode = "restricted"
+	}
+	if strings.TrimSpace(in.Spec.Source.FieldName) == "" {
+		in.Spec.Source.FieldName = "Status"
+	}
+	for i := range in.Spec.Source.ActiveStates {
+		in.Spec.Source.ActiveStates[i] = strings.TrimSpace(in.Spec.Source.ActiveStates[i])
+	}
+	for i := range in.Spec.Source.TerminalStates {
+		in.Spec.Source.TerminalStates[i] = strings.TrimSpace(in.Spec.Source.TerminalStates[i])
+	}
+}
+
+func (in *SymphonyProject) Validate() error {
+	if in == nil {
+		return fmt.Errorf("symphony project is nil")
+	}
+	if strings.TrimSpace(in.Spec.Source.Project.Owner) == "" {
+		return fmt.Errorf("spec.source.project.owner is required")
+	}
+	if in.Spec.Source.Project.Number <= 0 {
+		return fmt.Errorf("spec.source.project.number must be greater than zero")
+	}
+	if strings.TrimSpace(in.Spec.Source.TokenSecretRef.Name) == "" {
+		return fmt.Errorf("spec.source.tokenSecretRef.name is required")
+	}
+	if len(in.Spec.Source.ActiveStates) == 0 {
+		return fmt.Errorf("spec.source.activeStates must contain at least one state")
+	}
+	if len(in.Spec.Source.TerminalStates) == 0 {
+		return fmt.Errorf("spec.source.terminalStates must contain at least one state")
+	}
+	if strings.TrimSpace(in.Spec.Runtime.Image) == "" {
+		return fmt.Errorf("spec.runtime.image is required")
+	}
+	if len(in.Spec.Repositories) == 0 {
+		return fmt.Errorf("spec.repositories must contain at least one repository")
+	}
+	if in.Spec.Source.PollIntervalSec <= 0 {
+		return fmt.Errorf("spec.source.pollIntervalSeconds must be greater than zero")
+	}
+	if in.Spec.Runtime.MaxConcurrentItems <= 0 {
+		return fmt.Errorf("spec.runtime.maxConcurrentItems must be greater than zero")
+	}
+	if in.Spec.Runtime.RetryBaseDelaySeconds <= 0 {
+		return fmt.Errorf("spec.runtime.retryBaseDelaySeconds must be greater than zero")
+	}
+	if in.Spec.Runtime.RetryMaxDelaySeconds < in.Spec.Runtime.RetryBaseDelaySeconds {
+		return fmt.Errorf("spec.runtime.retryMaxDelaySeconds must be greater than or equal to retryBaseDelaySeconds")
+	}
+	seenRepositories := map[string]struct{}{}
+	for _, repo := range in.Spec.Repositories {
+		if key := repo.RepositoryKey(); key == "" {
+			return fmt.Errorf("spec.repositories owner and name are required")
+		} else {
+			if _, exists := seenRepositories[key]; exists {
+				return fmt.Errorf("spec.repositories contains duplicate repository %q", key)
+			}
+			seenRepositories[key] = struct{}{}
+		}
+	}
+	return nil
 }
 
 // GitAuthSpec configures secure Git credential injection for HTTPS clones.
@@ -185,6 +435,24 @@ func (in *HarnessRunList) DeepCopyObject() runtime.Object {
 		return nil
 	}
 	out := new(HarnessRunList)
+	in.DeepCopyInto(out)
+	return out
+}
+
+func (in *SymphonyProject) DeepCopyObject() runtime.Object {
+	if in == nil {
+		return nil
+	}
+	out := new(SymphonyProject)
+	in.DeepCopyInto(out)
+	return out
+}
+
+func (in *SymphonyProjectList) DeepCopyObject() runtime.Object {
+	if in == nil {
+		return nil
+	}
+	out := new(SymphonyProjectList)
 	in.DeepCopyInto(out)
 	return out
 }

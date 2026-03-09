@@ -7,6 +7,7 @@ resources:
   - namespace.yaml
   - crd-session.yaml
   - crd-harnessrun.yaml
+  - crd-symphonyproject.yaml
   - serviceaccount.yaml
   - api-rbac.yaml
   - operator-rbac.yaml

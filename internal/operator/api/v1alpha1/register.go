@@ -16,7 +16,7 @@ var (
 )
 
 func AddToScheme(scheme *runtime.Scheme) error {
-	scheme.AddKnownTypes(GroupVersion, &Session{}, &SessionList{}, &HarnessRun{}, &HarnessRunList{})
+	scheme.AddKnownTypes(GroupVersion, &Session{}, &SessionList{}, &HarnessRun{}, &HarnessRunList{}, &SymphonyProject{}, &SymphonyProjectList{})
 	metav1.AddToGroupVersion(scheme, GroupVersion)
 	return nil
 }

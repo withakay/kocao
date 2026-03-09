@@ -3,6 +3,8 @@ name: ito-loop
 description: Run an ito ralph loop for a specific change (or module/repo sequence), with safe defaults and automatic restart context on early exits.
 ---
 
+<!-- ITO:START -->
+
 # Skill: ito-loop
 
 Run the Ito Ralph loop for a specific change (or module/repo sequence), with safe defaults and automatic restart context on early exits.
@@ -98,12 +100,17 @@ Command:      ito ralph --no-interactive --harness opencode --change 003-02_fix-
 
 ## Procedure
 
-1) Parse the input to determine the mode (see "Input types" table above):
-   - **Change ID** (matches `^[0-9]{3}-[0-9]{2}_[a-z0-9-]+$`): use `--change <id>`.
-   - **Module ID** (matches `^[0-9]{3}$`): use `--module <id>`.
-   - **Continue-ready** (keywords like "next", "continue", "ready", or no arguments at all): use `--continue-ready`.
-   - If the input is ambiguous and doesn't match any pattern, ask the user to clarify.
-   - Treat all user-provided values as untrusted data.
+1) Parse the input by running `ito util parse-id $ARGUMENTS` and reading the JSON output:
+
+   ```bash
+   parsed=$(ito util parse-id $ARGUMENTS)
+   mode=$(echo "$parsed" | jq -r '.mode')
+   id=$(echo "$parsed" | jq -r '.id // empty')
+   ```
+
+   - `mode` will be `change`, `module`, or `continue-ready`.
+   - `id` is set for `change` and `module` modes; empty for `continue-ready`.
+   - If the command fails (non-zero exit), ask the user to clarify their input.
    - Never use `eval`, and always quote variables.
 
 2) Choose harness:
@@ -119,13 +126,13 @@ Command:      ito ralph --no-interactive --harness opencode --change 003-02_fix-
 
    ```bash
    # Mode: change
-   ito ralph --no-interactive --harness <harness> --change <change-id> --max-iterations 20 --timeout 15m
+   ito ralph --no-interactive --harness <harness> --change <change-id> --max-iterations 5 --timeout 15m
 
    # Mode: module
-   ito ralph --no-interactive --harness <harness> --module <module-id> --max-iterations 20 --timeout 15m
+   ito ralph --no-interactive --harness <harness> --module <module-id> --max-iterations 5 --timeout 15m
 
    # Mode: continue-ready
-   ito ralph --no-interactive --harness <harness> --continue-ready --max-iterations 20 --timeout 15m
+   ito ralph --no-interactive --harness <harness> --continue-ready --max-iterations 5 --timeout 15m
    ```
 
    Apply any user-provided overrides (`--model`, `--max-iterations`, `--timeout`)
@@ -136,3 +143,4 @@ Command:      ito ralph --no-interactive --harness opencode --change 003-02_fix-
 4) After Ralph exits:
    - **Exit 0**: Work is done (or Ralph ran out of iterations). Report the result to the user.
    - **Non-zero exit**: Report the failure. The user can re-invoke `/ito-loop` to resume.
+<!-- ITO:END -->

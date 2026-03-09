@@ -1,7 +1,7 @@
 ---
 description: Balanced agent for typical development tasks, code review, and implementation work
 mode: subagent
-model: "openai/gpt-5.2-codex"
+model: "anthropic/claude-opus-4-6"
 variant: "high"
 temperature: 0.3
 tools:

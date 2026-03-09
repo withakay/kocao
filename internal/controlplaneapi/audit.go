@@ -7,9 +7,12 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
+
+var auditSensitiveKeyFragments = []string{"secret", "token", "password", "authorization", "credential"}
 
 type AuditEvent struct {
 	ID           string          `json:"id"`
@@ -39,7 +42,7 @@ func (a *AuditStore) Append(ctx context.Context, actor, action, resourceType, re
 	_ = ctx
 	meta := json.RawMessage(nil)
 	if metadata != nil {
-		if b, err := json.Marshal(metadata); err == nil {
+		if b, err := json.Marshal(sanitizeAuditMetadata(metadata)); err == nil {
 			meta = json.RawMessage(b)
 		}
 	}
@@ -126,4 +129,50 @@ func (a *AuditStore) List(ctx context.Context, limit int) ([]AuditEvent, error) 
 		return all, nil
 	}
 	return all[len(all)-limit:], nil
+}
+
+func appendSymphonyAudit(ctx context.Context, audit *AuditStore, actor, action, resourceID, outcome string, metadata map[string]any) {
+	if audit == nil {
+		return
+	}
+	audit.Append(ctx, actor, action, "symphony-project", resourceID, outcome, metadata)
+}
+
+func sanitizeAuditMetadata(metadata any) any {
+	switch value := metadata.(type) {
+	case map[string]any:
+		out := make(map[string]any, len(value))
+		for k, v := range value {
+			if auditKeyLooksSensitive(k) {
+				out[k] = "[redacted]"
+				continue
+			}
+			out[k] = sanitizeAuditMetadata(v)
+		}
+		return out
+	case []any:
+		out := make([]any, len(value))
+		for i := range value {
+			out[i] = sanitizeAuditMetadata(value[i])
+		}
+		return out
+	case []map[string]any:
+		out := make([]any, len(value))
+		for i := range value {
+			out[i] = sanitizeAuditMetadata(value[i])
+		}
+		return out
+	default:
+		return metadata
+	}
+}
+
+func auditKeyLooksSensitive(key string) bool {
+	key = strings.ToLower(strings.TrimSpace(key))
+	for _, fragment := range auditSensitiveKeyFragments {
+		if strings.Contains(key, fragment) {
+			return true
+		}
+	}
+	return false
 }
