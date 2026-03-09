@@ -9,6 +9,7 @@ import (
 	operatorv1alpha1 "github.com/withakay/kocao/internal/operator/api/v1alpha1"
 	"github.com/withakay/kocao/internal/symphony/githubsource"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -267,6 +268,51 @@ func TestSymphonyProjectReconcile_ReadyRetryCreatesNextAttemptRunAndReusesSessio
 	}
 	if run.Labels[LabelSymphonyItemID] != "PVT_item_1" {
 		t.Fatalf("run labels = %#v", run.Labels)
+	}
+}
+
+func TestSymphonyProjectReconcile_ReleasesActiveRunWhenItemLeavesBoard(t *testing.T) {
+	scheme := runtime.NewScheme()
+	_ = operatorv1alpha1.AddToScheme(scheme)
+	_ = corev1.AddToScheme(scheme)
+
+	project := newSymphonyProject("released")
+	secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "github-token", Namespace: "default"}, Data: map[string][]byte{"token": []byte("ghp_test")}}
+	sessionName := symphonySessionName(project, operatorv1alpha1.SymphonyProjectClaimStatus{Issue: operatorv1alpha1.SymphonyProjectIssueRefStatus{Repository: "withakay/kocao", Number: 401}})
+	run := &operatorv1alpha1.HarnessRun{
+		TypeMeta: metav1.TypeMeta{APIVersion: operatorv1alpha1.GroupVersion.String(), Kind: "HarnessRun"},
+		ObjectMeta: metav1.ObjectMeta{Name: "active-run", Namespace: "default", Labels: map[string]string{
+			LabelSymphonyProjectName: project.Name,
+			LabelSymphonyProjectUID:  string(project.UID),
+			LabelSymphonyItemID:      "PVT_item_1",
+		}},
+		Spec:   operatorv1alpha1.HarnessRunSpec{WorkspaceSessionName: sessionName, RepoURL: "https://github.com/withakay/kocao", Image: "ghcr.io/withakay/kocao-harness:latest"},
+		Status: operatorv1alpha1.HarnessRunStatus{Phase: operatorv1alpha1.HarnessRunPhaseRunning},
+	}
+	issue := githubIssue("withakay/kocao", 401, "Done")
+	loader := &stubSymphonySourceLoader{snapshot: githubsource.Snapshot{ResolvedFieldName: "Status", Skipped: []githubsource.SkippedItem{{ItemID: "PVT_item_1", Issue: &issue, Repository: "withakay/kocao", Reason: githubsource.SkipReasonInactiveState, Message: "item left active states", ObservedAt: time.Unix(60, 0).UTC()}}}}
+	cl := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(&operatorv1alpha1.SymphonyProject{}, &operatorv1alpha1.HarnessRun{}).WithObjects(project, secret, run).Build()
+	r := &SymphonyProjectReconciler{Client: cl, Scheme: scheme, Clock: clocktesting.NewFakeClock(time.Unix(60, 0).UTC()), SourceFactory: stubSymphonySourceFactory{loader: loader}}
+
+	_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(project)})
+	if err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	var got operatorv1alpha1.SymphonyProject
+	if err := cl.Get(context.Background(), client.ObjectKeyFromObject(project), &got); err != nil {
+		t.Fatalf("get project: %v", err)
+	}
+	if len(got.Status.ActiveClaims) != 0 {
+		t.Fatalf("active claims len = %d, want 0", len(got.Status.ActiveClaims))
+	}
+	if got.Status.RunningItems != 0 {
+		t.Fatalf("running items = %d, want 0", got.Status.RunningItems)
+	}
+
+	var deleted operatorv1alpha1.HarnessRun
+	if err := cl.Get(context.Background(), types.NamespacedName{Namespace: project.Namespace, Name: run.Name}, &deleted); !apierrors.IsNotFound(err) {
+		t.Fatalf("expected active run deletion, got err=%v", err)
 	}
 }
 

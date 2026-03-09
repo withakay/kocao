@@ -134,6 +134,9 @@ func (r *SymphonyProjectReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	if err != nil {
 		return ctrl.Result{}, err
 	}
+	if err := r.releaseInactiveRuns(ctx, updated, snapshot, runsByItem); err != nil {
+		return ctrl.Result{}, err
+	}
 
 	reconcileProjectRuntime(updated, snapshot, runsByItem, now.Time)
 	if err := r.materializeActiveClaims(ctx, updated, runsByItem, now.Time); err != nil {
@@ -320,6 +323,26 @@ func (r *SymphonyProjectReconciler) listProjectRuns(ctx context.Context, project
 		}
 	}
 	return byItem, nil
+}
+
+func (r *SymphonyProjectReconciler) releaseInactiveRuns(ctx context.Context, project *operatorv1alpha1.SymphonyProject, snapshot githubsource.Snapshot, runsByItem map[string]operatorv1alpha1.HarnessRun) error {
+	activeItems := make(map[string]struct{}, len(snapshot.Candidates))
+	for _, candidate := range snapshot.Candidates {
+		activeItems[candidate.ItemID] = struct{}{}
+	}
+	for itemID, run := range runsByItem {
+		if _, ok := activeItems[itemID]; ok {
+			continue
+		}
+		switch run.Status.Phase {
+		case operatorv1alpha1.HarnessRunPhasePending, operatorv1alpha1.HarnessRunPhaseStarting, operatorv1alpha1.HarnessRunPhaseRunning:
+			if err := r.Delete(ctx, &run); err != nil && !apierrors.IsNotFound(err) {
+				return err
+			}
+			delete(runsByItem, itemID)
+		}
+	}
+	return nil
 }
 
 func newerHarnessRun(left, right operatorv1alpha1.HarnessRun) bool {
