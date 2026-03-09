@@ -19,8 +19,9 @@ import (
 )
 
 const (
-	annotationAttachEnabled = "kocao.withakay.github.com/attach-enabled"
-	annotationEgressMode    = "kocao.withakay.github.com/egress-mode"
+	annotationAttachEnabled              = "kocao.withakay.github.com/attach-enabled"
+	annotationEgressMode                 = "kocao.withakay.github.com/egress-mode"
+	annotationSymphonyRefreshRequestedAt = "kocao.withakay.github.com/symphony-refresh-requested-at"
 )
 
 type API struct {
@@ -208,6 +209,55 @@ func (a *API) serveAPI(w http.ResponseWriter, r *http.Request) {
 		a.serveAuthz(w, r, []string{"cluster:read"}, func(_ *http.Request) (string, string, string) {
 			return "cluster.overview", "cluster", a.Namespace
 		}, a.handleClusterOverview)
+		return
+	case len(segs) == 1 && segs[0] == "symphony-projects" && r.Method == http.MethodGet:
+		a.serveAuthz(w, r, []string{ScopeSymphonyProjectRead}, func(_ *http.Request) (string, string, string) {
+			return "symphony-project.list", "symphony-project", "*"
+		}, a.handleSymphonyProjectsList)
+		return
+	case len(segs) == 1 && segs[0] == "symphony-projects" && r.Method == http.MethodPost:
+		a.serveAuthz(w, r, []string{ScopeSymphonyProjectWrite}, func(_ *http.Request) (string, string, string) {
+			return "symphony-project.create", "symphony-project", "(new)"
+		}, a.handleSymphonyProjectsCreate)
+		return
+	case len(segs) == 1 && segs[0] == "symphony-projects":
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	case len(segs) == 2 && segs[0] == "symphony-projects" && r.Method == http.MethodGet:
+		id := segs[1]
+		a.serveAuthz(w, r, []string{ScopeSymphonyProjectRead}, func(_ *http.Request) (string, string, string) {
+			return "symphony-project.get", "symphony-project", id
+		}, func(w http.ResponseWriter, r *http.Request) { a.handleSymphonyProjectGet(w, r, id) })
+		return
+	case len(segs) == 2 && segs[0] == "symphony-projects" && r.Method == http.MethodPatch:
+		id := segs[1]
+		a.serveAuthz(w, r, []string{ScopeSymphonyProjectWrite}, func(_ *http.Request) (string, string, string) {
+			return "symphony-project.update", "symphony-project", id
+		}, func(w http.ResponseWriter, r *http.Request) { a.handleSymphonyProjectPatch(w, r, id) })
+		return
+	case len(segs) == 2 && segs[0] == "symphony-projects":
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	case len(segs) == 3 && segs[0] == "symphony-projects" && segs[2] == "pause" && r.Method == http.MethodPost:
+		id := segs[1]
+		a.serveAuthz(w, r, []string{ScopeSymphonyProjectControl}, func(_ *http.Request) (string, string, string) {
+			return "symphony-project.pause", "symphony-project", id
+		}, func(w http.ResponseWriter, r *http.Request) { a.handleSymphonyProjectPause(w, r, id) })
+		return
+	case len(segs) == 3 && segs[0] == "symphony-projects" && segs[2] == "resume" && r.Method == http.MethodPost:
+		id := segs[1]
+		a.serveAuthz(w, r, []string{ScopeSymphonyProjectControl}, func(_ *http.Request) (string, string, string) {
+			return "symphony-project.resume", "symphony-project", id
+		}, func(w http.ResponseWriter, r *http.Request) { a.handleSymphonyProjectResume(w, r, id) })
+		return
+	case len(segs) == 3 && segs[0] == "symphony-projects" && segs[2] == "refresh" && r.Method == http.MethodPost:
+		id := segs[1]
+		a.serveAuthz(w, r, []string{ScopeSymphonyProjectControl}, func(_ *http.Request) (string, string, string) {
+			return "symphony-project.refresh", "symphony-project", id
+		}, func(w http.ResponseWriter, r *http.Request) { a.handleSymphonyProjectRefresh(w, r, id) })
+		return
+	case len(segs) == 3 && segs[0] == "symphony-projects":
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	case len(segs) == 1 && segs[0] == "cluster-overview":
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")

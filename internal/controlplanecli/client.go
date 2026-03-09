@@ -10,6 +10,8 @@ import (
 	"net/url"
 	"path"
 	"strings"
+
+	operatorv1alpha1 "github.com/withakay/kocao/internal/operator/api/v1alpha1"
 )
 
 type WorkspaceSession struct {
@@ -48,6 +50,21 @@ type AttachTokenResponse struct {
 	ClientID           string `json:"clientID"`
 	Role               string `json:"role"`
 	Mode               string `json:"mode,omitempty"`
+}
+
+type SymphonyProject struct {
+	Name       string                                 `json:"name"`
+	Namespace  string                                 `json:"namespace,omitempty"`
+	CreatedAt  string                                 `json:"createdAt,omitempty"`
+	Generation int64                                  `json:"generation,omitempty"`
+	Paused     bool                                   `json:"paused"`
+	Spec       operatorv1alpha1.SymphonyProjectSpec   `json:"spec"`
+	Status     operatorv1alpha1.SymphonyProjectStatus `json:"status"`
+}
+
+type SymphonyProjectRequest struct {
+	Name string                               `json:"name,omitempty"`
+	Spec operatorv1alpha1.SymphonyProjectSpec `json:"spec"`
 }
 
 type Client struct {
@@ -229,6 +246,63 @@ func (c *Client) CreateAttachToken(ctx context.Context, workspaceSessionID strin
 	route := "/api/v1/workspace-sessions/" + url.PathEscape(strings.TrimSpace(workspaceSessionID)) + "/attach-token"
 	if err := c.doJSON(ctx, http.MethodPost, route, nil, body, &out); err != nil {
 		return AttachTokenResponse{}, err
+	}
+	return out, nil
+}
+
+func (c *Client) ListSymphonyProjects(ctx context.Context) ([]SymphonyProject, error) {
+	var payload struct {
+		SymphonyProjects []SymphonyProject `json:"symphonyProjects"`
+	}
+	if err := c.doJSON(ctx, http.MethodGet, "/api/v1/symphony-projects", nil, nil, &payload); err != nil {
+		return nil, err
+	}
+	return payload.SymphonyProjects, nil
+}
+
+func (c *Client) GetSymphonyProject(ctx context.Context, name string) (SymphonyProject, error) {
+	var out SymphonyProject
+	route := "/api/v1/symphony-projects/" + url.PathEscape(strings.TrimSpace(name))
+	if err := c.doJSON(ctx, http.MethodGet, route, nil, nil, &out); err != nil {
+		return SymphonyProject{}, err
+	}
+	return out, nil
+}
+
+func (c *Client) CreateSymphonyProject(ctx context.Context, req SymphonyProjectRequest) (SymphonyProject, error) {
+	var out SymphonyProject
+	if err := c.doJSON(ctx, http.MethodPost, "/api/v1/symphony-projects", nil, req, &out); err != nil {
+		return SymphonyProject{}, err
+	}
+	return out, nil
+}
+
+func (c *Client) UpdateSymphonyProject(ctx context.Context, name string, req SymphonyProjectRequest) (SymphonyProject, error) {
+	var out SymphonyProject
+	route := "/api/v1/symphony-projects/" + url.PathEscape(strings.TrimSpace(name))
+	if err := c.doJSON(ctx, http.MethodPatch, route, nil, req, &out); err != nil {
+		return SymphonyProject{}, err
+	}
+	return out, nil
+}
+
+func (c *Client) PauseSymphonyProject(ctx context.Context, name string) (SymphonyProject, error) {
+	return c.controlSymphonyProject(ctx, name, "pause")
+}
+
+func (c *Client) ResumeSymphonyProject(ctx context.Context, name string) (SymphonyProject, error) {
+	return c.controlSymphonyProject(ctx, name, "resume")
+}
+
+func (c *Client) RefreshSymphonyProject(ctx context.Context, name string) (SymphonyProject, error) {
+	return c.controlSymphonyProject(ctx, name, "refresh")
+}
+
+func (c *Client) controlSymphonyProject(ctx context.Context, name string, action string) (SymphonyProject, error) {
+	var out SymphonyProject
+	route := "/api/v1/symphony-projects/" + url.PathEscape(strings.TrimSpace(name)) + "/" + action
+	if err := c.doJSON(ctx, http.MethodPost, route, nil, nil, &out); err != nil {
+		return SymphonyProject{}, err
 	}
 	return out, nil
 }

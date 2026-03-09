@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -126,5 +128,85 @@ func TestMainDebugShowsDiagnosticsOnNonJSONResponse(t *testing.T) {
 	}
 	if !strings.Contains(out, "received non-JSON response") {
 		t.Fatalf("expected non-json error message, got: %s", out)
+	}
+}
+
+func TestMainSymphonyListAndPause(t *testing.T) {
+	t.Setenv(EnvToken, "")
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/api/v1/symphony-projects" && r.Method == http.MethodGet:
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"symphonyProjects": []map[string]any{{
+					"name":   "demo",
+					"paused": false,
+					"spec": map[string]any{
+						"source": map[string]any{"project": map[string]any{"owner": "withakay", "number": 42}},
+					},
+					"status": map[string]any{"phase": "Ready"},
+				}},
+			})
+		case r.URL.Path == "/api/v1/symphony-projects/demo/pause" && r.Method == http.MethodPost:
+			_ = json.NewEncoder(w).Encode(map[string]any{"name": "demo", "paused": true, "spec": map[string]any{"source": map[string]any{"project": map[string]any{"owner": "withakay", "number": 42}}}, "status": map[string]any{"phase": "Paused"}})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code := Main([]string{"--api-url", srv.URL, "--token", "test-token", "symphony", "ls"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("exit code = %d stderr=%s", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "demo") {
+		t.Fatalf("expected project in output, got: %s", stdout.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	code = Main([]string{"--api-url", srv.URL, "--token", "test-token", "symphony", "pause", "demo"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("exit code = %d stderr=%s", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "pause symphony project demo") {
+		t.Fatalf("expected pause output, got: %s", stdout.String())
+	}
+}
+
+func TestMainSymphonyCreateJSON(t *testing.T) {
+	t.Setenv(EnvToken, "")
+	tempDir := t.TempDir()
+	payloadPath := filepath.Join(tempDir, "project.json")
+	if err := os.WriteFile(payloadPath, []byte(`{"name":"demo","spec":{"source":{"project":{"owner":"withakay","number":42},"tokenSecretRef":{"name":"github-token"},"activeStates":["Queued"],"terminalStates":["Done"]},"repositories":[{"owner":"withakay","name":"kocao"}],"runtime":{"image":"ghcr.io/withakay/kocao-harness:latest"}}}`), 0o600); err != nil {
+		t.Fatalf("write payload: %v", err)
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/symphony-projects" || r.Method != http.MethodPost {
+			http.NotFound(w, r)
+			return
+		}
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode payload: %v", err)
+		}
+		if payload["name"] != "demo" {
+			t.Fatalf("unexpected payload: %#v", payload)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"name": "demo", "paused": false, "spec": payload["spec"], "status": map[string]any{"phase": "Pending"}})
+	}))
+	defer srv.Close()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code := Main([]string{"--api-url", srv.URL, "--token", "test-token", "symphony", "create", "--file", payloadPath, "--json"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("exit code = %d stderr=%s", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), `"name": "demo"`) {
+		t.Fatalf("expected created project JSON, got: %s", stdout.String())
 	}
 }

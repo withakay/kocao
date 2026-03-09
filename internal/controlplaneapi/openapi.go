@@ -21,7 +21,12 @@ var openAPISpec = []byte(`{
     "/api/v1/workspace-sessions/{workspaceSessionID}/egress-override": {"patch": {"security": [{"bearerAuth": []}] }},
     "/api/v1/audit": {"get": {"security": [{"bearerAuth": []}] }},
     "/api/v1/cluster-overview": {"get": {"security": [{"bearerAuth": []}] }},
-    "/api/v1/pods/{podName}/logs": {"get": {"security": [{"bearerAuth": []}] }}
+    "/api/v1/pods/{podName}/logs": {"get": {"security": [{"bearerAuth": []}] }},
+    "/api/v1/symphony-projects": {"get": {"security": [{"bearerAuth": []}] }, "post": {"security": [{"bearerAuth": []}] }},
+    "/api/v1/symphony-projects/{projectName}": {"get": {"security": [{"bearerAuth": []}] }, "patch": {"security": [{"bearerAuth": []}] }},
+    "/api/v1/symphony-projects/{projectName}/pause": {"post": {"security": [{"bearerAuth": []}] }},
+    "/api/v1/symphony-projects/{projectName}/resume": {"post": {"security": [{"bearerAuth": []}] }},
+    "/api/v1/symphony-projects/{projectName}/refresh": {"post": {"security": [{"bearerAuth": []}] }}
   },
   "components": {
     "securitySchemes": {

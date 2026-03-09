@@ -338,6 +338,116 @@ func TestLifecycle_SessionRunControlsAndAudit(t *testing.T) {
 	}
 }
 
+func TestSymphonyProjectLifecycle_API(t *testing.T) {
+	api, cleanup := newTestAPI(t)
+	defer cleanup()
+
+	if err := api.Tokens.Create(context.Background(), "t-symphony", "symphony", []string{ScopeSymphonyProjectRead, ScopeSymphonyProjectWrite, ScopeSymphonyProjectControl}); err != nil {
+		t.Fatalf("create token: %v", err)
+	}
+
+	srv := httptest.NewServer(api.Handler())
+	defer srv.Close()
+
+	body := map[string]any{
+		"name": "demo",
+		"spec": map[string]any{
+			"source": map[string]any{
+				"project":        map[string]any{"owner": "withakay", "number": 42},
+				"tokenSecretRef": map[string]any{"name": "github-token"},
+				"activeStates":   []string{"Queued"},
+				"terminalStates": []string{"Done"},
+			},
+			"repositories": []map[string]any{{"owner": "withakay", "name": "kocao", "repoURL": "https://github.com/withakay/kocao"}},
+			"runtime":      map[string]any{"image": "ghcr.io/withakay/kocao-harness:latest"},
+		},
+	}
+
+	resp, b := doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/symphony-projects", "symphony", body)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create symphony project status = %d, want 201 (body=%s)", resp.StatusCode, string(b))
+	}
+	var created symphonyProjectResponse
+	_ = json.Unmarshal(b, &created)
+	if created.Name != "demo" {
+		t.Fatalf("name = %q, want demo", created.Name)
+	}
+	if created.Spec.Runtime.MaxConcurrentItems != operatorv1alpha1.DefaultSymphonyMaxConcurrentItems {
+		t.Fatalf("maxConcurrentItems = %d", created.Spec.Runtime.MaxConcurrentItems)
+	}
+
+	var stored operatorv1alpha1.SymphonyProject
+	if err := api.K8s.Get(context.Background(), client.ObjectKey{Namespace: api.Namespace, Name: "demo"}, &stored); err != nil {
+		t.Fatalf("get symphony project: %v", err)
+	}
+	stored.Status.Phase = operatorv1alpha1.SymphonyProjectPhaseReady
+	stored.Status.RunningItems = 1
+	stored.Status.RetryingItems = 2
+	nextSync := metav1.Now()
+	stored.Status.NextSyncTime = &nextSync
+	if err := api.K8s.Status().Update(context.Background(), &stored); err != nil {
+		t.Fatalf("update symphony status: %v", err)
+	}
+
+	resp, b = doJSON(t, srv.Client(), http.MethodGet, srv.URL+"/api/v1/symphony-projects", "symphony", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("list symphony projects status = %d, want 200 (body=%s)", resp.StatusCode, string(b))
+	}
+	if !strings.Contains(string(b), "symphonyProjects") {
+		t.Fatalf("list response missing symphonyProjects: %s", string(b))
+	}
+
+	resp, b = doJSON(t, srv.Client(), http.MethodGet, srv.URL+"/api/v1/symphony-projects/demo", "symphony", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("get symphony project status = %d, want 200 (body=%s)", resp.StatusCode, string(b))
+	}
+	var fetched symphonyProjectResponse
+	_ = json.Unmarshal(b, &fetched)
+	if fetched.Status.RunningItems != 1 || fetched.Status.RetryingItems != 2 {
+		t.Fatalf("unexpected runtime summary: %#v", fetched.Status)
+	}
+
+	resp, b = doJSON(t, srv.Client(), http.MethodPatch, srv.URL+"/api/v1/symphony-projects/demo", "symphony", map[string]any{
+		"spec": map[string]any{
+			"paused": true,
+			"source": map[string]any{
+				"project":        map[string]any{"owner": "withakay", "number": 42},
+				"tokenSecretRef": map[string]any{"name": "github-token"},
+				"activeStates":   []string{"Queued"},
+				"terminalStates": []string{"Done"},
+			},
+			"repositories": []map[string]any{{"owner": "withakay", "name": "kocao", "repoURL": "https://github.com/withakay/kocao", "branch": "main"}},
+			"runtime":      map[string]any{"image": "ghcr.io/withakay/kocao-harness:latest"},
+		},
+	})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("patch symphony project status = %d, want 200 (body=%s)", resp.StatusCode, string(b))
+	}
+
+	resp, _ = doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/symphony-projects/demo/pause", "symphony", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("pause symphony project status = %d, want 200", resp.StatusCode)
+	}
+	resp, _ = doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/symphony-projects/demo/resume", "symphony", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("resume symphony project status = %d, want 200", resp.StatusCode)
+	}
+	resp, _ = doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/symphony-projects/demo/refresh", "symphony", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("refresh symphony project status = %d, want 200", resp.StatusCode)
+	}
+
+	if err := api.K8s.Get(context.Background(), client.ObjectKey{Namespace: api.Namespace, Name: "demo"}, &stored); err != nil {
+		t.Fatalf("get refreshed symphony project: %v", err)
+	}
+	if stored.Spec.Paused {
+		t.Fatalf("expected project to be resumed")
+	}
+	if stored.Annotations[annotationSymphonyRefreshRequestedAt] == "" {
+		t.Fatalf("expected refresh annotation, got %#v", stored.Annotations)
+	}
+}
+
 func TestEgressOverride_RejectsAllowedHosts(t *testing.T) {
 	api, cleanup := newTestAPI(t)
 	defer cleanup()
