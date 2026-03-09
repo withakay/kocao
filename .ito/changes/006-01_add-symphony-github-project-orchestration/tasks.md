@@ -53,7 +53,7 @@ ______________________________________________________________________
 - **Verify**: `go test ./internal/...`
 - **Done When**: The source client can load candidate items, normalize issue data, and distinguish eligible vs skipped items in tests.
 - **Updated At**: 2026-03-09
-- **Status**: [ ] pending
+- **Status**: [x] complete
 
 ### Task 2.2: Implement Symphony orchestration controller loop
 
