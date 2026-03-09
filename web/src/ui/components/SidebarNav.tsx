@@ -35,6 +35,10 @@ export function SidebarNav() {
             <ClusterIcon />
             Cluster
           </Link>
+          <Link className={linkClass('/symphony')} to="/symphony">
+            <SymphonyIcon />
+            Symphony
+          </Link>
         </div>
       </div>
 
@@ -85,6 +89,18 @@ function UserIcon() {
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
       <path d="M20 21a8 8 0 1 0-16 0" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
       <circle cx="12" cy="8" r="4" stroke="currentColor" strokeWidth="2" />
+    </svg>
+  )
+}
+
+function SymphonyIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+      <circle cx="6" cy="12" r="2" fill="currentColor" />
+      <circle cx="18" cy="6" r="2" fill="currentColor" />
+      <circle cx="18" cy="18" r="2" fill="currentColor" />
+      <path d="M7.5 11l8-4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+      <path d="M7.5 13l8 4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
     </svg>
   )
 }

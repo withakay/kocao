@@ -18,6 +18,8 @@ import { RunDetailPage } from './pages/RunDetailPage'
 import { AttachPage } from './pages/AttachPage'
 import { ClusterPage } from './pages/ClusterPage'
 import { SettingsPage } from './pages/SettingsPage'
+import { SymphonyPage } from './pages/SymphonyPage'
+import { SymphonyDetailPage } from './pages/SymphonyDetailPage'
 
 const rootRoute = createRootRoute({
   component: () => (
@@ -78,6 +80,18 @@ const clusterRoute = createRoute({
   component: ClusterPage,
 })
 
+const symphonyRoute = createRoute({
+  getParentRoute: () => shellRoute,
+  path: '/symphony',
+  component: SymphonyPage,
+})
+
+const symphonyDetailRoute = createRoute({
+  getParentRoute: () => shellRoute,
+  path: '/symphony/$projectName',
+  component: SymphonyDetailPage,
+})
+
 const settingsRoute = createRoute({
   getParentRoute: () => shellRoute,
   path: '/settings',
@@ -93,6 +107,8 @@ const routeTree = rootRoute.addChildren([
     runsRoute,
     runDetailRoute,
     clusterRoute,
+    symphonyRoute,
+    symphonyDetailRoute,
     settingsRoute,
   ]),
 ])

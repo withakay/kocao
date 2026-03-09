@@ -81,6 +81,133 @@ export type PodLogs = {
   logs: string
 }
 
+export type SymphonyProjectCondition = {
+  type: string
+  status: string
+  reason?: string
+  message?: string
+  lastTransitionTime?: string
+}
+
+export type SymphonyProjectIssueRef = {
+  repository?: string
+  number?: number
+  nodeId?: string
+  url?: string
+  title?: string
+}
+
+export type SymphonyProjectRunRef = {
+  sessionName?: string
+  harnessRunName?: string
+}
+
+export type SymphonyProjectClaim = {
+  itemId: string
+  issue?: SymphonyProjectIssueRef
+  attempt?: number
+  phase?: string
+  claimedAt?: string
+  lastUpdatedTime?: string
+  runRef?: SymphonyProjectRunRef
+}
+
+export type SymphonyProjectRetry = {
+  itemId: string
+  issue?: SymphonyProjectIssueRef
+  attempt?: number
+  reason?: string
+  readyAt?: string
+  lastErrorTime?: string
+}
+
+export type SymphonyProjectSkip = {
+  itemId: string
+  issue?: SymphonyProjectIssueRef
+  repository?: string
+  reason?: string
+  message?: string
+  observedTime?: string
+}
+
+export type SymphonyProjectRepository = {
+  owner: string
+  name: string
+  repoURL?: string
+  branch?: string
+  egressMode?: string
+}
+
+export type SymphonyProjectSpec = {
+  paused?: boolean
+  source: {
+    project: {
+      owner: string
+      number: number
+    }
+    tokenSecretRef: {
+      name: string
+      key?: string
+    }
+    activeStates: string[]
+    terminalStates: string[]
+    fieldName?: string
+    pollIntervalSeconds?: number
+  }
+  repositories: SymphonyProjectRepository[]
+  runtime: {
+    image: string
+    command?: string[]
+    args?: string[]
+    workingDir?: string
+    maxConcurrentItems?: number
+    retryBaseDelaySeconds?: number
+    retryMaxDelaySeconds?: number
+    ttlSecondsAfterFinished?: number | null
+    recentSkipLimit?: number
+    recentErrorLimit?: number
+    activeStatusItemLimit?: number
+    defaultRepoRevision?: string
+    defaultEgressMode?: string
+  }
+}
+
+export type SymphonyProjectStatus = {
+  observedGeneration?: number
+  phase?: string
+  conditions?: SymphonyProjectCondition[]
+  resolvedFieldName?: string
+  lastSyncTime?: string
+  lastSuccessfulSyncTime?: string
+  nextSyncTime?: string
+  activeClaims?: SymphonyProjectClaim[]
+  retryQueue?: SymphonyProjectRetry[]
+  recentSkips?: SymphonyProjectSkip[]
+  unsupportedRepositories?: string[]
+  lastError?: string
+  eligibleItems?: number
+  runningItems?: number
+  retryingItems?: number
+  completedItems?: number
+  failedItems?: number
+  skippedItems?: number
+}
+
+export type SymphonyProject = {
+  name: string
+  namespace?: string
+  createdAt?: string
+  generation?: number
+  paused: boolean
+  spec: SymphonyProjectSpec
+  status: SymphonyProjectStatus
+}
+
+export type SymphonyProjectRequest = {
+  name: string
+  spec: SymphonyProjectSpec
+}
+
 type FetchOptions = {
   method?: string
   body?: unknown
@@ -193,5 +320,24 @@ export const api = {
     apiFetch<{ expiresAt: string; workspaceSessionID: string; clientID: string; role: string; mode?: string }>(
       `/api/v1/workspace-sessions/${encodeURIComponent(workspaceSessionID)}/attach-cookie`,
       { method: 'POST', token, body: { role, mode }, credentials: 'include' }
-    )
+    ),
+
+  listSymphonyProjects: (token: string) =>
+    apiFetch<{ symphonyProjects: SymphonyProject[] }>('/api/v1/symphony-projects', { token }),
+  getSymphonyProject: (token: string, projectName: string) =>
+    apiFetch<SymphonyProject>(`/api/v1/symphony-projects/${encodeURIComponent(projectName)}`, { token }),
+  createSymphonyProject: (token: string, input: SymphonyProjectRequest) =>
+    apiFetch<SymphonyProject>('/api/v1/symphony-projects', { method: 'POST', token, body: input }),
+  updateSymphonyProject: (token: string, projectName: string, input: SymphonyProjectRequest) =>
+    apiFetch<SymphonyProject>(`/api/v1/symphony-projects/${encodeURIComponent(projectName)}`, {
+      method: 'PATCH',
+      token,
+      body: input,
+    }),
+  pauseSymphonyProject: (token: string, projectName: string) =>
+    apiFetch<SymphonyProject>(`/api/v1/symphony-projects/${encodeURIComponent(projectName)}/pause`, { method: 'POST', token }),
+  resumeSymphonyProject: (token: string, projectName: string) =>
+    apiFetch<SymphonyProject>(`/api/v1/symphony-projects/${encodeURIComponent(projectName)}/resume`, { method: 'POST', token }),
+  refreshSymphonyProject: (token: string, projectName: string) =>
+    apiFetch<SymphonyProject>(`/api/v1/symphony-projects/${encodeURIComponent(projectName)}/refresh`, { method: 'POST', token }),
 }

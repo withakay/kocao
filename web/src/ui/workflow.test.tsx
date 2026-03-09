@@ -70,6 +70,67 @@ type ClusterOverview = {
   }
 }
 
+type SymphonyProject = {
+  name: string
+  paused: boolean
+  createdAt?: string
+  spec: {
+    source: {
+      project: {
+        owner: string
+        number: number
+      }
+      tokenSecretRef: {
+        name: string
+      }
+      activeStates: string[]
+      terminalStates: string[]
+      fieldName?: string
+    }
+    repositories: Array<{ owner: string; name: string; branch?: string }>
+    runtime: {
+      image: string
+      defaultRepoRevision?: string
+      maxConcurrentItems?: number
+    }
+  }
+  status: {
+    phase?: string
+    runningItems?: number
+    retryingItems?: number
+    completedItems?: number
+    eligibleItems?: number
+    skippedItems?: number
+    nextSyncTime?: string
+    lastSyncTime?: string
+    resolvedFieldName?: string
+    activeClaims?: Array<{
+      itemId: string
+      attempt: number
+      phase?: string
+      issue?: { repository?: string; number?: number; title?: string; url?: string }
+      runRef?: { sessionName?: string; harnessRunName?: string }
+    }>
+    retryQueue?: Array<{
+      itemId: string
+      attempt: number
+      reason?: string
+      readyAt?: string
+      issue?: { repository?: string; number?: number; title?: string }
+    }>
+    recentSkips?: Array<{
+      itemId: string
+      reason?: string
+      message?: string
+      observedTime?: string
+      repository?: string
+      issue?: { repository?: string; number?: number; title?: string }
+    }>
+    unsupportedRepositories?: string[]
+    lastError?: string
+  }
+}
+
 describe('workflow-ui-github', () => {
   it('stores token in session storage by default and local storage when remembered', async () => {
     localStorage.removeItem('kocao.apiToken')
@@ -278,6 +339,122 @@ describe('workflow-ui-github', () => {
 
     await screen.findByRole('heading', { name: /Run run-advanced/i })
     expect(lastStartBody?.args).toEqual(['go', 'test', './...'])
+
+    unmount()
+  })
+
+  it('creates and inspects symphony projects', async () => {
+    sessionStorage.setItem('kocao.apiToken', 't-full')
+    window.location.hash = '#/symphony'
+
+    let createdProject: SymphonyProject | null = null
+
+    server.use(
+      http.get('/api/v1/symphony-projects', () => HttpResponse.json({ symphonyProjects: createdProject ? [createdProject] : [] })),
+      http.post('/api/v1/symphony-projects', async ({ request }) => {
+        const body = (await request.json()) as any
+        createdProject = {
+          name: body.name,
+          paused: Boolean(body.spec?.paused),
+          createdAt: '2026-03-09T00:00:00Z',
+          spec: body.spec,
+          status: {
+            phase: 'Ready',
+            runningItems: 1,
+            retryingItems: 1,
+            completedItems: 2,
+            eligibleItems: 4,
+            skippedItems: 1,
+            nextSyncTime: '2026-03-09T00:05:00Z',
+            lastSyncTime: '2026-03-09T00:04:00Z',
+            resolvedFieldName: 'Status',
+            activeClaims: [
+              {
+                itemId: 'PVT_item_1',
+                attempt: 1,
+                phase: 'Running',
+                issue: {
+                  repository: 'withakay/kocao',
+                  number: 101,
+                  title: 'First issue',
+                  url: 'https://github.com/withakay/kocao/issues/101',
+                },
+                runRef: { sessionName: 'sym-session-1', harnessRunName: 'sym-run-1' },
+              },
+            ],
+            retryQueue: [
+              {
+                itemId: 'PVT_item_2',
+                attempt: 2,
+                reason: 'PodFailed',
+                readyAt: '2026-03-09T00:06:00Z',
+                issue: { repository: 'withakay/kocao', number: 102, title: 'Retry me' },
+              },
+            ],
+            recentSkips: [
+              {
+                itemId: 'PVT_item_3',
+                reason: 'unsupported_repository',
+                message: 'repo not allowlisted',
+                observedTime: '2026-03-09T00:03:00Z',
+                repository: 'someone/else',
+              },
+            ],
+            unsupportedRepositories: ['someone/else'],
+          },
+        }
+        return HttpResponse.json(createdProject, { status: 201 })
+      }),
+      http.get('/api/v1/symphony-projects/:name', ({ params }) => {
+        if (!createdProject || params.name !== createdProject.name) return new HttpResponse('not found', { status: 404 })
+        return HttpResponse.json(createdProject)
+      }),
+      http.patch('/api/v1/symphony-projects/:name', async ({ params, request }) => {
+        if (!createdProject || params.name !== createdProject.name) return new HttpResponse('not found', { status: 404 })
+        const body = (await request.json()) as any
+        createdProject = { ...createdProject, paused: Boolean(body.spec?.paused), spec: body.spec }
+        return HttpResponse.json(createdProject)
+      }),
+      http.post('/api/v1/symphony-projects/:name/pause', ({ params }) => {
+        if (!createdProject || params.name !== createdProject.name) return new HttpResponse('not found', { status: 404 })
+        createdProject = { ...createdProject, paused: true }
+        return HttpResponse.json(createdProject)
+      }),
+      http.post('/api/v1/symphony-projects/:name/resume', ({ params }) => {
+        if (!createdProject || params.name !== createdProject.name) return new HttpResponse('not found', { status: 404 })
+        createdProject = { ...createdProject, paused: false }
+        return HttpResponse.json(createdProject)
+      }),
+      http.post('/api/v1/symphony-projects/:name/refresh', ({ params }) => {
+        if (!createdProject || params.name !== createdProject.name) return new HttpResponse('not found', { status: 404 })
+        createdProject = {
+          ...createdProject,
+          status: { ...createdProject.status, lastSyncTime: '2026-03-09T00:07:00Z' },
+        }
+        return HttpResponse.json(createdProject)
+      }),
+    )
+
+    const { unmount } = render(<App />)
+
+    await screen.findByRole('heading', { name: 'Create Symphony Project' })
+    await userEvent.type(screen.getByLabelText('Name'), 'demo')
+    await userEvent.clear(screen.getByLabelText('Project #'))
+    await userEvent.type(screen.getByLabelText('Project #'), '7')
+    await userEvent.click(screen.getByRole('button', { name: 'Create Project' }))
+
+    await screen.findByRole('heading', { name: 'Runtime' })
+    await screen.findByText('someone/else')
+    await screen.findByRole('link', { name: 'sym-session-1' })
+    await screen.findByRole('link', { name: 'sym-run-1' })
+    await screen.findByText('PodFailed')
+    await screen.findByText('repo not allowlisted')
+
+    await userEvent.click(screen.getByRole('button', { name: 'Pause' }))
+    await screen.findByRole('button', { name: 'Resume' })
+
+    await userEvent.click(screen.getByRole('button', { name: 'Save Changes' }))
+    await screen.findByDisplayValue('demo')
 
     unmount()
   })
