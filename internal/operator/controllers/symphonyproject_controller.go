@@ -334,6 +334,9 @@ func (r *SymphonyProjectReconciler) releaseInactiveRuns(ctx context.Context, pro
 		if _, ok := activeItems[itemID]; ok {
 			continue
 		}
+		if err := r.deleteClaimSession(ctx, project.Namespace, run.Spec.WorkspaceSessionName); err != nil {
+			return err
+		}
 		switch run.Status.Phase {
 		case operatorv1alpha1.HarnessRunPhasePending, operatorv1alpha1.HarnessRunPhaseStarting, operatorv1alpha1.HarnessRunPhaseRunning:
 			if err := r.Delete(ctx, &run); err != nil && !apierrors.IsNotFound(err) {
@@ -341,6 +344,24 @@ func (r *SymphonyProjectReconciler) releaseInactiveRuns(ctx context.Context, pro
 			}
 			delete(runsByItem, itemID)
 		}
+	}
+	return nil
+}
+
+func (r *SymphonyProjectReconciler) deleteClaimSession(ctx context.Context, namespace, name string) error {
+	if strings.TrimSpace(name) == "" {
+		return nil
+	}
+	session := &operatorv1alpha1.Session{}
+	err := r.Get(ctx, client.ObjectKey{Namespace: namespace, Name: name}, session)
+	if apierrors.IsNotFound(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if err := r.Delete(ctx, session); err != nil && !apierrors.IsNotFound(err) {
+		return err
 	}
 	return nil
 }
