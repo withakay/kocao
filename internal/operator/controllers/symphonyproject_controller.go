@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -135,6 +136,9 @@ func (r *SymphonyProjectReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	}
 
 	reconcileProjectRuntime(updated, snapshot, runsByItem, now.Time)
+	if err := r.materializeActiveClaims(ctx, updated, runsByItem, now.Time); err != nil {
+		return ctrl.Result{}, err
+	}
 	updated.Status.Phase = operatorv1alpha1.SymphonyProjectPhaseReady
 	updated.Status.ObservedGeneration = updated.Generation
 	updated.Status.ResolvedFieldName = snapshot.ResolvedFieldName
@@ -147,6 +151,132 @@ func (r *SymphonyProjectReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	changedStatus = true
 
 	return r.commit(ctx, &project, updated, changedMeta, changedStatus, ctrl.Result{RequeueAfter: pollInterval})
+}
+
+func (r *SymphonyProjectReconciler) materializeActiveClaims(ctx context.Context, project *operatorv1alpha1.SymphonyProject, runsByItem map[string]operatorv1alpha1.HarnessRun, now time.Time) error {
+	repositories := map[string]operatorv1alpha1.SymphonyProjectRepositorySpec{}
+	for _, repo := range project.Spec.Repositories {
+		repositories[repo.RepositoryKey()] = repo
+	}
+	for i := range project.Status.ActiveClaims {
+		claim := &project.Status.ActiveClaims[i]
+		if strings.TrimSpace(claim.ItemID) == "" {
+			continue
+		}
+		if existingRun, ok := runsByItem[claim.ItemID]; ok {
+			project.Status.ActiveClaims[i] = buildClaimStatus(githubsource.CandidateItem{ItemID: claim.ItemID, Issue: githubsource.Issue{Repository: claim.Issue.Repository, Number: claim.Issue.Number, NodeID: claim.Issue.NodeID, URL: claim.Issue.URL, Title: claim.Issue.Title}}, existingRun, *claim, now)
+			continue
+		}
+
+		repo, ok := repositories[repositoryKeyFromStatus(claim.Issue)]
+		if !ok {
+			continue
+		}
+		session, err := r.ensureClaimSession(ctx, project, repo, *claim)
+		if err != nil {
+			return err
+		}
+		run, err := r.ensureClaimRun(ctx, project, session, repo, *claim)
+		if err != nil {
+			return err
+		}
+		claim.RunRef = operatorv1alpha1.SymphonyProjectRunRefStatus{SessionName: session.Name, HarnessRunName: run.Name}
+		claim.Phase = firstNonEmpty(string(run.Status.Phase), string(operatorv1alpha1.HarnessRunPhasePending), claim.Phase)
+		lastUpdated := metav1.NewTime(now)
+		claim.LastUpdatedTime = &lastUpdated
+	}
+	return nil
+}
+
+func (r *SymphonyProjectReconciler) ensureClaimSession(ctx context.Context, project *operatorv1alpha1.SymphonyProject, repo operatorv1alpha1.SymphonyProjectRepositorySpec, claim operatorv1alpha1.SymphonyProjectClaimStatus) (*operatorv1alpha1.Session, error) {
+	name := symphonySessionName(project, claim)
+	desired := &operatorv1alpha1.Session{}
+	err := r.Get(ctx, client.ObjectKey{Namespace: project.Namespace, Name: name}, desired)
+	if err == nil {
+		return desired, nil
+	}
+	if !apierrors.IsNotFound(err) {
+		return nil, err
+	}
+	desired = &operatorv1alpha1.Session{
+		TypeMeta: metav1.TypeMeta{APIVersion: operatorv1alpha1.GroupVersion.String(), Kind: "Session"},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: project.Namespace,
+			Labels:    symphonyObjectLabels(project, claim),
+			Annotations: map[string]string{
+				AnnotationAttachEnabled:     "false",
+				AnnotationEgressMode:        claimEgressMode(project.Spec.Runtime, repo),
+				AnnotationSymphonyIssueURL:  claim.Issue.URL,
+				AnnotationSymphonyIssueNode: claim.Issue.NodeID,
+			},
+		},
+		Spec: operatorv1alpha1.SessionSpec{
+			DisplayName: symphonySessionDisplayName(claim),
+			RepoURL:     repositoryRepoURL(repo),
+		},
+	}
+	if err := controllerutil.SetControllerReference(project, desired, r.Scheme); err != nil {
+		return nil, err
+	}
+	if err := r.Create(ctx, desired); err != nil {
+		if apierrors.IsAlreadyExists(err) {
+			if err := r.Get(ctx, client.ObjectKey{Namespace: project.Namespace, Name: name}, desired); err != nil {
+				return nil, err
+			}
+			return desired, nil
+		}
+		return nil, err
+	}
+	return desired, nil
+}
+
+func (r *SymphonyProjectReconciler) ensureClaimRun(ctx context.Context, project *operatorv1alpha1.SymphonyProject, session *operatorv1alpha1.Session, repo operatorv1alpha1.SymphonyProjectRepositorySpec, claim operatorv1alpha1.SymphonyProjectClaimStatus) (*operatorv1alpha1.HarnessRun, error) {
+	name := symphonyRunName(project, claim)
+	run := &operatorv1alpha1.HarnessRun{}
+	err := r.Get(ctx, client.ObjectKey{Namespace: project.Namespace, Name: name}, run)
+	if err == nil {
+		return run, nil
+	}
+	if !apierrors.IsNotFound(err) {
+		return nil, err
+	}
+	run = &operatorv1alpha1.HarnessRun{
+		TypeMeta: metav1.TypeMeta{APIVersion: operatorv1alpha1.GroupVersion.String(), Kind: "HarnessRun"},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        name,
+			Namespace:   project.Namespace,
+			Labels:      symphonyObjectLabels(project, claim),
+			Annotations: symphonyObjectAnnotations(claim),
+		},
+		Spec: operatorv1alpha1.HarnessRunSpec{
+			WorkspaceSessionName:    session.Name,
+			RepoURL:                 repositoryRepoURL(repo),
+			RepoRevision:            claimRepoRevision(project.Spec.Runtime, repo),
+			Image:                   project.Spec.Runtime.Image,
+			Command:                 append([]string(nil), project.Spec.Runtime.Command...),
+			Args:                    append([]string(nil), project.Spec.Runtime.Args...),
+			WorkingDir:              project.Spec.Runtime.WorkingDir,
+			Env:                     append([]operatorv1alpha1.EnvVar(nil), project.Spec.Runtime.Env...),
+			GitAuth:                 repo.GitAuth,
+			AgentAuth:               repo.AgentAuth,
+			EgressMode:              claimEgressMode(project.Spec.Runtime, repo),
+			TTLSecondsAfterFinished: project.Spec.Runtime.TTLSecondsAfterFinished,
+		},
+	}
+	if err := controllerutil.SetControllerReference(project, run, r.Scheme); err != nil {
+		return nil, err
+	}
+	if err := r.Create(ctx, run); err != nil {
+		if apierrors.IsAlreadyExists(err) {
+			if err := r.Get(ctx, client.ObjectKey{Namespace: project.Namespace, Name: name}, run); err != nil {
+				return nil, err
+			}
+			return run, nil
+		}
+		return nil, err
+	}
+	return run, nil
 }
 
 func (r *SymphonyProjectReconciler) loadGitHubToken(ctx context.Context, project *operatorv1alpha1.SymphonyProject) (string, error) {
@@ -449,6 +579,85 @@ func issueStatus(issue githubsource.Issue) operatorv1alpha1.SymphonyProjectIssue
 		URL:        issue.URL,
 		Title:      issue.Title,
 	}
+}
+
+func repositoryKeyFromStatus(issue operatorv1alpha1.SymphonyProjectIssueRefStatus) string {
+	ownerRepo := strings.TrimSpace(strings.ToLower(issue.Repository))
+	if ownerRepo == "" {
+		return ""
+	}
+	return ownerRepo
+}
+
+func repositoryRepoURL(repo operatorv1alpha1.SymphonyProjectRepositorySpec) string {
+	if value := strings.TrimSpace(repo.RepoURL); value != "" {
+		return value
+	}
+	return fmt.Sprintf("https://github.com/%s/%s", strings.TrimSpace(repo.Owner), strings.TrimSpace(repo.Name))
+}
+
+func claimRepoRevision(runtime operatorv1alpha1.SymphonyProjectRuntimeSpec, repo operatorv1alpha1.SymphonyProjectRepositorySpec) string {
+	if value := strings.TrimSpace(repo.Branch); value != "" {
+		return value
+	}
+	return strings.TrimSpace(runtime.DefaultRepoRevision)
+}
+
+func claimEgressMode(runtime operatorv1alpha1.SymphonyProjectRuntimeSpec, repo operatorv1alpha1.SymphonyProjectRepositorySpec) string {
+	if value := strings.TrimSpace(repo.EgressMode); value != "" {
+		return value
+	}
+	return strings.TrimSpace(runtime.DefaultEgressMode)
+}
+
+func symphonySessionName(project *operatorv1alpha1.SymphonyProject, claim operatorv1alpha1.SymphonyProjectClaimStatus) string {
+	base := sanitizeDNSLabel(strings.Join([]string{"sym", project.Name, claim.Issue.Repository, strconv.FormatInt(claim.Issue.Number, 10)}, "-"))
+	if len(base) > 54 {
+		base = strings.Trim(sanitizeDNSLabel(base[:54]), "-")
+	}
+	if base == "" {
+		base = "sym-session"
+	}
+	return base
+}
+
+func symphonyRunName(project *operatorv1alpha1.SymphonyProject, claim operatorv1alpha1.SymphonyProjectClaimStatus) string {
+	base := sanitizeDNSLabel(strings.Join([]string{"sym", project.Name, claim.Issue.Repository, strconv.FormatInt(claim.Issue.Number, 10), "a", strconv.Itoa(int(claim.Attempt))}, "-"))
+	if len(base) > 63 {
+		base = strings.Trim(sanitizeDNSLabel(base[:63]), "-")
+	}
+	if base == "" {
+		base = "sym-run"
+	}
+	return base
+}
+
+func symphonySessionDisplayName(claim operatorv1alpha1.SymphonyProjectClaimStatus) string {
+	return sanitizeDNSLabel(strings.Join([]string{claim.Issue.Repository, strconv.FormatInt(claim.Issue.Number, 10)}, "-"))
+}
+
+func symphonyObjectLabels(project *operatorv1alpha1.SymphonyProject, claim operatorv1alpha1.SymphonyProjectClaimStatus) map[string]string {
+	labels := map[string]string{
+		LabelSymphonyProjectName: project.Name,
+		LabelSymphonyProjectUID:  string(project.UID),
+		LabelSymphonyItemID:      claim.ItemID,
+		LabelGitHubRepository:    claim.Issue.Repository,
+	}
+	if claim.Issue.Number > 0 {
+		labels[LabelGitHubIssueNumber] = strconv.FormatInt(claim.Issue.Number, 10)
+	}
+	return labels
+}
+
+func symphonyObjectAnnotations(claim operatorv1alpha1.SymphonyProjectClaimStatus) map[string]string {
+	annotations := map[string]string{}
+	if claim.Issue.URL != "" {
+		annotations[AnnotationSymphonyIssueURL] = claim.Issue.URL
+	}
+	if claim.Issue.NodeID != "" {
+		annotations[AnnotationSymphonyIssueNode] = claim.Issue.NodeID
+	}
+	return annotations
 }
 
 func mapClaimsByItem(items []operatorv1alpha1.SymphonyProjectClaimStatus) map[string]operatorv1alpha1.SymphonyProjectClaimStatus {

@@ -73,7 +73,7 @@ ______________________________________________________________________
 - **Verify**: `go test ./internal/operator/... ./internal/controlplaneapi/...`
 - **Done When**: Claimed work creates or reuses the right Session, launches HarnessRuns, and links child resources back to the Symphony project in tests.
 - **Updated At**: 2026-03-09
-- **Status**: [ ] pending
+- **Status**: [>] in-progress
 
 ______________________________________________________________________
 
