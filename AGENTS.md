@@ -77,4 +77,7 @@ git worktree prune
 
 ## Project Guidance
 
-(Add any project-specific assistant guidance here. Prefer `.ito/user-prompts/guidance.md` for shared instruction guidance and `.ito/user-prompts/<artifact>.md` for phase-specific guidance.)
+### Git Fallback
+
+- If normal `git` commit flows are blocked by 1Password or related signing/credential requirements, use `git-yolo` as a drop-in replacement for `git` for the blocked commit operation.
+- Prefer normal `git` first; switch to `git-yolo` only when the blocker is specifically the local 1Password integration requirement rather than a real repository error.
