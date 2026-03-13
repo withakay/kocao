@@ -2,14 +2,21 @@ package controllers
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/withakay/kocao/internal/auditlog"
 	operatorv1alpha1 "github.com/withakay/kocao/internal/operator/api/v1alpha1"
 	"github.com/withakay/kocao/internal/symphony/githubsource"
+	"github.com/withakay/kocao/internal/symphony/runner"
+	"github.com/withakay/kocao/internal/symphony/workflow"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -34,11 +41,109 @@ func (defaultSymphonySourceFactory) New(token string) (symphonySourceLoader, err
 	return githubsource.NewClient(token, githubsource.Options{})
 }
 
+type symphonyWorkerExecution struct {
+	ProjectName string
+	Repository  operatorv1alpha1.SymphonyProjectRepositorySpec
+	Claim       operatorv1alpha1.SymphonyProjectClaimStatus
+	Issue       githubsource.Issue
+	Title       string
+}
+
+type symphonyWorkerResult struct {
+	WorkflowPath   string
+	WorkspacePath  string
+	SessionID      string
+	ThreadID       string
+	TurnID         string
+	ApprovalPolicy string
+	ThreadSandbox  string
+	TurnSandbox    string
+	LastEvent      string
+	LastMessage    string
+	InputTokens    int64
+	OutputTokens   int64
+	TotalTokens    int64
+	SecondsRunning float64
+}
+
+type symphonyWorkerExecutor interface {
+	Execute(context.Context, symphonyWorkerExecution) (symphonyWorkerResult, error)
+}
+
+type defaultSymphonyWorkerExecutor struct{}
+
+const (
+	defaultSymphonyApprovalPolicy    = "untrusted"
+	defaultSymphonyThreadSandbox     = "workspace-write"
+	defaultSymphonyTurnSandboxPolicy = "workspace-write"
+)
+
+var sensitiveTelemetryPattern = regexp.MustCompile(`(?i)(bearer\s+[a-z0-9._-]+|github_pat_[a-z0-9_]+|gh[pousr]_[a-z0-9]+|sk-[a-z0-9_-]+|token\s*[=:]\s*\S+|authorization\s*[=:]\s*\S+|password\s*[=:]\s*\S+)`)
+
+func (defaultSymphonyWorkerExecutor) Execute(ctx context.Context, execReq symphonyWorkerExecution) (symphonyWorkerResult, error) {
+	repoPath := strings.TrimSpace(execReq.Repository.LocalPath)
+	if repoPath == "" {
+		return symphonyWorkerResult{}, nil
+	}
+	resolvedRepoPath, err := filepath.Abs(repoPath)
+	if err != nil {
+		return symphonyWorkerResult{}, err
+	}
+	workflowPath := workflow.ResolvePath(resolvedRepoPath, execReq.Repository.WorkflowPath)
+	def, err := workflow.Load(workflowPath)
+	if err != nil {
+		return symphonyWorkerResult{}, err
+	}
+	cfg, err := def.TypedConfig(os.Getenv)
+	if err != nil {
+		return symphonyWorkerResult{}, err
+	}
+	if err := enforceWorkflowSecurity(def, cfg); err != nil {
+		return symphonyWorkerResult{}, err
+	}
+	codexCfg := secureCodexConfig(cfg.Codex)
+	prompt, err := def.Render(issueTemplateData(execReq.Issue), int32PtrToIntPtr(execReq.Claim.Attempt))
+	if err != nil {
+		return symphonyWorkerResult{}, err
+	}
+	workspacePath := filepath.Join(os.TempDir(), "kocao-symphony-workspaces", sanitizeDNSLabel(execReq.ProjectName), sanitizeDNSLabel(execReq.Issue.Repository+"-"+strconv.FormatInt(execReq.Issue.Number, 10)))
+	if err := os.MkdirAll(workspacePath, 0o755); err != nil {
+		return symphonyWorkerResult{}, err
+	}
+	started := time.Now().UTC()
+	runResult, err := runner.Run(ctx, runner.Options{Workspace: workspacePath, Title: execReq.Title, Prompts: []string{prompt}, Config: codexCfg})
+	if err != nil {
+		return symphonyWorkerResult{}, err
+	}
+	lastTurnID := ""
+	if len(runResult.Turns) != 0 {
+		lastTurnID = runResult.Turns[len(runResult.Turns)-1].TurnID
+	}
+	return symphonyWorkerResult{
+		WorkflowPath:   workflowPath,
+		WorkspacePath:  workspacePath,
+		SessionID:      sessionID(runResult.ThreadID, lastTurnID),
+		ThreadID:       runResult.ThreadID,
+		TurnID:         lastTurnID,
+		ApprovalPolicy: codexCfg.ApprovalPolicy,
+		ThreadSandbox:  codexCfg.ThreadSandbox,
+		TurnSandbox:    codexCfg.TurnSandboxPolicy,
+		LastEvent:      runResult.LastEvent,
+		LastMessage:    sanitizeTelemetryMessage(runResult.LastMessage),
+		InputTokens:    int64(runResult.Usage.InputTokens),
+		OutputTokens:   int64(runResult.Usage.OutputTokens),
+		TotalTokens:    int64(runResult.Usage.TotalTokens),
+		SecondsRunning: time.Since(started).Seconds(),
+	}, nil
+}
+
 type SymphonyProjectReconciler struct {
 	client.Client
-	Scheme        *runtime.Scheme
-	Clock         clock.Clock
-	SourceFactory symphonySourceFactory
+	Scheme         *runtime.Scheme
+	Clock          clock.Clock
+	SourceFactory  symphonySourceFactory
+	WorkerExecutor symphonyWorkerExecutor
+	Audit          *auditlog.Store
 }
 
 func (r *SymphonyProjectReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -50,14 +155,20 @@ func (r *SymphonyProjectReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		return ctrl.Result{}, err
 	}
 
-	if r.Clock == nil {
-		r.Clock = clock.RealClock{}
+	clk := r.Clock
+	if clk == nil {
+		clk = clock.RealClock{}
 	}
-	if r.SourceFactory == nil {
-		r.SourceFactory = defaultSymphonySourceFactory{}
+	sourceFactory := r.SourceFactory
+	if sourceFactory == nil {
+		sourceFactory = defaultSymphonySourceFactory{}
+	}
+	workerExecutor := r.WorkerExecutor
+	if workerExecutor == nil {
+		workerExecutor = defaultSymphonyWorkerExecutor{}
 	}
 
-	now := metav1.NewTime(r.Clock.Now().UTC())
+	now := metav1.NewTime(clk.Now().UTC())
 	updated := project.DeepCopy()
 	updated.ApplyDefaults()
 	changedMeta := false
@@ -110,7 +221,7 @@ func (r *SymphonyProjectReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		return r.commit(ctx, &project, updated, changedMeta, changedStatus, ctrl.Result{RequeueAfter: pollInterval})
 	}
 
-	loader, err := r.SourceFactory.New(token)
+	loader, err := sourceFactory.New(token)
 	if err != nil {
 		r.setSourceError(updated, now, fmt.Errorf("build github source client: %w", err), pollInterval)
 		changedStatus = true
@@ -142,6 +253,18 @@ func (r *SymphonyProjectReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	if err := r.materializeActiveClaims(ctx, updated, runsByItem, now.Time); err != nil {
 		return ctrl.Result{}, err
 	}
+	runsByItem, err = r.listProjectRuns(ctx, updated)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if err := r.executeRunnableClaims(ctx, updated, runsByItem, workerExecutor, now.Time); err != nil {
+		return ctrl.Result{}, err
+	}
+	runsByItem, err = r.listProjectRuns(ctx, updated)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	reconcileProjectRuntime(updated, snapshot, runsByItem, now.Time)
 	updated.Status.Phase = operatorv1alpha1.SymphonyProjectPhaseReady
 	updated.Status.ObservedGeneration = updated.Generation
 	updated.Status.ResolvedFieldName = snapshot.ResolvedFieldName
@@ -166,7 +289,8 @@ func (r *SymphonyProjectReconciler) materializeActiveClaims(ctx context.Context,
 		if strings.TrimSpace(claim.ItemID) == "" {
 			continue
 		}
-		if existingRun, ok := runsByItem[claim.ItemID]; ok {
+		desiredRunName := symphonyRunName(project, *claim)
+		if existingRun, ok := runsByItem[claim.ItemID]; ok && existingRun.Name == desiredRunName {
 			project.Status.ActiveClaims[i] = buildClaimStatus(githubsource.CandidateItem{ItemID: claim.ItemID, Issue: githubsource.Issue{Repository: claim.Issue.Repository, Number: claim.Issue.Number, NodeID: claim.Issue.NodeID, URL: claim.Issue.URL, Title: claim.Issue.Title}}, existingRun, *claim, now)
 			continue
 		}
@@ -187,6 +311,38 @@ func (r *SymphonyProjectReconciler) materializeActiveClaims(ctx context.Context,
 		claim.Phase = firstNonEmpty(string(run.Status.Phase), string(operatorv1alpha1.HarnessRunPhasePending), claim.Phase)
 		lastUpdated := metav1.NewTime(now)
 		claim.LastUpdatedTime = &lastUpdated
+	}
+	return nil
+}
+
+func (r *SymphonyProjectReconciler) executeRunnableClaims(ctx context.Context, project *operatorv1alpha1.SymphonyProject, runsByItem map[string]operatorv1alpha1.HarnessRun, workerExecutor symphonyWorkerExecutor, now time.Time) error {
+	repositories := map[string]operatorv1alpha1.SymphonyProjectRepositorySpec{}
+	for _, repo := range project.Spec.Repositories {
+		repositories[repo.RepositoryKey()] = repo
+	}
+	for _, claim := range project.Status.ActiveClaims {
+		repo, ok := repositories[repositoryKeyFromStatus(claim.Issue)]
+		if !ok || strings.TrimSpace(repo.LocalPath) == "" {
+			continue
+		}
+		run, ok := runsByItem[claim.ItemID]
+		if !ok || run.Name != symphonyRunName(project, claim) {
+			continue
+		}
+		switch run.Status.Phase {
+		case operatorv1alpha1.HarnessRunPhaseSucceeded, operatorv1alpha1.HarnessRunPhaseFailed:
+			continue
+		}
+		result, execErr := workerExecutor.Execute(ctx, symphonyWorkerExecution{
+			ProjectName: project.Name,
+			Repository:  repo,
+			Claim:       claim,
+			Issue:       githubsource.Issue{Repository: claim.Issue.Repository, Number: claim.Issue.Number, NodeID: claim.Issue.NodeID, URL: claim.Issue.URL, Title: claim.Issue.Title},
+			Title:       fmt.Sprintf("%s#%d: %s", claim.Issue.Repository, claim.Issue.Number, claim.Issue.Title),
+		})
+		if err := r.applyWorkerOutcome(ctx, &run, result, execErr, now); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -280,6 +436,82 @@ func (r *SymphonyProjectReconciler) ensureClaimRun(ctx context.Context, project 
 		return nil, err
 	}
 	return run, nil
+}
+
+func (r *SymphonyProjectReconciler) applyWorkerOutcome(ctx context.Context, run *operatorv1alpha1.HarnessRun, result symphonyWorkerResult, execErr error, now time.Time) error {
+	original := run.DeepCopy()
+	updated := run.DeepCopy()
+	if updated.Annotations == nil {
+		updated.Annotations = map[string]string{}
+	}
+	if result.SessionID != "" {
+		updated.Annotations[AnnotationSymphonySessionID] = result.SessionID
+	}
+	if result.ThreadID != "" {
+		updated.Annotations[AnnotationSymphonyThreadID] = result.ThreadID
+	}
+	if result.TurnID != "" {
+		updated.Annotations[AnnotationSymphonyTurnID] = result.TurnID
+	}
+	if result.LastEvent != "" {
+		updated.Annotations[AnnotationSymphonyLastEvent] = result.LastEvent
+	}
+	if sanitized := sanitizeTelemetryMessage(result.LastMessage); sanitized != "" {
+		updated.Annotations[AnnotationSymphonyLastMessage] = sanitized
+	}
+	if result.WorkflowPath != "" || result.WorkspacePath != "" {
+		updated.Annotations[AnnotationSymphonyWorkflowPath] = "[redacted]"
+		updated.Annotations[AnnotationSymphonyWorkspacePath] = "[redacted]"
+	}
+	if policy, sandbox, turnSandbox := resultSecurityAnnotations(result); policy != "" || sandbox != "" || turnSandbox != "" {
+		if policy != "" {
+			updated.Annotations[AnnotationSymphonyApprovalPolicy] = policy
+		}
+		if sandbox != "" {
+			updated.Annotations[AnnotationSymphonyThreadSandbox] = sandbox
+		}
+		if turnSandbox != "" {
+			updated.Annotations[AnnotationSymphonyTurnSandbox] = turnSandbox
+		}
+	}
+	if result.InputTokens > 0 {
+		updated.Annotations[AnnotationSymphonyInputTokens] = strconv.FormatInt(result.InputTokens, 10)
+	}
+	if result.OutputTokens > 0 {
+		updated.Annotations[AnnotationSymphonyOutputTokens] = strconv.FormatInt(result.OutputTokens, 10)
+	}
+	if result.TotalTokens > 0 {
+		updated.Annotations[AnnotationSymphonyTotalTokens] = strconv.FormatInt(result.TotalTokens, 10)
+	}
+	if result.SecondsRunning > 0 {
+		updated.Annotations[AnnotationSymphonyRuntimeSeconds] = strconv.FormatFloat(result.SecondsRunning, 'f', 3, 64)
+	}
+	startedAt := now
+	if result.SecondsRunning > 0 {
+		startedAt = now.Add(-time.Duration(result.SecondsRunning * float64(time.Second)))
+	}
+	started := metav1.NewTime(startedAt)
+	completed := metav1.NewTime(now)
+	updated.Status.StartTime = &started
+	updated.Status.CompletionTime = &completed
+	if execErr != nil {
+		updated.Status.Phase = operatorv1alpha1.HarnessRunPhaseFailed
+		updated.Status.Conditions = []metav1.Condition{{Type: ConditionFailed, Status: metav1.ConditionTrue, Reason: symphonyErrorReason(execErr), Message: execErr.Error(), LastTransitionTime: completed}}
+	} else {
+		updated.Status.Phase = operatorv1alpha1.HarnessRunPhaseSucceeded
+		updated.Status.Conditions = []metav1.Condition{{Type: ConditionSucceeded, Status: metav1.ConditionTrue, Reason: "WorkflowCompleted", Message: firstNonEmpty(result.LastMessage, "workflow execution completed"), LastTransitionTime: completed}}
+	}
+	metaUpdated := updated.DeepCopy()
+	metaUpdated.Status = original.Status
+	if err := r.Patch(ctx, metaUpdated, client.MergeFrom(original)); err != nil {
+		return err
+	}
+	var latest operatorv1alpha1.HarnessRun
+	if err := r.Get(ctx, client.ObjectKeyFromObject(run), &latest); err != nil {
+		return err
+	}
+	latest.Status = updated.Status
+	return r.Status().Update(ctx, &latest)
 }
 
 func (r *SymphonyProjectReconciler) loadGitHubToken(ctx context.Context, project *operatorv1alpha1.SymphonyProject) (string, error) {
@@ -391,7 +623,11 @@ func reconcileProjectRuntime(project *operatorv1alpha1.SymphonyProject, snapshot
 
 	claims := make([]operatorv1alpha1.SymphonyProjectClaimStatus, 0, minInt(limit, maxConcurrent))
 	retries := make([]operatorv1alpha1.SymphonyProjectRetryStatus, 0, retryLimit)
+	errors := make([]operatorv1alpha1.SymphonyProjectErrorStatus, 0, retryLimit)
+	events := make([]operatorv1alpha1.SymphonyProjectEventStatus, 0, retryLimit)
 	completed := int32(0)
+	failed := int32(0)
+	totals := operatorv1alpha1.SymphonyProjectTokenTotalsStatus{}
 	consumed := map[string]struct{}{}
 	deferredRetry := map[string]operatorv1alpha1.SymphonyProjectRetryStatus{}
 	readyRetryIDs := make([]string, 0)
@@ -400,16 +636,31 @@ func reconcileProjectRuntime(project *operatorv1alpha1.SymphonyProject, snapshot
 	for _, candidate := range snapshot.Candidates {
 		run, hasRun := runsByItem[candidate.ItemID]
 		if hasRun {
+			totals.InputTokens += runAnnotationInt64(run, AnnotationSymphonyInputTokens)
+			totals.OutputTokens += runAnnotationInt64(run, AnnotationSymphonyOutputTokens)
+			totals.TotalTokens += runAnnotationInt64(run, AnnotationSymphonyTotalTokens)
+			totals.SecondsRunning += runAnnotationFloat64(run, AnnotationSymphonyRuntimeSeconds)
+			if event, ok := buildEventStatus(candidate, run); ok {
+				events = append(events, event)
+			}
 			switch run.Status.Phase {
 			case operatorv1alpha1.HarnessRunPhaseSucceeded:
 				completed++
-				consumed[candidate.ItemID] = struct{}{}
+				if retry, ok := buildContinuationRetryStatus(candidate, previousClaims[candidate.ItemID], previousRetries[candidate.ItemID], now); ok {
+					if retry.ReadyAt != nil && !retry.ReadyAt.Time.After(now) {
+						readyRetryIDs = append(readyRetryIDs, candidate.ItemID)
+					} else {
+						deferredRetry[candidate.ItemID] = retry
+					}
+				}
 				continue
 			case operatorv1alpha1.HarnessRunPhasePending, operatorv1alpha1.HarnessRunPhaseStarting, operatorv1alpha1.HarnessRunPhaseRunning:
 				claims = append(claims, buildClaimStatus(candidate, run, previousClaims[candidate.ItemID], now))
 				consumed[candidate.ItemID] = struct{}{}
 				continue
 			case operatorv1alpha1.HarnessRunPhaseFailed:
+				failed++
+				errors = append(errors, buildErrorStatus(candidate, run, previousClaimOrRetryAttempt(previousClaims[candidate.ItemID], previousRetries[candidate.ItemID]), now))
 				if retry, ok := buildRetryStatus(candidate, run, previousClaims[candidate.ItemID], previousRetries[candidate.ItemID], project.Spec.Runtime, now); ok {
 					if retry.ReadyAt != nil && !retry.ReadyAt.Time.After(now) {
 						readyRetryIDs = append(readyRetryIDs, candidate.ItemID)
@@ -473,15 +724,20 @@ func reconcileProjectRuntime(project *operatorv1alpha1.SymphonyProject, snapshot
 
 	claims = truncateClaims(claims, limit)
 	retries = truncateRetries(retries, retryLimit)
+	errors = truncateErrors(errors, retryLimit)
+	events = truncateEvents(events, retryLimit)
 	project.Status.ActiveClaims = claims
 	project.Status.RetryQueue = retries
+	project.Status.RecentErrors = errors
+	project.Status.RecentEvents = events
+	project.Status.TokenTotals = totals
 	project.Status.RecentSkips = snapshotSkipsToStatus(snapshot.Skipped, int(project.Spec.Runtime.RecentSkipLimit))
 	project.Status.UnsupportedRepos = append([]string(nil), snapshot.UnsupportedRepositories...)
 	project.Status.EligibleItems = int32(len(snapshot.Candidates))
 	project.Status.RunningItems = int32(len(claims))
 	project.Status.RetryingItems = int32(len(retries))
 	project.Status.CompletedItems = completed
-	project.Status.FailedItems = 0
+	project.Status.FailedItems = failed
 	project.Status.SkippedItems = int32(len(snapshot.Skipped))
 }
 
@@ -520,15 +776,9 @@ func buildClaimWithoutRun(candidate githubsource.CandidateItem, previous operato
 }
 
 func buildRetryStatus(candidate githubsource.CandidateItem, run operatorv1alpha1.HarnessRun, previousClaim operatorv1alpha1.SymphonyProjectClaimStatus, previousRetry operatorv1alpha1.SymphonyProjectRetryStatus, runtime operatorv1alpha1.SymphonyProjectRuntimeSpec, now time.Time) (operatorv1alpha1.SymphonyProjectRetryStatus, bool) {
-	attempt := previousClaim.Attempt
-	if attempt <= 0 {
-		attempt = previousRetry.Attempt
-	}
-	if attempt <= 0 {
-		attempt = 1
-	}
+	attempt := previousClaimOrRetryAttempt(previousClaim, previousRetry)
 	readyAt := previousRetry.ReadyAt
-	if readyAt == nil || previousRetry.Attempt != attempt {
+	if readyAt == nil || previousRetry.Attempt != attempt || !readyAt.Time.After(now) {
 		delay := retryDelay(runtime, attempt)
 		t := metav1.NewTime(now.Add(delay))
 		readyAt = &t
@@ -542,6 +792,70 @@ func buildRetryStatus(candidate githubsource.CandidateItem, run operatorv1alpha1
 		ReadyAt:       readyAt,
 		LastErrorTime: &lastError,
 	}, true
+}
+
+func buildErrorStatus(candidate githubsource.CandidateItem, run operatorv1alpha1.HarnessRun, attempt int32, now time.Time) operatorv1alpha1.SymphonyProjectErrorStatus {
+	lastError := metav1.NewTime(now)
+	return operatorv1alpha1.SymphonyProjectErrorStatus{
+		ItemID:         candidate.ItemID,
+		Issue:          issueStatus(candidate.Issue),
+		Attempt:        attempt,
+		Reason:         firstNonEmpty(conditionReason(run.Status.Conditions, ConditionFailed), "HarnessRunFailed"),
+		LastErrorTime:  &lastError,
+		HarnessRunName: run.Name,
+	}
+}
+
+func buildEventStatus(candidate githubsource.CandidateItem, run operatorv1alpha1.HarnessRun) (operatorv1alpha1.SymphonyProjectEventStatus, bool) {
+	eventName := strings.TrimSpace(run.Annotations[AnnotationSymphonyLastEvent])
+	if eventName == "" {
+		return operatorv1alpha1.SymphonyProjectEventStatus{}, false
+	}
+	observedAt := run.Status.CompletionTime
+	if observedAt == nil {
+		observedAt = run.Status.StartTime
+	}
+	return operatorv1alpha1.SymphonyProjectEventStatus{
+		ItemID:         candidate.ItemID,
+		Issue:          issueStatus(candidate.Issue),
+		SessionID:      strings.TrimSpace(run.Annotations[AnnotationSymphonySessionID]),
+		ThreadID:       strings.TrimSpace(run.Annotations[AnnotationSymphonyThreadID]),
+		TurnID:         strings.TrimSpace(run.Annotations[AnnotationSymphonyTurnID]),
+		Event:          eventName,
+		Message:        strings.TrimSpace(run.Annotations[AnnotationSymphonyLastMessage]),
+		ObservedTime:   observedAt,
+		HarnessRunName: run.Name,
+	}, true
+}
+
+func buildContinuationRetryStatus(candidate githubsource.CandidateItem, previousClaim operatorv1alpha1.SymphonyProjectClaimStatus, previousRetry operatorv1alpha1.SymphonyProjectRetryStatus, now time.Time) (operatorv1alpha1.SymphonyProjectRetryStatus, bool) {
+	attempt := previousClaim.Attempt
+	if attempt <= 0 {
+		attempt = 1
+	}
+	readyAt := previousRetry.ReadyAt
+	if readyAt == nil || !strings.EqualFold(strings.TrimSpace(previousRetry.Reason), "Continuation") || previousRetry.Attempt != attempt {
+		t := metav1.NewTime(now.Add(time.Second))
+		readyAt = &t
+	}
+	return operatorv1alpha1.SymphonyProjectRetryStatus{
+		ItemID:  candidate.ItemID,
+		Issue:   issueStatus(candidate.Issue),
+		Attempt: attempt,
+		Reason:  "Continuation",
+		ReadyAt: readyAt,
+	}, true
+}
+
+func previousClaimOrRetryAttempt(previousClaim operatorv1alpha1.SymphonyProjectClaimStatus, previousRetry operatorv1alpha1.SymphonyProjectRetryStatus) int32 {
+	attempt := previousClaim.Attempt
+	if attempt <= 0 {
+		attempt = previousRetry.Attempt
+	}
+	if attempt <= 0 {
+		attempt = 1
+	}
+	return attempt
 }
 
 func buildClaimFromRetry(candidate githubsource.CandidateItem, retry operatorv1alpha1.SymphonyProjectRetryStatus, now time.Time) operatorv1alpha1.SymphonyProjectClaimStatus {
@@ -743,6 +1057,20 @@ func truncateRetries(items []operatorv1alpha1.SymphonyProjectRetryStatus, limit 
 	return append([]operatorv1alpha1.SymphonyProjectRetryStatus(nil), items[:limit]...)
 }
 
+func truncateEvents(items []operatorv1alpha1.SymphonyProjectEventStatus, limit int) []operatorv1alpha1.SymphonyProjectEventStatus {
+	if len(items) <= limit {
+		return items
+	}
+	return append([]operatorv1alpha1.SymphonyProjectEventStatus(nil), items[:limit]...)
+}
+
+func truncateErrors(items []operatorv1alpha1.SymphonyProjectErrorStatus, limit int) []operatorv1alpha1.SymphonyProjectErrorStatus {
+	if len(items) <= limit {
+		return items
+	}
+	return append([]operatorv1alpha1.SymphonyProjectErrorStatus(nil), items[:limit]...)
+}
+
 func conditionReason(conditions []metav1.Condition, conditionType string) string {
 	for _, condition := range conditions {
 		if condition.Type == conditionType {
@@ -759,6 +1087,111 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func issueTemplateData(issue githubsource.Issue) map[string]any {
+	return map[string]any{
+		"repository":  issue.Repository,
+		"number":      issue.Number,
+		"nodeId":      issue.NodeID,
+		"url":         issue.URL,
+		"title":       issue.Title,
+		"description": issue.Body,
+		"labels":      append([]string(nil), issue.Labels...),
+		"projectItem": issue.ProjectItem,
+	}
+}
+
+func enforceWorkflowSecurity(def workflow.Definition, cfg workflow.Config) error {
+	if strings.TrimSpace(cfg.Hooks.AfterCreate) != "" || strings.TrimSpace(cfg.Hooks.BeforeRun) != "" || strings.TrimSpace(cfg.Hooks.AfterRun) != "" || strings.TrimSpace(cfg.Hooks.BeforeRemove) != "" {
+		return &workflow.Error{Code: workflow.ErrCodeWorkflowValidationError, Path: def.Path, Err: fmt.Errorf("workflow hooks are disabled in kocao symphony workers")}
+	}
+	return nil
+}
+
+func secureCodexConfig(cfg workflow.CodexConfig) workflow.CodexConfig {
+	if strings.TrimSpace(cfg.ApprovalPolicy) == "" {
+		cfg.ApprovalPolicy = defaultSymphonyApprovalPolicy
+	}
+	if strings.TrimSpace(cfg.ThreadSandbox) == "" {
+		cfg.ThreadSandbox = defaultSymphonyThreadSandbox
+	}
+	if strings.TrimSpace(cfg.TurnSandboxPolicy) == "" {
+		cfg.TurnSandboxPolicy = defaultSymphonyTurnSandboxPolicy
+	}
+	return cfg
+}
+
+func sanitizeTelemetryMessage(message string) string {
+	message = strings.TrimSpace(message)
+	if message == "" {
+		return ""
+	}
+	if sensitiveTelemetryPattern.MatchString(message) {
+		return "[redacted]"
+	}
+	return message
+}
+
+func resultSecurityAnnotations(result symphonyWorkerResult) (string, string, string) {
+	return strings.TrimSpace(result.ApprovalPolicy), strings.TrimSpace(result.ThreadSandbox), strings.TrimSpace(result.TurnSandbox)
+}
+
+func int32PtrToIntPtr(value int32) *int {
+	if value <= 0 {
+		return nil
+	}
+	converted := int(value)
+	return &converted
+}
+
+func sessionID(threadID, turnID string) string {
+	if strings.TrimSpace(threadID) == "" || strings.TrimSpace(turnID) == "" {
+		return ""
+	}
+	return strings.TrimSpace(threadID) + "-" + strings.TrimSpace(turnID)
+}
+
+func symphonyErrorReason(err error) string {
+	if err == nil {
+		return ""
+	}
+	var workflowErr *workflow.Error
+	if errors.As(err, &workflowErr) {
+		switch workflowErr.Code {
+		case workflow.ErrCodeMissingWorkflowFile:
+			return "WorkflowMissing"
+		case workflow.ErrCodeTemplateRenderError:
+			return "WorkflowRenderFailed"
+		case workflow.ErrCodeWorkflowValidationError:
+			return "WorkflowInvalid"
+		}
+	}
+	return "WorkerExecutionFailed"
+}
+
+func runAnnotationInt64(run operatorv1alpha1.HarnessRun, key string) int64 {
+	value := strings.TrimSpace(run.Annotations[key])
+	if value == "" {
+		return 0
+	}
+	parsed, err := strconv.ParseInt(value, 10, 64)
+	if err != nil {
+		return 0
+	}
+	return parsed
+}
+
+func runAnnotationFloat64(run operatorv1alpha1.HarnessRun, key string) float64 {
+	value := strings.TrimSpace(run.Annotations[key])
+	if value == "" {
+		return 0
+	}
+	parsed, err := strconv.ParseFloat(value, 64)
+	if err != nil {
+		return 0
+	}
+	return parsed
 }
 
 func minInt(left, right int) int {
@@ -809,10 +1242,63 @@ func (r *SymphonyProjectReconciler) commit(ctx context.Context, original, update
 			return ctrl.Result{}, err
 		}
 	}
+	r.emitAuditEvents(ctx, original, updated)
 	return res, nil
 }
 
+func (r *SymphonyProjectReconciler) emitAuditEvents(ctx context.Context, original, updated *operatorv1alpha1.SymphonyProject) {
+	if r.Audit == nil {
+		return
+	}
+	if original.Spec.Paused != updated.Spec.Paused {
+		action := "symphony.resume"
+		if updated.Spec.Paused {
+			action = "symphony.pause"
+		}
+		auditlog.AppendSymphony(ctx, r.Audit, "operator", action, updated.Name, "allowed", map[string]any{"paused": updated.Spec.Paused})
+	}
+	if original.Status.LastSuccessfulSync == nil || (updated.Status.LastSuccessfulSync != nil && !updated.Status.LastSuccessfulSync.Equal(original.Status.LastSuccessfulSync)) {
+		if updated.Status.LastSuccessfulSync != nil {
+			auditlog.AppendSymphony(ctx, r.Audit, "operator", "symphony.sync", updated.Name, "allowed", map[string]any{"runningItems": updated.Status.RunningItems, "retryingItems": updated.Status.RetryingItems})
+		}
+	}
+	beforeClaims := mapClaimsByItem(original.Status.ActiveClaims)
+	afterClaims := mapClaimsByItem(updated.Status.ActiveClaims)
+	for itemID, claim := range afterClaims {
+		if _, ok := beforeClaims[itemID]; ok {
+			continue
+		}
+		auditlog.AppendSymphony(ctx, r.Audit, "operator", "symphony.claim", updated.Name, "allowed", map[string]any{"itemID": claim.ItemID, "repository": claim.Issue.Repository, "issueNumber": claim.Issue.Number, "attempt": claim.Attempt})
+	}
+	beforeRetries := mapRetriesByItem(original.Status.RetryQueue)
+	afterRetries := mapRetriesByItem(updated.Status.RetryQueue)
+	for itemID, retry := range afterRetries {
+		if previous, ok := beforeRetries[itemID]; ok && previous.Attempt == retry.Attempt && previous.Reason == retry.Reason {
+			continue
+		}
+		auditlog.AppendSymphony(ctx, r.Audit, "operator", "symphony.retry", updated.Name, "allowed", map[string]any{"itemID": retry.ItemID, "repository": retry.Issue.Repository, "issueNumber": retry.Issue.Number, "attempt": retry.Attempt, "reason": retry.Reason})
+	}
+	for itemID, claim := range beforeClaims {
+		if _, ok := afterClaims[itemID]; ok {
+			continue
+		}
+		if _, retrying := afterRetries[itemID]; retrying {
+			continue
+		}
+		auditlog.AppendSymphony(ctx, r.Audit, "operator", "symphony.release", updated.Name, "allowed", map[string]any{"itemID": claim.ItemID, "repository": claim.Issue.Repository, "issueNumber": claim.Issue.Number, "phase": claim.Phase})
+	}
+}
+
 func (r *SymphonyProjectReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	if r.Clock == nil {
+		r.Clock = clock.RealClock{}
+	}
+	if r.SourceFactory == nil {
+		r.SourceFactory = defaultSymphonySourceFactory{}
+	}
+	if r.WorkerExecutor == nil {
+		r.WorkerExecutor = defaultSymphonyWorkerExecutor{}
+	}
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&operatorv1alpha1.SymphonyProject{}).
 		Owns(&operatorv1alpha1.HarnessRun{}).

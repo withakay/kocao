@@ -1,6 +1,11 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useState } from 'react'
 import type { SymphonyProject, SymphonyProjectRequest, SymphonyProjectSpec } from '../lib/api'
 import { Btn, ErrorBanner, FormRow, Input, Textarea } from './primitives'
+
+const helperText = {
+  states: 'Comma-separated GitHub Projects field values.',
+  repositories: 'One repository per line as owner/name or owner/name@branch.',
+}
 
 type SymphonyProjectFormProps = {
   initialProject?: SymphonyProject
@@ -122,14 +127,6 @@ export function SymphonyProjectForm({ initialProject, submitLabel, busy = false,
     setDraft(toDraft(initialProject))
     setLocalError(null)
   }, [initialProject])
-
-  const helperText = useMemo(
-    () => ({
-      states: 'Comma-separated GitHub Projects field values.',
-      repositories: 'One repository per line as owner/name or owner/name@branch.',
-    }),
-    [],
-  )
 
   return (
     <form

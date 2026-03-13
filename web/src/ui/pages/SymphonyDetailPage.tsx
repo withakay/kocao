@@ -1,7 +1,7 @@
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useState } from 'react'
 import { Link, useParams } from '@tanstack/react-router'
 import { useAuth } from '../auth'
-import { api, isUnauthorizedError, type SymphonyProjectClaim, type SymphonyProjectRequest, type SymphonyProjectRetry, type SymphonyProjectSkip } from '../lib/api'
+import { api, isUnauthorizedError, type SymphonyProjectClaim, type SymphonyProjectError, type SymphonyProjectEvent, type SymphonyProjectRequest, type SymphonyProjectRetry, type SymphonyProjectSkip } from '../lib/api'
 import { usePollingQuery } from '../lib/usePolling'
 import { Badge, Btn, Card, CardHeader, EmptyRow, ErrorBanner, ScopeBadge, Table, Td, Th } from '../components/primitives'
 import { StatusPill } from '../components/StatusPill'
@@ -73,19 +73,90 @@ function RetryRows({ retries }: { retries: SymphonyProjectRetry[] }) {
           <Th>Issue</Th>
           <Th>Attempt</Th>
           <Th>Reason</Th>
+          <Th>Last Error</Th>
           <Th>Ready At</Th>
         </tr>
       </thead>
       <tbody>
         {retries.length === 0 ? (
-          <EmptyRow cols={4} loading={false} message="Retry queue is empty." />
+          <EmptyRow cols={5} loading={false} message="Retry queue is empty." />
         ) : (
           retries.map((retry) => (
             <tr key={retry.itemId} className="border-b border-border/20 last:border-b-0">
               <Td className="font-mono text-xs">{issueLabel(retry.issue?.repository, retry.issue?.number, retry.issue?.title)}</Td>
               <Td>{retry.attempt ?? 0}</Td>
               <Td>{retry.reason || '—'}</Td>
+              <Td className="text-xs text-muted-foreground">{formatTimestamp(retry.lastErrorTime)}</Td>
               <Td className="text-xs text-muted-foreground">{formatTimestamp(retry.readyAt)}</Td>
+            </tr>
+          ))
+        )}
+      </tbody>
+    </Table>
+  )
+}
+
+function ErrorRows({ errors }: { errors: SymphonyProjectError[] }) {
+	return (
+		<Table label="recent symphony errors table">
+			<thead>
+				<tr className="border-b border-border/40">
+					<Th>Issue</Th>
+					<Th>Attempt</Th>
+					<Th>Reason</Th>
+					<Th>Harness Run</Th>
+					<Th>Observed</Th>
+				</tr>
+			</thead>
+			<tbody>
+				{errors.length === 0 ? (
+					<EmptyRow cols={5} loading={false} message="No recent errors." />
+				) : (
+					errors.map((error) => (
+						<tr key={error.itemId} className="border-b border-border/20 last:border-b-0">
+							<Td className="font-mono text-xs">{issueLabel(error.issue?.repository, error.issue?.number, error.issue?.title)}</Td>
+							<Td>{error.attempt ?? 0}</Td>
+							<Td>{error.reason || '—'}</Td>
+							<Td className="font-mono text-xs">
+								{error.harnessRunName ? <Link className="text-primary hover:underline" to="/harness-runs/$harnessRunID" params={{ harnessRunID: error.harnessRunName }}>{error.harnessRunName}</Link> : '—'}
+							</Td>
+							<Td className="text-xs text-muted-foreground">{formatTimestamp(error.lastErrorTime)}</Td>
+						</tr>
+					))
+				)}
+			</tbody>
+		</Table>
+	)
+}
+
+function EventRows({ events }: { events: SymphonyProjectEvent[] }) {
+  return (
+    <Table label="recent symphony events table">
+      <thead>
+        <tr className="border-b border-border/40">
+          <Th>Issue</Th>
+          <Th>Event</Th>
+          <Th>Session</Th>
+          <Th>Run</Th>
+          <Th>Observed</Th>
+        </tr>
+      </thead>
+      <tbody>
+        {events.length === 0 ? (
+          <EmptyRow cols={5} loading={false} message="No recent events." />
+        ) : (
+          events.map((event) => (
+            <tr key={`${event.itemId}:${event.turnId ?? event.event ?? 'event'}`} className="border-b border-border/20 last:border-b-0">
+              <Td className="font-mono text-xs">{issueLabel(event.issue?.repository, event.issue?.number, event.issue?.title)}</Td>
+              <Td>
+                <div className="font-medium">{event.event || '—'}</div>
+                <div className="text-xs text-muted-foreground">{event.message || '—'}</div>
+              </Td>
+              <Td className="font-mono text-xs">{event.sessionId || event.threadId || '—'}</Td>
+              <Td className="font-mono text-xs">
+                {event.harnessRunName ? <Link className="text-primary hover:underline" to="/harness-runs/$harnessRunID" params={{ harnessRunID: event.harnessRunName }}>{event.harnessRunName}</Link> : '—'}
+              </Td>
+              <Td className="text-xs text-muted-foreground">{formatTimestamp(event.observedTime)}</Td>
             </tr>
           ))
         )}
@@ -125,7 +196,7 @@ function SkipRows({ skips }: { skips: SymphonyProjectSkip[] }) {
 
 export function SymphonyDetailPage() {
   const { token, invalidateToken } = useAuth()
-  const { projectName } = useParams({ strict: false })
+  const { projectName } = useParams({ from: '/shell/symphony/$projectName' })
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
   const [action, setAction] = useState<'pause' | 'resume' | 'refresh' | null>(null)
@@ -135,23 +206,23 @@ export function SymphonyDetailPage() {
     invalidateToken('Bearer token rejected (401). Please re-enter a valid token in Settings.')
   }, [invalidateToken])
 
-  const q = usePollingQuery(`symphony-project:${token}:${projectName}`, () => api.getSymphonyProject(token, projectName), {
+  const loadProject = useCallback(() => api.getSymphonyProject(token, projectName), [projectName, token])
+
+  const q = usePollingQuery(`symphony-project:${token}:${projectName}`, loadProject, {
     intervalMs: 5000,
-    enabled: token.trim() !== '' && typeof projectName === 'string' && projectName.trim() !== '',
+    enabled: token.trim() !== '' && projectName.trim() !== '',
     onUnauthorized,
   })
 
   const project = q.data
-  const stats = useMemo(
-    () => [
-      { label: 'Eligible', value: String(project?.status.eligibleItems ?? 0) },
-      { label: 'Running', value: String(project?.status.runningItems ?? 0) },
-      { label: 'Retrying', value: String(project?.status.retryingItems ?? 0) },
-      { label: 'Completed', value: String(project?.status.completedItems ?? 0) },
-      { label: 'Skipped', value: String(project?.status.skippedItems ?? 0) },
-    ],
-    [project],
-  )
+  const stats = [
+    { label: 'Eligible', value: String(project?.status.eligibleItems ?? 0) },
+    { label: 'Running', value: String(project?.status.runningItems ?? 0) },
+    { label: 'Retrying', value: String(project?.status.retryingItems ?? 0) },
+    { label: 'Failed', value: String(project?.status.failedItems ?? 0) },
+    { label: 'Completed', value: String(project?.status.completedItems ?? 0) },
+    { label: 'Skipped', value: String(project?.status.skippedItems ?? 0) },
+  ]
 
   const saveProject = useCallback(
     async (request: SymphonyProjectRequest) => {
@@ -180,9 +251,12 @@ export function SymphonyDetailPage() {
       setAction(nextAction)
       setActionError(null)
       try {
-        if (nextAction === 'pause') await api.pauseSymphonyProject(token, projectName)
-        if (nextAction === 'resume') await api.resumeSymphonyProject(token, projectName)
-        if (nextAction === 'refresh') await api.refreshSymphonyProject(token, projectName)
+        const actionMap = {
+          pause: api.pauseSymphonyProject,
+          resume: api.resumeSymphonyProject,
+          refresh: api.refreshSymphonyProject,
+        } as const
+        await actionMap[nextAction](token, projectName)
         await q.reload()
       } catch (error) {
         if (isUnauthorizedError(error)) {
@@ -225,7 +299,7 @@ export function SymphonyDetailPage() {
                 <Badge variant="neutral">board {project.spec.source.project.owner}/{project.spec.source.project.number}</Badge>
                 <Badge variant="info">field {project.status.resolvedFieldName || project.spec.source.fieldName || 'Status'}</Badge>
               </div>
-              <div className="grid gap-2 md:grid-cols-5">
+              <div className="grid gap-2 md:grid-cols-6">
                 {stats.map((stat) => (
                   <div key={stat.label} className="rounded-md border border-border/60 bg-muted/20 px-3 py-2">
                     <div className="text-[10px] uppercase tracking-wider text-muted-foreground">{stat.label}</div>
@@ -236,6 +310,24 @@ export function SymphonyDetailPage() {
               <div className="mt-3 grid gap-2 md:grid-cols-2 text-xs text-muted-foreground">
                 <div>Last sync: <span className="font-mono text-foreground/80">{formatTimestamp(project.status.lastSyncTime)}</span></div>
                 <div>Next sync: <span className="font-mono text-foreground/80">{formatTimestamp(project.status.nextSyncTime)}</span></div>
+              </div>
+              <div className="mt-3 grid gap-2 md:grid-cols-4 text-xs">
+                <div className="rounded-md border border-border/60 bg-muted/20 px-3 py-2">
+                  <div className="uppercase tracking-wider text-muted-foreground">Input Tokens</div>
+                  <div className="font-mono text-foreground">{project.status.tokenTotals?.inputTokens ?? 0}</div>
+                </div>
+                <div className="rounded-md border border-border/60 bg-muted/20 px-3 py-2">
+                  <div className="uppercase tracking-wider text-muted-foreground">Output Tokens</div>
+                  <div className="font-mono text-foreground">{project.status.tokenTotals?.outputTokens ?? 0}</div>
+                </div>
+                <div className="rounded-md border border-border/60 bg-muted/20 px-3 py-2">
+                  <div className="uppercase tracking-wider text-muted-foreground">Total Tokens</div>
+                  <div className="font-mono text-foreground">{project.status.tokenTotals?.totalTokens ?? 0}</div>
+                </div>
+                <div className="rounded-md border border-border/60 bg-muted/20 px-3 py-2">
+                  <div className="uppercase tracking-wider text-muted-foreground">Runtime Seconds</div>
+                  <div className="font-mono text-foreground">{(project.status.tokenTotals?.secondsRunning ?? 0).toFixed(1)}</div>
+                </div>
               </div>
               {project.status.lastError ? <ErrorBanner>{project.status.lastError}</ErrorBanner> : null}
               {project.status.unsupportedRepositories?.length ? (
@@ -267,6 +359,16 @@ export function SymphonyDetailPage() {
         <Card>
           <CardHeader title="Retry Queue" />
           <RetryRows retries={project?.status.retryQueue ?? []} />
+        </Card>
+
+        <Card>
+          <CardHeader title="Recent Errors" />
+          <ErrorRows errors={project?.status.recentErrors ?? []} />
+		</Card>
+
+        <Card>
+          <CardHeader title="Recent Events" />
+          <EventRows events={project?.status.recentEvents ?? []} />
         </Card>
 
         <Card>

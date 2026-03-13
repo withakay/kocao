@@ -89,6 +89,7 @@ func (a *API) handleSymphonyProjectsCreate(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusInternalServerError, "create symphony project failed")
 		return
 	}
+	appendSymphonyAudit(r.Context(), a.Audit, "api", "symphony.create", project.Name, "allowed", map[string]any{"repositoryCount": len(project.Spec.Repositories), "project": map[string]any{"owner": project.Spec.Source.Project.Owner, "number": project.Spec.Source.Project.Number}})
 	writeJSON(w, http.StatusCreated, symphonyProjectToResponse(project))
 }
 
@@ -114,7 +115,6 @@ func (a *API) handleSymphonyProjectPatch(w http.ResponseWriter, r *http.Request,
 	}
 	updated := project.DeepCopy()
 	updated.Spec = req.Spec
-	updated.Spec.Paused = req.Spec.Paused
 	updated.ApplyDefaults()
 	if err := updated.Validate(); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -124,6 +124,7 @@ func (a *API) handleSymphonyProjectPatch(w http.ResponseWriter, r *http.Request,
 		writeError(w, http.StatusInternalServerError, "update symphony project failed")
 		return
 	}
+	appendSymphonyAudit(r.Context(), a.Audit, "api", "symphony.update", updated.Name, "allowed", map[string]any{"paused": updated.Spec.Paused, "repositoryCount": len(updated.Spec.Repositories)})
 	writeJSON(w, http.StatusOK, symphonyProjectToResponse(updated))
 }
 
@@ -133,6 +134,7 @@ func (a *API) handleSymphonyProjectPause(w http.ResponseWriter, r *http.Request,
 		a.writeSymphonyProjectError(w, err, "pause symphony project failed")
 		return
 	}
+	appendSymphonyAudit(r.Context(), a.Audit, "api", "symphony.pause", project.Name, "allowed", map[string]any{"paused": true})
 	writeJSON(w, http.StatusOK, symphonyProjectToResponse(project))
 }
 
@@ -142,6 +144,7 @@ func (a *API) handleSymphonyProjectResume(w http.ResponseWriter, r *http.Request
 		a.writeSymphonyProjectError(w, err, "resume symphony project failed")
 		return
 	}
+	appendSymphonyAudit(r.Context(), a.Audit, "api", "symphony.resume", project.Name, "allowed", map[string]any{"paused": false})
 	writeJSON(w, http.StatusOK, symphonyProjectToResponse(project))
 }
 
@@ -160,6 +163,7 @@ func (a *API) handleSymphonyProjectRefresh(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusInternalServerError, "refresh symphony project failed")
 		return
 	}
+	appendSymphonyAudit(r.Context(), a.Audit, "api", "symphony.refresh", updated.Name, "allowed", map[string]any{"requestedAt": updated.Annotations[annotationSymphonyRefreshRequestedAt]})
 	writeJSON(w, http.StatusOK, symphonyProjectToResponse(updated))
 }
 

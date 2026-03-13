@@ -35,7 +35,7 @@ func newTestAPI(t *testing.T) (*API, func()) {
 	utilruntime.Must(appsv1.AddToScheme(scheme))
 	utilruntime.Must(operatorv1alpha1.AddToScheme(scheme))
 
-	k8s := fake.NewClientBuilder().WithScheme(scheme).Build()
+	k8s := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(&operatorv1alpha1.SymphonyProject{}, &operatorv1alpha1.HarnessRun{}, &operatorv1alpha1.Session{}).Build()
 
 	api, err := New("test-ns", "", "", nil, k8s, Options{Env: "test"})
 	if err != nil {
@@ -54,7 +54,7 @@ func newTestAPIWithAttachOptions(t *testing.T, opts Options) (*API, func()) {
 	utilruntime.Must(appsv1.AddToScheme(scheme))
 	utilruntime.Must(operatorv1alpha1.AddToScheme(scheme))
 
-	k8s := fake.NewClientBuilder().WithScheme(scheme).Build()
+	k8s := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(&operatorv1alpha1.SymphonyProject{}, &operatorv1alpha1.HarnessRun{}, &operatorv1alpha1.Session{}).Build()
 	restCfg := &rest.Config{Host: "https://example.invalid"}
 
 	api, err := New("test-ns", "", "", restCfg, k8s, opts)
@@ -383,6 +383,17 @@ func TestSymphonyProjectLifecycle_API(t *testing.T) {
 	stored.Status.Phase = operatorv1alpha1.SymphonyProjectPhaseReady
 	stored.Status.RunningItems = 1
 	stored.Status.RetryingItems = 2
+	stored.Status.TokenTotals = operatorv1alpha1.SymphonyProjectTokenTotalsStatus{InputTokens: 120, OutputTokens: 45, TotalTokens: 165, SecondsRunning: 9.5}
+	stored.Status.RecentEvents = []operatorv1alpha1.SymphonyProjectEventStatus{{
+		ItemID:         "PVT_item_1",
+		Issue:          operatorv1alpha1.SymphonyProjectIssueRefStatus{Repository: "withakay/kocao", Number: 101, Title: "First issue"},
+		SessionID:      "thread-1-turn-1",
+		ThreadID:       "thread-1",
+		TurnID:         "turn-1",
+		Event:          "turn_completed",
+		Message:        "workflow execution completed",
+		HarnessRunName: "sym-run-1",
+	}}
 	nextSync := metav1.Now()
 	stored.Status.NextSyncTime = &nextSync
 	if err := api.K8s.Status().Update(context.Background(), &stored); err != nil {
@@ -405,6 +416,12 @@ func TestSymphonyProjectLifecycle_API(t *testing.T) {
 	_ = json.Unmarshal(b, &fetched)
 	if fetched.Status.RunningItems != 1 || fetched.Status.RetryingItems != 2 {
 		t.Fatalf("unexpected runtime summary: %#v", fetched.Status)
+	}
+	if fetched.Status.TokenTotals.TotalTokens != 165 {
+		t.Fatalf("unexpected token totals: %#v", fetched.Status.TokenTotals)
+	}
+	if len(fetched.Status.RecentEvents) != 1 || fetched.Status.RecentEvents[0].Event != "turn_completed" {
+		t.Fatalf("unexpected recent events: %#v", fetched.Status.RecentEvents)
 	}
 
 	resp, b = doJSON(t, srv.Client(), http.MethodPatch, srv.URL+"/api/v1/symphony-projects/demo", "symphony", map[string]any{

@@ -213,6 +213,24 @@ func (in *SymphonyProject) DeepCopyInto(out *SymphonyProject) {
 			}
 		}
 	}
+	if in.Status.RecentErrors != nil {
+		out.Status.RecentErrors = make([]SymphonyProjectErrorStatus, len(in.Status.RecentErrors))
+		for i := range in.Status.RecentErrors {
+			out.Status.RecentErrors[i] = in.Status.RecentErrors[i]
+			if in.Status.RecentErrors[i].LastErrorTime != nil {
+				out.Status.RecentErrors[i].LastErrorTime = &metav1.Time{Time: in.Status.RecentErrors[i].LastErrorTime.Time}
+			}
+		}
+	}
+	if in.Status.RecentEvents != nil {
+		out.Status.RecentEvents = make([]SymphonyProjectEventStatus, len(in.Status.RecentEvents))
+		for i := range in.Status.RecentEvents {
+			out.Status.RecentEvents[i] = in.Status.RecentEvents[i]
+			if in.Status.RecentEvents[i].ObservedTime != nil {
+				out.Status.RecentEvents[i].ObservedTime = &metav1.Time{Time: in.Status.RecentEvents[i].ObservedTime.Time}
+			}
+		}
+	}
 	if in.Status.RecentSkips != nil {
 		out.Status.RecentSkips = make([]SymphonyProjectSkipStatus, len(in.Status.RecentSkips))
 		for i := range in.Status.RecentSkips {

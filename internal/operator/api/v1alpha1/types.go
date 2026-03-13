@@ -117,13 +117,15 @@ type SymphonyProjectSourceSpec struct {
 }
 
 type SymphonyProjectRepositorySpec struct {
-	Owner      string         `json:"owner"`
-	Name       string         `json:"name"`
-	RepoURL    string         `json:"repoURL,omitempty"`
-	Branch     string         `json:"branch,omitempty"`
-	GitAuth    *GitAuthSpec   `json:"gitAuth,omitempty"`
-	AgentAuth  *AgentAuthSpec `json:"agentAuth,omitempty"`
-	EgressMode string         `json:"egressMode,omitempty"`
+	Owner        string         `json:"owner"`
+	Name         string         `json:"name"`
+	RepoURL      string         `json:"repoURL,omitempty"`
+	LocalPath    string         `json:"localPath,omitempty"`
+	WorkflowPath string         `json:"workflowPath,omitempty"`
+	Branch       string         `json:"branch,omitempty"`
+	GitAuth      *GitAuthSpec   `json:"gitAuth,omitempty"`
+	AgentAuth    *AgentAuthSpec `json:"agentAuth,omitempty"`
+	EgressMode   string         `json:"egressMode,omitempty"`
 }
 
 func (in SymphonyProjectRepositorySpec) RepositoryKey() string {
@@ -200,25 +202,56 @@ type SymphonyProjectSkipStatus struct {
 	ObservedTime *metav1.Time                  `json:"observedTime,omitempty"`
 }
 
+type SymphonyProjectErrorStatus struct {
+	ItemID         string                        `json:"itemId,omitempty"`
+	Issue          SymphonyProjectIssueRefStatus `json:"issue,omitempty"`
+	Attempt        int32                         `json:"attempt,omitempty"`
+	Reason         string                        `json:"reason,omitempty"`
+	LastErrorTime  *metav1.Time                  `json:"lastErrorTime,omitempty"`
+	HarnessRunName string                        `json:"harnessRunName,omitempty"`
+}
+
+type SymphonyProjectEventStatus struct {
+	ItemID         string                        `json:"itemId,omitempty"`
+	Issue          SymphonyProjectIssueRefStatus `json:"issue,omitempty"`
+	SessionID      string                        `json:"sessionId,omitempty"`
+	ThreadID       string                        `json:"threadId,omitempty"`
+	TurnID         string                        `json:"turnId,omitempty"`
+	Event          string                        `json:"event,omitempty"`
+	Message        string                        `json:"message,omitempty"`
+	ObservedTime   *metav1.Time                  `json:"observedTime,omitempty"`
+	HarnessRunName string                        `json:"harnessRunName,omitempty"`
+}
+
+type SymphonyProjectTokenTotalsStatus struct {
+	InputTokens    int64   `json:"inputTokens,omitempty"`
+	OutputTokens   int64   `json:"outputTokens,omitempty"`
+	TotalTokens    int64   `json:"totalTokens,omitempty"`
+	SecondsRunning float64 `json:"secondsRunning,omitempty"`
+}
+
 type SymphonyProjectStatus struct {
-	ObservedGeneration int64                        `json:"observedGeneration,omitempty"`
-	Phase              SymphonyProjectPhase         `json:"phase,omitempty"`
-	Conditions         []metav1.Condition           `json:"conditions,omitempty"`
-	ResolvedFieldName  string                       `json:"resolvedFieldName,omitempty"`
-	LastSyncTime       *metav1.Time                 `json:"lastSyncTime,omitempty"`
-	LastSuccessfulSync *metav1.Time                 `json:"lastSuccessfulSyncTime,omitempty"`
-	NextSyncTime       *metav1.Time                 `json:"nextSyncTime,omitempty"`
-	ActiveClaims       []SymphonyProjectClaimStatus `json:"activeClaims,omitempty"`
-	RetryQueue         []SymphonyProjectRetryStatus `json:"retryQueue,omitempty"`
-	RecentSkips        []SymphonyProjectSkipStatus  `json:"recentSkips,omitempty"`
-	UnsupportedRepos   []string                     `json:"unsupportedRepositories,omitempty"`
-	LastError          string                       `json:"lastError,omitempty"`
-	EligibleItems      int32                        `json:"eligibleItems,omitempty"`
-	RunningItems       int32                        `json:"runningItems,omitempty"`
-	RetryingItems      int32                        `json:"retryingItems,omitempty"`
-	CompletedItems     int32                        `json:"completedItems,omitempty"`
-	FailedItems        int32                        `json:"failedItems,omitempty"`
-	SkippedItems       int32                        `json:"skippedItems,omitempty"`
+	ObservedGeneration int64                            `json:"observedGeneration,omitempty"`
+	Phase              SymphonyProjectPhase             `json:"phase,omitempty"`
+	Conditions         []metav1.Condition               `json:"conditions,omitempty"`
+	ResolvedFieldName  string                           `json:"resolvedFieldName,omitempty"`
+	LastSyncTime       *metav1.Time                     `json:"lastSyncTime,omitempty"`
+	LastSuccessfulSync *metav1.Time                     `json:"lastSuccessfulSyncTime,omitempty"`
+	NextSyncTime       *metav1.Time                     `json:"nextSyncTime,omitempty"`
+	ActiveClaims       []SymphonyProjectClaimStatus     `json:"activeClaims,omitempty"`
+	RetryQueue         []SymphonyProjectRetryStatus     `json:"retryQueue,omitempty"`
+	RecentErrors       []SymphonyProjectErrorStatus     `json:"recentErrors,omitempty"`
+	RecentEvents       []SymphonyProjectEventStatus     `json:"recentEvents,omitempty"`
+	TokenTotals        SymphonyProjectTokenTotalsStatus `json:"tokenTotals,omitempty"`
+	RecentSkips        []SymphonyProjectSkipStatus      `json:"recentSkips,omitempty"`
+	UnsupportedRepos   []string                         `json:"unsupportedRepositories,omitempty"`
+	LastError          string                           `json:"lastError,omitempty"`
+	EligibleItems      int32                            `json:"eligibleItems,omitempty"`
+	RunningItems       int32                            `json:"runningItems,omitempty"`
+	RetryingItems      int32                            `json:"retryingItems,omitempty"`
+	CompletedItems     int32                            `json:"completedItems,omitempty"`
+	FailedItems        int32                            `json:"failedItems,omitempty"`
+	SkippedItems       int32                            `json:"skippedItems,omitempty"`
 }
 
 type SymphonyProject struct {

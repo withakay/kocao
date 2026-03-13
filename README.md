@@ -72,6 +72,16 @@ Examples:
 ./bin/kocao sessions attach <workspace-session-id> --driver --collab
 ```
 
+## Symphony
+
+Kocao includes a GitHub Projects-backed Symphony orchestration MVP for turning board items into Kocao `Session` and `HarnessRun` execution.
+
+- UI: open `/#/symphony`
+- API: `/api/v1/symphony-projects`
+- CLI: `./bin/kocao symphony ls|get|create|pause|resume|refresh`
+- Guide: `docs/symphony-github-projects.md`
+- Workflow engine: `docs/symphony-workflow-engine.md`
+
 ## Cluster web edge
 
 The control-plane deployment includes a Caddy web edge container (`kocao/control-plane-web`) that serves:

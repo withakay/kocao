@@ -7,10 +7,13 @@ Add GitHub-project-backed work orchestration to Kocao so operators can configure
 - symphony-projects
 - github-project-source
 - symphony-orchestration
+- symphony-workflow-contract
+- symphony-agent-runner
 - control-plane-api
 - operator-reconcile
 - security-posture
 - web-ui
 
 ## Changes
-- [ ] 006-01_add-symphony-github-project-orchestration
+- [x] 006-01_add-symphony-github-project-orchestration
+- [x] 006-02_add-symphony-workflow-engine

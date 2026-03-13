@@ -98,6 +98,7 @@ type SymphonyProject = {
     phase?: string
     runningItems?: number
     retryingItems?: number
+    failedItems?: number
     completedItems?: number
     eligibleItems?: number
     skippedItems?: number
@@ -115,9 +116,35 @@ type SymphonyProject = {
       itemId: string
       attempt: number
       reason?: string
+      lastErrorTime?: string
       readyAt?: string
       issue?: { repository?: string; number?: number; title?: string }
     }>
+    recentErrors?: Array<{
+      itemId: string
+      attempt: number
+      reason?: string
+      lastErrorTime?: string
+      harnessRunName?: string
+      issue?: { repository?: string; number?: number; title?: string }
+    }>
+    recentEvents?: Array<{
+      itemId: string
+      event?: string
+      message?: string
+      sessionId?: string
+      threadId?: string
+      turnId?: string
+      observedTime?: string
+      harnessRunName?: string
+      issue?: { repository?: string; number?: number; title?: string }
+    }>
+    tokenTotals?: {
+      inputTokens?: number
+      outputTokens?: number
+      totalTokens?: number
+      secondsRunning?: number
+    }
     recentSkips?: Array<{
       itemId: string
       reason?: string
@@ -358,13 +385,14 @@ describe('workflow-ui-github', () => {
           paused: Boolean(body.spec?.paused),
           createdAt: '2026-03-09T00:00:00Z',
           spec: body.spec,
-          status: {
-            phase: 'Ready',
-            runningItems: 1,
-            retryingItems: 1,
-            completedItems: 2,
-            eligibleItems: 4,
-            skippedItems: 1,
+            status: {
+              phase: 'Ready',
+              runningItems: 1,
+              retryingItems: 1,
+              failedItems: 1,
+              completedItems: 2,
+              eligibleItems: 4,
+              skippedItems: 1,
             nextSyncTime: '2026-03-09T00:05:00Z',
             lastSyncTime: '2026-03-09T00:04:00Z',
             resolvedFieldName: 'Status',
@@ -387,10 +415,40 @@ describe('workflow-ui-github', () => {
                 itemId: 'PVT_item_2',
                 attempt: 2,
                 reason: 'PodFailed',
+                lastErrorTime: '2026-03-09T00:05:30Z',
                 readyAt: '2026-03-09T00:06:00Z',
                 issue: { repository: 'withakay/kocao', number: 102, title: 'Retry me' },
               },
             ],
+            recentErrors: [
+              {
+                itemId: 'PVT_item_2',
+                attempt: 2,
+                reason: 'PodFailed',
+                lastErrorTime: '2026-03-09T00:05:30Z',
+                harnessRunName: 'sym-run-2',
+                issue: { repository: 'withakay/kocao', number: 102, title: 'Retry me' },
+              },
+            ],
+            recentEvents: [
+              {
+                itemId: 'PVT_item_1',
+                event: 'turn_completed',
+                message: 'workflow execution completed',
+                sessionId: 'thread-1-turn-1',
+                threadId: 'thread-1',
+                turnId: 'turn-1',
+                observedTime: '2026-03-09T00:04:30Z',
+                harnessRunName: 'sym-run-1',
+                issue: { repository: 'withakay/kocao', number: 101, title: 'First issue' },
+              },
+            ],
+            tokenTotals: {
+              inputTokens: 120,
+              outputTokens: 45,
+              totalTokens: 165,
+              secondsRunning: 9.5,
+            },
             recentSkips: [
               {
                 itemId: 'PVT_item_3',
@@ -444,11 +502,21 @@ describe('workflow-ui-github', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Create Project' }))
 
     await screen.findByRole('heading', { name: 'Runtime' })
-    await screen.findByText('someone/else')
+    const unsupportedRepos = await screen.findAllByText('someone/else')
+    expect(unsupportedRepos.length).toBeGreaterThan(0)
     await screen.findByRole('link', { name: 'sym-session-1' })
-    await screen.findByRole('link', { name: 'sym-run-1' })
-    await screen.findByText('PodFailed')
+    const symRun1Links = await screen.findAllByRole('link', { name: 'sym-run-1' })
+    expect(symRun1Links.length).toBeGreaterThan(0)
+    await screen.findByRole('link', { name: 'sym-run-2' })
+    const podFailed = await screen.findAllByText('PodFailed')
+    expect(podFailed.length).toBeGreaterThan(0)
+    await screen.findByText('turn_completed')
+    await screen.findByText('workflow execution completed')
+    await screen.findByText('165')
+    await screen.findByText('9.5')
     await screen.findByText('repo not allowlisted')
+    const failed = await screen.findAllByText('Failed')
+    expect(failed.length).toBeGreaterThan(0)
 
     await userEvent.click(screen.getByRole('button', { name: 'Pause' }))
     await screen.findByRole('button', { name: 'Resume' })

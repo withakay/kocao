@@ -13,11 +13,25 @@ const (
 )
 
 const (
-	AnnotationAttachEnabled     = "kocao.withakay.github.com/attach-enabled"
-	AnnotationEgressMode        = "kocao.withakay.github.com/egress-mode"
-	AnnotationEgressHosts       = "kocao.withakay.github.com/egress-allowed-hosts"
-	AnnotationSymphonyIssueURL  = "kocao.withakay.github.com/symphony-issue-url"
-	AnnotationSymphonyIssueNode = "kocao.withakay.github.com/symphony-issue-node-id"
+	AnnotationAttachEnabled          = "kocao.withakay.github.com/attach-enabled"
+	AnnotationEgressMode             = "kocao.withakay.github.com/egress-mode"
+	AnnotationEgressHosts            = "kocao.withakay.github.com/egress-allowed-hosts"
+	AnnotationSymphonyIssueURL       = "kocao.withakay.github.com/symphony-issue-url"
+	AnnotationSymphonyIssueNode      = "kocao.withakay.github.com/symphony-issue-node-id"
+	AnnotationSymphonyWorkflowPath   = "kocao.withakay.github.com/symphony-workflow-path"
+	AnnotationSymphonyWorkspacePath  = "kocao.withakay.github.com/symphony-workspace-path"
+	AnnotationSymphonySessionID      = "kocao.withakay.github.com/symphony-session-id"
+	AnnotationSymphonyThreadID       = "kocao.withakay.github.com/symphony-thread-id"
+	AnnotationSymphonyTurnID         = "kocao.withakay.github.com/symphony-turn-id"
+	AnnotationSymphonyLastEvent      = "kocao.withakay.github.com/symphony-last-event"
+	AnnotationSymphonyLastMessage    = "kocao.withakay.github.com/symphony-last-message"
+	AnnotationSymphonyInputTokens    = "kocao.withakay.github.com/symphony-input-tokens"
+	AnnotationSymphonyOutputTokens   = "kocao.withakay.github.com/symphony-output-tokens"
+	AnnotationSymphonyTotalTokens    = "kocao.withakay.github.com/symphony-total-tokens"
+	AnnotationSymphonyRuntimeSeconds = "kocao.withakay.github.com/symphony-runtime-seconds"
+	AnnotationSymphonyApprovalPolicy = "kocao.withakay.github.com/symphony-approval-policy"
+	AnnotationSymphonyThreadSandbox  = "kocao.withakay.github.com/symphony-thread-sandbox"
+	AnnotationSymphonyTurnSandbox    = "kocao.withakay.github.com/symphony-turn-sandbox-policy"
 
 	// GitHub outcome metadata is reported by the harness (or external automation)
 	// and surfaced through the control-plane API for UI visibility.

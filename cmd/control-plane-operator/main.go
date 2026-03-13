@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/withakay/kocao/internal/auditlog"
 	"github.com/withakay/kocao/internal/config"
 	operatorv1alpha1 "github.com/withakay/kocao/internal/operator/api/v1alpha1"
 	operatorcontrollers "github.com/withakay/kocao/internal/operator/controllers"
@@ -73,6 +74,7 @@ func main() {
 	if err := (&operatorcontrollers.SymphonyProjectReconciler{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
+		Audit:  auditlog.New(cfg.AuditPath, nil),
 	}).SetupWithManager(mgr); err != nil {
 		fmt.Fprintf(os.Stderr, "unable to create symphony project controller: %v\n", err)
 		os.Exit(1)

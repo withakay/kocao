@@ -47,6 +47,17 @@ This doc translates those requirements into operator-facing guidance and deploym
 
 ## Deployment Guidance
 
+### Symphony Workflow Engine
+
+- Workflow-driven Symphony runs are intentionally more restrictive than the generic harness path.
+- Repository `WORKFLOW.md` files may define hook scripts, but Kocao currently rejects workflow hooks for Symphony worker execution instead of running them.
+- When a workflow omits Codex posture fields, Kocao applies explicit defaults:
+  - `approval_policy=untrusted`
+  - `thread_sandbox=workspace-write`
+  - `turn_sandbox_policy=workspace-write`
+- Symphony worker telemetry is treated as untrusted output and is sanitized before being persisted into annotations, status, or audit trails.
+- Local workflow and workspace paths are redacted from exposed worker metadata.
+
 ### TLS and Network Exposure
 
 - Terminate TLS before the control-plane API (ingress controller / service mesh / external LB).

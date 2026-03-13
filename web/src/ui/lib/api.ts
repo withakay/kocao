@@ -130,10 +130,40 @@ export type SymphonyProjectSkip = {
   observedTime?: string
 }
 
+export type SymphonyProjectError = {
+  itemId: string
+  issue?: SymphonyProjectIssueRef
+  attempt?: number
+  reason?: string
+  lastErrorTime?: string
+  harnessRunName?: string
+}
+
+export type SymphonyProjectEvent = {
+  itemId: string
+  issue?: SymphonyProjectIssueRef
+  sessionId?: string
+  threadId?: string
+  turnId?: string
+  event?: string
+  message?: string
+  observedTime?: string
+  harnessRunName?: string
+}
+
+export type SymphonyProjectTokenTotals = {
+  inputTokens?: number
+  outputTokens?: number
+  totalTokens?: number
+  secondsRunning?: number
+}
+
 export type SymphonyProjectRepository = {
   owner: string
   name: string
   repoURL?: string
+  localPath?: string
+  workflowPath?: string
   branch?: string
   egressMode?: string
 }
@@ -182,6 +212,9 @@ export type SymphonyProjectStatus = {
   nextSyncTime?: string
   activeClaims?: SymphonyProjectClaim[]
   retryQueue?: SymphonyProjectRetry[]
+  recentErrors?: SymphonyProjectError[]
+  recentEvents?: SymphonyProjectEvent[]
+  tokenTotals?: SymphonyProjectTokenTotals
   recentSkips?: SymphonyProjectSkip[]
   unsupportedRepositories?: string[]
   lastError?: string
