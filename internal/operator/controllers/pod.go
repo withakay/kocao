@@ -2,6 +2,7 @@ package controllers
 
 import (
 	"fmt"
+	"os"
 	"strings"
 
 	operatorv1alpha1 "github.com/withakay/kocao/internal/operator/api/v1alpha1"
@@ -9,7 +10,37 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-func buildHarnessPod(run *operatorv1alpha1.HarnessRun, workspacePVCName string, sessionDisplayName string) *corev1.Pod {
+const (
+	DefaultSidecarImage       = "kocao/kocao-sidecar:dev"
+	DefaultInitContainerImage = "busybox:1.37"
+)
+
+// PodImages holds configurable container images used by the pod builder.
+// Values default to compile-time constants when empty.
+type PodImages struct {
+	Sidecar       string
+	InitContainer string
+}
+
+// Resolve returns a copy with empty fields filled from environment variables
+// or compile-time defaults.
+func (p PodImages) Resolve() PodImages {
+	if p.Sidecar == "" {
+		p.Sidecar = os.Getenv("KOCAO_SIDECAR_IMAGE")
+	}
+	if p.Sidecar == "" {
+		p.Sidecar = DefaultSidecarImage
+	}
+	if p.InitContainer == "" {
+		p.InitContainer = os.Getenv("KOCAO_INIT_CONTAINER_IMAGE")
+	}
+	if p.InitContainer == "" {
+		p.InitContainer = DefaultInitContainerImage
+	}
+	return p
+}
+
+func buildHarnessPod(run *operatorv1alpha1.HarnessRun, workspacePVCName string, sessionDisplayName string, images ...PodImages) *corev1.Pod {
 	const (
 		workspaceVolumeName = "workspace"
 		workspaceMountPath  = "/workspace"
@@ -19,6 +50,12 @@ func buildHarnessPod(run *operatorv1alpha1.HarnessRun, workspacePVCName string, 
 		agentOauthVolumeName    = "agent-oauth"
 		agentAuthLiveVolumeName = "agent-auth-live"
 	)
+
+	var imgs PodImages
+	if len(images) > 0 {
+		imgs = images[0]
+	}
+	imgs = imgs.Resolve()
 
 	// Hardened defaults: run as non-root with a restrictive security context.
 	// Keep IDs in sync with build/Dockerfile.harness.
@@ -139,7 +176,7 @@ func buildHarnessPod(run *operatorv1alpha1.HarnessRun, workspacePVCName string, 
 
 				initContainers = append(initContainers, corev1.Container{
 					Name:    "auth-seed",
-					Image:   "busybox:1.37",
+					Image:   imgs.InitContainer,
 					Command: []string{"sh", "-c", "mkdir -p /live/.local/share/opencode /live/.codex && cp /secret/opencode-auth.json /live/.local/share/opencode/auth.json 2>/dev/null; cp /secret/codex-auth.json /live/.codex/auth.json 2>/dev/null; true"},
 					VolumeMounts: []corev1.VolumeMount{
 						{Name: agentOauthVolumeName, MountPath: "/secret", ReadOnly: true},
@@ -163,7 +200,7 @@ func buildHarnessPod(run *operatorv1alpha1.HarnessRun, workspacePVCName string, 
 
 				sidecarContainers = append(sidecarContainers, corev1.Container{
 					Name:  "kocao-sidecar",
-					Image: "kocao/kocao-sidecar:dev",
+					Image: imgs.Sidecar,
 					VolumeMounts: []corev1.VolumeMount{
 						{Name: agentAuthLiveVolumeName, MountPath: "/home/kocao/.local/share/opencode"},
 						{Name: agentAuthLiveVolumeName, MountPath: "/home/kocao/.codex"},

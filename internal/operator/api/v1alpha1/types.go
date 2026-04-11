@@ -448,13 +448,7 @@ type AgentSessionStatus struct {
 }
 
 func NormalizeAgentRuntime(raw string) AgentRuntime {
-	normalized := strings.ToLower(strings.TrimSpace(raw))
-	switch normalized {
-	case "", string(AgentRuntimeSandboxAgent):
-		return AgentRuntime(normalized)
-	default:
-		return AgentRuntime(normalized)
-	}
+	return AgentRuntime(strings.ToLower(strings.TrimSpace(raw)))
 }
 
 func NormalizeAgentKind(raw string) AgentKind {

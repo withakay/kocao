@@ -94,8 +94,8 @@ ______________________________________________________________________
 - **Verify**: `go test ./internal/controlplaneapi/... ./internal/operator/... ./internal/harnessruntime/... && pnpm -C web test && pnpm -C web lint && kubectl kustomize deploy/base >/dev/null`
 - **Done When**: The repository contains explicit verification guidance for the Kubernetes + API + UI acceptance path of sandbox-backed sessions.
 - **Requirements**: sandbox-agent-runtime:supported-agent-catalog, control-plane-api:sandbox-agent-session-management-endpoints, control-plane-api:sandbox-agent-messaging-and-event-replay-api, control-plane-api:sandbox-agent-lifecycle-control-api, agent-session-ui:agent-selection-and-launch, agent-session-ui:live-agent-interaction-view, agent-session-ui:lifecycle-controls-and-reconnect
-- **Updated At**: 2026-04-09
-- **Status**: [ ] pending
+- **Updated At**: 2026-04-11
+- **Status**: [x] complete
 
 ______________________________________________________________________
 

@@ -7,11 +7,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	operatorv1alpha1 "github.com/withakay/kocao/internal/operator/api/v1alpha1"
@@ -143,18 +145,21 @@ type agentSessionState struct {
 }
 
 type agentSessionBridge struct {
-	mu          sync.Mutex
-	runID       string
-	podName     string
-	serverID    string
-	runtime     operatorv1alpha1.AgentRuntime
-	agent       operatorv1alpha1.AgentKind
-	sessionID   string
-	phase       operatorv1alpha1.AgentSessionPhase
-	events      []agentSessionEvent
-	nextSeq     int64
-	subscribers map[chan agentSessionEvent]struct{}
-	streaming   bool
+	mu           sync.Mutex
+	createMu     sync.Mutex
+	runID        string
+	podName      string
+	serverID     string
+	runtime      operatorv1alpha1.AgentRuntime
+	agent        operatorv1alpha1.AgentKind
+	sessionID    string
+	phase        operatorv1alpha1.AgentSessionPhase
+	events       []agentSessionEvent
+	nextSeq      int64
+	subscribers  map[chan agentSessionEvent]struct{}
+	streaming    bool
+	streamCancel context.CancelFunc
+	promptSeq    atomic.Int64
 }
 
 func (b *agentSessionBridge) snapshot() agentSessionState {
@@ -227,8 +232,9 @@ func (b *agentSessionBridge) subscribe() (chan agentSessionEvent, func()) {
 }
 
 type AgentSessionService struct {
-	transport agentSessionTransport
-	store     *AgentSessionStore
+	transport  agentSessionTransport
+	store      *AgentSessionStore
+	serviceCtx context.Context
 
 	mu      sync.Mutex
 	bridges map[string]*agentSessionBridge
@@ -238,7 +244,14 @@ func newAgentSessionService(transport agentSessionTransport, store *AgentSession
 	if store == nil {
 		store = newAgentSessionStore("")
 	}
-	return &AgentSessionService{transport: transport, store: store, bridges: map[string]*agentSessionBridge{}}
+	return &AgentSessionService{transport: transport, store: store, serviceCtx: context.Background(), bridges: map[string]*agentSessionBridge{}}
+}
+
+func newAgentSessionServiceWithContext(ctx context.Context, transport agentSessionTransport, store *AgentSessionStore) *AgentSessionService {
+	if store == nil {
+		store = newAgentSessionStore("")
+	}
+	return &AgentSessionService{transport: transport, store: store, serviceCtx: ctx, bridges: map[string]*agentSessionBridge{}}
 }
 
 func (s *AgentSessionService) bridgeFor(run *operatorv1alpha1.HarnessRun) *agentSessionBridge {
@@ -248,8 +261,10 @@ func (s *AgentSessionService) bridgeFor(run *operatorv1alpha1.HarnessRun) *agent
 	if ok {
 		bridge.mu.Lock()
 		bridge.podName = run.Status.PodName
-		bridge.runtime = run.Spec.AgentSession.Runtime
-		bridge.agent = run.Spec.AgentSession.Agent
+		if run.Spec.AgentSession != nil {
+			bridge.runtime = run.Spec.AgentSession.Runtime
+			bridge.agent = run.Spec.AgentSession.Agent
+		}
 		bridge.mu.Unlock()
 		return bridge
 	}
@@ -258,12 +273,18 @@ func (s *AgentSessionService) bridgeFor(run *operatorv1alpha1.HarnessRun) *agent
 	if run.Status.AgentSession != nil && run.Status.AgentSession.Phase != "" {
 		phase = run.Status.AgentSession.Phase
 	}
+	var runtime operatorv1alpha1.AgentRuntime
+	var agent operatorv1alpha1.AgentKind
+	if run.Spec.AgentSession != nil {
+		runtime = run.Spec.AgentSession.Runtime
+		agent = run.Spec.AgentSession.Agent
+	}
 	bridge = &agentSessionBridge{
 		runID:       run.Name,
 		podName:     run.Status.PodName,
 		serverID:    run.Name,
-		runtime:     run.Spec.AgentSession.Runtime,
-		agent:       run.Spec.AgentSession.Agent,
+		runtime:     runtime,
+		agent:       agent,
 		phase:       phase,
 		subscribers: map[chan agentSessionEvent]struct{}{},
 	}
@@ -297,6 +318,12 @@ func (s *AgentSessionService) EnsureSession(ctx context.Context, run *operatorv1
 		return agentSessionState{}, fmt.Errorf("harness run pod is not ready yet")
 	}
 	bridge := s.bridgeFor(run)
+
+	// Serialize session creation to prevent two concurrent callers from both
+	// seeing SessionID=="" and racing to create duplicate sessions.
+	bridge.createMu.Lock()
+	defer bridge.createMu.Unlock()
+
 	state := bridge.snapshot()
 	if state.SessionID != "" && state.Phase != operatorv1alpha1.AgentSessionPhaseCompleted && state.Phase != operatorv1alpha1.AgentSessionPhaseFailed {
 		s.ensureStreaming(ctx, bridge)
@@ -400,9 +427,12 @@ func (s *AgentSessionService) ensureStreaming(ctx context.Context, bridge *agent
 	bridge.streaming = true
 	podName := bridge.podName
 	serverID := bridge.serverID
+	streamCtx, cancel := context.WithCancel(s.serviceCtx)
+	bridge.streamCancel = cancel
 	bridge.mu.Unlock()
 	go func() {
-		stream, err := s.transport.StreamACP(context.Background(), podName, serverID)
+		defer cancel()
+		stream, err := s.transport.StreamACP(streamCtx, podName, serverID)
 		if err != nil {
 			bridge.mu.Lock()
 			bridge.phase = operatorv1alpha1.AgentSessionPhaseFailed
@@ -478,7 +508,7 @@ func (s *AgentSessionService) Prompt(ctx context.Context, run *operatorv1alpha1.
 	s.store.SaveState(bridge.snapshot())
 	body, err := s.transport.PostACP(ctx, run.Status.PodName, bridge.serverID, "", jsonRPCEnvelope{
 		JSONRPC: "2.0",
-		ID:      3,
+		ID:      bridge.promptSeq.Add(1),
 		Method:  "session/prompt",
 		Params: map[string]any{
 			"sessionId": state.SessionID,
@@ -540,6 +570,9 @@ func (s *AgentSessionService) Stop(ctx context.Context, run *operatorv1alpha1.Ha
 	}
 	bridge.mu.Lock()
 	bridge.phase = operatorv1alpha1.AgentSessionPhaseStopping
+	if bridge.streamCancel != nil {
+		bridge.streamCancel()
+	}
 	bridge.mu.Unlock()
 	s.store.SaveState(bridge.snapshot())
 	if err := s.transport.DeleteACP(ctx, run.Status.PodName, bridge.serverID); err != nil {
@@ -574,6 +607,7 @@ func (a *API) updateHarnessRunAgentSessionStatus(ctx context.Context, run *opera
 		Phase:     state.Phase,
 	}
 	if err := a.K8s.Status().Patch(ctx, updated, client.MergeFrom(run)); err != nil {
+		slog.Error("failed to update agent session status", "run", run.Name, "error", err)
 		return
 	}
 	run.Status.AgentSession = updated.Status.AgentSession
@@ -621,7 +655,8 @@ func (a *API) handleRunAgentSessionCreate(w http.ResponseWriter, r *http.Request
 	}
 	state, err := a.AgentSessions.EnsureSession(r.Context(), run)
 	if err != nil {
-		writeError(w, http.StatusBadGateway, err.Error())
+		slog.Error("agent session create failed", "run", id, "error", err)
+		writeError(w, http.StatusBadGateway, "agent session create failed")
 		return
 	}
 	a.updateHarnessRunAgentSessionStatus(r.Context(), run, state)
@@ -650,7 +685,8 @@ func (a *API) handleRunAgentSessionPrompt(w http.ResponseWriter, r *http.Request
 	}
 	result, state, err := a.AgentSessions.Prompt(r.Context(), run, req.Prompt)
 	if err != nil {
-		writeError(w, http.StatusBadGateway, err.Error())
+		slog.Error("agent session prompt failed", "run", id, "error", err)
+		writeError(w, http.StatusBadGateway, "agent session prompt failed")
 		return
 	}
 	a.updateHarnessRunAgentSessionStatus(r.Context(), run, state)
