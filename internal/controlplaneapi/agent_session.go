@@ -1,0 +1,766 @@
+package controlplaneapi
+
+import (
+	"bufio"
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"net/url"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+
+	operatorv1alpha1 "github.com/withakay/kocao/internal/operator/api/v1alpha1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+)
+
+type jsonRPCEnvelope struct {
+	JSONRPC string          `json:"jsonrpc,omitempty"`
+	ID      any             `json:"id,omitempty"`
+	Method  string          `json:"method,omitempty"`
+	Params  any             `json:"params,omitempty"`
+	Result  json.RawMessage `json:"result,omitempty"`
+	Error   *jsonRPCError   `json:"error,omitempty"`
+}
+
+type jsonRPCError struct {
+	Code    int    `json:"code"`
+	Message string `json:"message"`
+}
+
+type agentSessionTransport interface {
+	PostACP(ctx context.Context, podName, serverID, bootstrapAgent string, payload any) ([]byte, error)
+	StreamACP(ctx context.Context, podName, serverID string) (io.ReadCloser, error)
+	DeleteACP(ctx context.Context, podName, serverID string) error
+}
+
+type podProxyAgentSessionTransport struct {
+	namespace string
+	clientset *http.Client
+	baseURL   *url.URL
+	token     string
+}
+
+func newPodProxyAgentSessionTransport(namespace string, restClient *http.Client, baseURL *url.URL, token string) *podProxyAgentSessionTransport {
+	return &podProxyAgentSessionTransport{namespace: namespace, clientset: restClient, baseURL: baseURL, token: token}
+}
+
+func (t *podProxyAgentSessionTransport) acpURL(podName, serverID string, bootstrapAgent string) string {
+	u := *t.baseURL
+	u.Path = strings.TrimRight(u.Path, "/") + "/api/v1/namespaces/" + url.PathEscape(t.namespace) + "/pods/" + url.PathEscape(podName+":2468") + "/proxy/v1/acp/" + url.PathEscape(serverID)
+	q := url.Values{}
+	if bootstrapAgent != "" {
+		q.Set("agent", bootstrapAgent)
+	}
+	u.RawQuery = q.Encode()
+	return u.String()
+}
+
+func (t *podProxyAgentSessionTransport) do(ctx context.Context, method, urlStr string, accept string, payload any) ([]byte, error) {
+	var body io.Reader
+	if payload != nil {
+		buf, err := json.Marshal(payload)
+		if err != nil {
+			return nil, err
+		}
+		body = bytes.NewReader(buf)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, urlStr, body)
+	if err != nil {
+		return nil, err
+	}
+	if accept != "" {
+		req.Header.Set("Accept", accept)
+	}
+	if payload != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	if t.token != "" {
+		req.Header.Set("Authorization", "Bearer "+t.token)
+	}
+	resp, err := t.clientset.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 2*1024*1024))
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return nil, fmt.Errorf("sandbox-agent proxy %s %s returned %d: %s", method, urlStr, resp.StatusCode, strings.TrimSpace(string(bodyBytes)))
+	}
+	return bodyBytes, nil
+}
+
+func (t *podProxyAgentSessionTransport) PostACP(ctx context.Context, podName, serverID, bootstrapAgent string, payload any) ([]byte, error) {
+	return t.do(ctx, http.MethodPost, t.acpURL(podName, serverID, bootstrapAgent), "application/json", payload)
+}
+
+func (t *podProxyAgentSessionTransport) StreamACP(ctx context.Context, podName, serverID string) (io.ReadCloser, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, t.acpURL(podName, serverID, ""), nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Accept", "text/event-stream")
+	if t.token != "" {
+		req.Header.Set("Authorization", "Bearer "+t.token)
+	}
+	resp, err := t.clientset.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		defer func() { _ = resp.Body.Close() }()
+		bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 2*1024*1024))
+		return nil, fmt.Errorf("sandbox-agent stream GET returned %d: %s", resp.StatusCode, strings.TrimSpace(string(bodyBytes)))
+	}
+	return resp.Body, nil
+}
+
+func (t *podProxyAgentSessionTransport) DeleteACP(ctx context.Context, podName, serverID string) error {
+	_, err := t.do(ctx, http.MethodDelete, t.acpURL(podName, serverID, ""), "application/json", nil)
+	return err
+}
+
+type agentSessionEvent struct {
+	Sequence int64           `json:"sequence"`
+	At       time.Time       `json:"at"`
+	Envelope json.RawMessage `json:"envelope"`
+}
+
+type agentSessionState struct {
+	HarnessRunID string                             `json:"harnessRunID"`
+	PodName      string                             `json:"podName,omitempty"`
+	ServerID     string                             `json:"serverID,omitempty"`
+	Runtime      operatorv1alpha1.AgentRuntime      `json:"runtime,omitempty"`
+	Agent        operatorv1alpha1.AgentKind         `json:"agent,omitempty"`
+	SessionID    string                             `json:"sessionId,omitempty"`
+	Phase        operatorv1alpha1.AgentSessionPhase `json:"phase,omitempty"`
+	LastSequence int64                              `json:"lastSequence,omitempty"`
+}
+
+type agentSessionBridge struct {
+	mu          sync.Mutex
+	runID       string
+	podName     string
+	serverID    string
+	runtime     operatorv1alpha1.AgentRuntime
+	agent       operatorv1alpha1.AgentKind
+	sessionID   string
+	phase       operatorv1alpha1.AgentSessionPhase
+	events      []agentSessionEvent
+	nextSeq     int64
+	subscribers map[chan agentSessionEvent]struct{}
+	streaming   bool
+}
+
+func (b *agentSessionBridge) snapshot() agentSessionState {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return agentSessionState{
+		HarnessRunID: b.runID,
+		PodName:      b.podName,
+		ServerID:     b.serverID,
+		Runtime:      b.runtime,
+		Agent:        b.agent,
+		SessionID:    b.sessionID,
+		Phase:        b.phase,
+		LastSequence: b.nextSeq,
+	}
+}
+
+func (b *agentSessionBridge) appendEvent(raw json.RawMessage) agentSessionEvent {
+	sanitized := sanitizeAgentSessionEnvelope(raw)
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.nextSeq++
+	event := agentSessionEvent{Sequence: b.nextSeq, At: time.Now().UTC(), Envelope: sanitized}
+	b.events = append(b.events, event)
+	for ch := range b.subscribers {
+		select {
+		case ch <- event:
+		default:
+		}
+	}
+	return event
+}
+
+func (b *agentSessionBridge) list(offset int64, limit int) ([]agentSessionEvent, int64) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if limit <= 0 {
+		limit = 100
+	}
+	if limit > 500 {
+		limit = 500
+	}
+	out := make([]agentSessionEvent, 0, limit)
+	for _, event := range b.events {
+		if event.Sequence <= offset {
+			continue
+		}
+		out = append(out, event)
+		if len(out) >= limit {
+			break
+		}
+	}
+	return out, b.nextSeq
+}
+
+func (b *agentSessionBridge) subscribe() (chan agentSessionEvent, func()) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	ch := make(chan agentSessionEvent, 32)
+	if b.subscribers == nil {
+		b.subscribers = map[chan agentSessionEvent]struct{}{}
+	}
+	b.subscribers[ch] = struct{}{}
+	return ch, func() {
+		b.mu.Lock()
+		defer b.mu.Unlock()
+		delete(b.subscribers, ch)
+		close(ch)
+	}
+}
+
+type AgentSessionService struct {
+	transport agentSessionTransport
+	store     *AgentSessionStore
+
+	mu      sync.Mutex
+	bridges map[string]*agentSessionBridge
+}
+
+func newAgentSessionService(transport agentSessionTransport, store *AgentSessionStore) *AgentSessionService {
+	if store == nil {
+		store = newAgentSessionStore("")
+	}
+	return &AgentSessionService{transport: transport, store: store, bridges: map[string]*agentSessionBridge{}}
+}
+
+func (s *AgentSessionService) bridgeFor(run *operatorv1alpha1.HarnessRun) *agentSessionBridge {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	bridge, ok := s.bridges[run.Name]
+	if ok {
+		bridge.mu.Lock()
+		bridge.podName = run.Status.PodName
+		bridge.runtime = run.Spec.AgentSession.Runtime
+		bridge.agent = run.Spec.AgentSession.Agent
+		bridge.mu.Unlock()
+		return bridge
+	}
+
+	phase := operatorv1alpha1.AgentSessionPhaseProvisioning
+	if run.Status.AgentSession != nil && run.Status.AgentSession.Phase != "" {
+		phase = run.Status.AgentSession.Phase
+	}
+	bridge = &agentSessionBridge{
+		runID:       run.Name,
+		podName:     run.Status.PodName,
+		serverID:    run.Name,
+		runtime:     run.Spec.AgentSession.Runtime,
+		agent:       run.Spec.AgentSession.Agent,
+		phase:       phase,
+		subscribers: map[chan agentSessionEvent]struct{}{},
+	}
+
+	if persisted, ok := s.store.LoadState(run.Name); ok {
+		if persisted.SessionID != "" {
+			bridge.sessionID = persisted.SessionID
+		}
+		if persisted.Phase != "" {
+			bridge.phase = persisted.Phase
+		}
+		if persisted.LastSequence > bridge.nextSeq {
+			bridge.nextSeq = persisted.LastSequence
+		}
+	}
+
+	resumedFrom := strings.TrimSpace(run.Labels["kocao.withakay.github.com/resumed-from"])
+	if _, next, ok := s.store.ListEvents(0, 1, run.Name, resumedFrom); ok && next > bridge.nextSeq {
+		bridge.nextSeq = next
+	}
+
+	s.bridges[run.Name] = bridge
+	return bridge
+}
+
+func (s *AgentSessionService) EnsureSession(ctx context.Context, run *operatorv1alpha1.HarnessRun) (agentSessionState, error) {
+	if run.Spec.AgentSession == nil || !run.Spec.AgentSession.Enabled() {
+		return agentSessionState{}, fmt.Errorf("harness run is not configured for agentSession")
+	}
+	if strings.TrimSpace(run.Status.PodName) == "" {
+		return agentSessionState{}, fmt.Errorf("harness run pod is not ready yet")
+	}
+	bridge := s.bridgeFor(run)
+	state := bridge.snapshot()
+	if state.SessionID != "" && state.Phase != operatorv1alpha1.AgentSessionPhaseCompleted && state.Phase != operatorv1alpha1.AgentSessionPhaseFailed {
+		s.ensureStreaming(ctx, bridge)
+		return state, nil
+	}
+	bridge.mu.Lock()
+	bridge.phase = operatorv1alpha1.AgentSessionPhaseProvisioning
+	bridge.mu.Unlock()
+	state = bridge.snapshot()
+	if state.SessionID == "" {
+		s.store.SaveState(state)
+	}
+
+	initEnv := jsonRPCEnvelope{
+		JSONRPC: "2.0",
+		ID:      1,
+		Method:  "initialize",
+		Params: map[string]any{
+			"protocolVersion": 1,
+			"clientInfo": map[string]any{
+				"name":    "kocao-control-plane",
+				"version": "dev",
+			},
+		},
+	}
+	body, err := s.transport.PostACP(ctx, run.Status.PodName, bridge.serverID, string(run.Spec.AgentSession.Agent), initEnv)
+	if err != nil {
+		return agentSessionState{}, err
+	}
+	var initResp struct {
+		Result struct {
+			AuthMethods []struct {
+				ID string `json:"id"`
+			} `json:"authMethods"`
+		} `json:"result"`
+		Error *jsonRPCError `json:"error,omitempty"`
+	}
+	if err := json.Unmarshal(body, &initResp); err != nil {
+		return agentSessionState{}, err
+	}
+	if initResp.Error != nil {
+		return agentSessionState{}, fmt.Errorf("sandbox-agent initialize failed: %s", initResp.Error.Message)
+	}
+	for _, method := range initResp.Result.AuthMethods {
+		switch method.ID {
+		case "anthropic-api-key", "codex-api-key", "openai-api-key":
+			_, _ = s.transport.PostACP(ctx, run.Status.PodName, bridge.serverID, "", jsonRPCEnvelope{
+				JSONRPC: "2.0",
+				ID:      100 + time.Now().UnixNano(),
+				Method:  "authenticate",
+				Params:  map[string]any{"methodId": method.ID},
+			})
+		}
+	}
+
+	cwd := strings.TrimSpace(run.Spec.WorkingDir)
+	if cwd == "" {
+		cwd = "/workspace/repo"
+	}
+	newSessionEnv := jsonRPCEnvelope{
+		JSONRPC: "2.0",
+		ID:      2,
+		Method:  "session/new",
+		Params: map[string]any{
+			"cwd":        cwd,
+			"mcpServers": []any{},
+		},
+	}
+	body, err = s.transport.PostACP(ctx, run.Status.PodName, bridge.serverID, "", newSessionEnv)
+	if err != nil {
+		return agentSessionState{}, err
+	}
+	var newSessionResp struct {
+		Result struct {
+			SessionID string `json:"sessionId"`
+		} `json:"result"`
+		Error *jsonRPCError `json:"error,omitempty"`
+	}
+	if err := json.Unmarshal(body, &newSessionResp); err != nil {
+		return agentSessionState{}, err
+	}
+	if newSessionResp.Error != nil {
+		return agentSessionState{}, fmt.Errorf("sandbox-agent session/new failed: %s", newSessionResp.Error.Message)
+	}
+	bridge.mu.Lock()
+	bridge.sessionID = strings.TrimSpace(newSessionResp.Result.SessionID)
+	bridge.phase = operatorv1alpha1.AgentSessionPhaseReady
+	bridge.mu.Unlock()
+	state = bridge.snapshot()
+	s.store.SaveState(state)
+	s.ensureStreaming(ctx, bridge)
+	return state, nil
+}
+
+func (s *AgentSessionService) ensureStreaming(ctx context.Context, bridge *agentSessionBridge) {
+	bridge.mu.Lock()
+	if bridge.streaming {
+		bridge.mu.Unlock()
+		return
+	}
+	bridge.streaming = true
+	podName := bridge.podName
+	serverID := bridge.serverID
+	bridge.mu.Unlock()
+	go func() {
+		stream, err := s.transport.StreamACP(context.Background(), podName, serverID)
+		if err != nil {
+			bridge.mu.Lock()
+			bridge.phase = operatorv1alpha1.AgentSessionPhaseFailed
+			bridge.streaming = false
+			bridge.mu.Unlock()
+			return
+		}
+		defer func() { _ = stream.Close() }()
+		s.consumeSSE(stream, bridge)
+	}()
+}
+
+func (s *AgentSessionService) consumeSSE(stream io.Reader, bridge *agentSessionBridge) {
+	scanner := bufio.NewScanner(stream)
+	buf := make([]byte, 0, 64*1024)
+	scanner.Buffer(buf, 1024*1024)
+	var dataLines []string
+	for scanner.Scan() {
+		line := scanner.Text()
+		if line == "" {
+			if len(dataLines) != 0 {
+				payload := strings.Join(dataLines, "\n")
+				if json.Valid([]byte(payload)) {
+					event := bridge.appendEvent(json.RawMessage(append([]byte(nil), payload...)))
+					s.store.AppendEvent(bridge.runID, event)
+				}
+				dataLines = dataLines[:0]
+			}
+			continue
+		}
+		if strings.HasPrefix(line, "data:") {
+			dataLines = append(dataLines, strings.TrimSpace(strings.TrimPrefix(line, "data:")))
+		}
+	}
+	bridge.mu.Lock()
+	bridge.streaming = false
+	switch bridge.phase {
+	case operatorv1alpha1.AgentSessionPhaseStopping, operatorv1alpha1.AgentSessionPhaseCompleted:
+		bridge.phase = operatorv1alpha1.AgentSessionPhaseCompleted
+	default:
+		if scanner.Err() != nil {
+			bridge.phase = operatorv1alpha1.AgentSessionPhaseFailed
+		} else {
+			bridge.phase = operatorv1alpha1.AgentSessionPhaseCompleted
+		}
+	}
+	state := agentSessionState{
+		HarnessRunID: bridge.runID,
+		PodName:      bridge.podName,
+		ServerID:     bridge.serverID,
+		Runtime:      bridge.runtime,
+		Agent:        bridge.agent,
+		SessionID:    bridge.sessionID,
+		Phase:        bridge.phase,
+		LastSequence: bridge.nextSeq,
+	}
+	bridge.mu.Unlock()
+	s.store.SaveState(state)
+}
+
+func (s *AgentSessionService) Prompt(ctx context.Context, run *operatorv1alpha1.HarnessRun, text string) (json.RawMessage, agentSessionState, error) {
+	state, err := s.EnsureSession(ctx, run)
+	if err != nil {
+		return nil, agentSessionState{}, err
+	}
+	if strings.TrimSpace(text) == "" {
+		return nil, agentSessionState{}, fmt.Errorf("prompt required")
+	}
+	bridge := s.bridgeFor(run)
+	bridge.mu.Lock()
+	bridge.phase = operatorv1alpha1.AgentSessionPhaseActive
+	bridge.mu.Unlock()
+	s.store.SaveState(bridge.snapshot())
+	body, err := s.transport.PostACP(ctx, run.Status.PodName, bridge.serverID, "", jsonRPCEnvelope{
+		JSONRPC: "2.0",
+		ID:      3,
+		Method:  "session/prompt",
+		Params: map[string]any{
+			"sessionId": state.SessionID,
+			"prompt":    []map[string]any{{"type": "text", "text": text}},
+		},
+	})
+	if err != nil {
+		bridge.mu.Lock()
+		bridge.phase = operatorv1alpha1.AgentSessionPhaseFailed
+		bridge.mu.Unlock()
+		s.store.SaveState(bridge.snapshot())
+		return nil, bridge.snapshot(), err
+	}
+	state = bridge.snapshot()
+	s.store.SaveState(state)
+	return json.RawMessage(append([]byte(nil), body...)), state, nil
+}
+
+func (s *AgentSessionService) ListEvents(offset int64, limit int, runIDs ...string) ([]agentSessionEvent, int64, bool) {
+	return s.store.ListEvents(offset, limit, runIDs...)
+}
+
+func (s *AgentSessionService) GetState(run *operatorv1alpha1.HarnessRun) agentSessionState {
+	if run.Spec.AgentSession == nil || !run.Spec.AgentSession.Enabled() {
+		return agentSessionState{}
+	}
+	s.mu.Lock()
+	bridge, ok := s.bridges[run.Name]
+	s.mu.Unlock()
+	if ok {
+		return bridge.snapshot()
+	}
+	if state, ok := s.store.LoadState(run.Name, run.Labels["kocao.withakay.github.com/resumed-from"]); ok {
+		state.HarnessRunID = run.Name
+		state.PodName = run.Status.PodName
+		state.ServerID = run.Name
+		return state
+	}
+	state := agentSessionState{
+		HarnessRunID: run.Name,
+		PodName:      run.Status.PodName,
+		ServerID:     run.Name,
+		Runtime:      run.Spec.AgentSession.Runtime,
+		Agent:        run.Spec.AgentSession.Agent,
+	}
+	if run.Status.AgentSession != nil {
+		state.SessionID = run.Status.AgentSession.SessionID
+		state.Phase = run.Status.AgentSession.Phase
+	}
+	return state
+}
+
+func (s *AgentSessionService) Stop(ctx context.Context, run *operatorv1alpha1.HarnessRun) (agentSessionState, error) {
+	s.mu.Lock()
+	bridge, ok := s.bridges[run.Name]
+	s.mu.Unlock()
+	if !ok {
+		return s.GetState(run), nil
+	}
+	bridge.mu.Lock()
+	bridge.phase = operatorv1alpha1.AgentSessionPhaseStopping
+	bridge.mu.Unlock()
+	s.store.SaveState(bridge.snapshot())
+	if err := s.transport.DeleteACP(ctx, run.Status.PodName, bridge.serverID); err != nil {
+		bridge.mu.Lock()
+		bridge.phase = operatorv1alpha1.AgentSessionPhaseFailed
+		bridge.mu.Unlock()
+		s.store.SaveState(bridge.snapshot())
+		return bridge.snapshot(), err
+	}
+	bridge.mu.Lock()
+	bridge.phase = operatorv1alpha1.AgentSessionPhaseCompleted
+	bridge.mu.Unlock()
+	state := bridge.snapshot()
+	s.store.SaveState(state)
+	return state, nil
+}
+
+func (a *API) getHarnessRun(ctx context.Context, id string) (*operatorv1alpha1.HarnessRun, error) {
+	var run operatorv1alpha1.HarnessRun
+	if err := a.K8s.Get(ctx, client.ObjectKey{Namespace: a.Namespace, Name: id}, &run); err != nil {
+		return nil, err
+	}
+	return &run, nil
+}
+
+func (a *API) updateHarnessRunAgentSessionStatus(ctx context.Context, run *operatorv1alpha1.HarnessRun, state agentSessionState) {
+	updated := run.DeepCopy()
+	updated.Status.AgentSession = &operatorv1alpha1.AgentSessionStatus{
+		Runtime:   state.Runtime,
+		Agent:     state.Agent,
+		SessionID: state.SessionID,
+		Phase:     state.Phase,
+	}
+	if err := a.K8s.Status().Patch(ctx, updated, client.MergeFrom(run)); err != nil {
+		return
+	}
+	run.Status.AgentSession = updated.Status.AgentSession
+}
+
+type agentSessionPromptRequest struct {
+	Prompt string `json:"prompt"`
+}
+
+func (a *API) handleRunAgentSessionGet(w http.ResponseWriter, r *http.Request, id string) {
+	if a.AgentSessions == nil {
+		writeError(w, http.StatusNotImplemented, "agent session service not configured")
+		return
+	}
+	run, err := a.getHarnessRun(r.Context(), id)
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			writeError(w, http.StatusNotFound, "harness run not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "get harness run failed")
+		return
+	}
+	state := a.AgentSessions.GetState(run)
+	if state.Runtime == "" {
+		writeError(w, http.StatusNotFound, "agent session not configured for harness run")
+		return
+	}
+	writeJSON(w, http.StatusOK, state)
+}
+
+func (a *API) handleRunAgentSessionCreate(w http.ResponseWriter, r *http.Request, id string) {
+	if a.AgentSessions == nil {
+		writeError(w, http.StatusNotImplemented, "agent session service not configured")
+		return
+	}
+	run, err := a.getHarnessRun(r.Context(), id)
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			writeError(w, http.StatusNotFound, "harness run not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "get harness run failed")
+		return
+	}
+	state, err := a.AgentSessions.EnsureSession(r.Context(), run)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	a.updateHarnessRunAgentSessionStatus(r.Context(), run, state)
+	a.Audit.Append(r.Context(), principal(r.Context()), "agent-session.create", "harness-run", id, "allowed", map[string]any{"agent": state.Agent, "runtime": state.Runtime, "sessionId": state.SessionID})
+	writeJSON(w, http.StatusCreated, state)
+}
+
+func (a *API) handleRunAgentSessionPrompt(w http.ResponseWriter, r *http.Request, id string) {
+	if a.AgentSessions == nil {
+		writeError(w, http.StatusNotImplemented, "agent session service not configured")
+		return
+	}
+	var req agentSessionPromptRequest
+	if err := readJSON(w, r, &req); err != nil {
+		writeJSONError(w, err)
+		return
+	}
+	run, err := a.getHarnessRun(r.Context(), id)
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			writeError(w, http.StatusNotFound, "harness run not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "get harness run failed")
+		return
+	}
+	result, state, err := a.AgentSessions.Prompt(r.Context(), run, req.Prompt)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	a.updateHarnessRunAgentSessionStatus(r.Context(), run, state)
+	a.Audit.Append(r.Context(), principal(r.Context()), "agent-session.prompt", "harness-run", id, "allowed", map[string]any{"sessionId": state.SessionID})
+	writeJSON(w, http.StatusOK, map[string]any{"session": state, "result": json.RawMessage(result)})
+}
+
+func (a *API) handleRunAgentSessionEvents(w http.ResponseWriter, r *http.Request, id string) {
+	if a.AgentSessions == nil {
+		writeError(w, http.StatusNotImplemented, "agent session service not configured")
+		return
+	}
+	offset, _ := strconv.ParseInt(strings.TrimSpace(r.URL.Query().Get("offset")), 10, 64)
+	limit, _ := strconv.Atoi(strings.TrimSpace(r.URL.Query().Get("limit")))
+	run, err := a.getHarnessRun(r.Context(), id)
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			writeError(w, http.StatusNotFound, "harness run not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "get harness run failed")
+		return
+	}
+	events, next, ok := a.AgentSessions.ListEvents(offset, limit, id, run.Labels["kocao.withakay.github.com/resumed-from"])
+	if !ok {
+		writeJSON(w, http.StatusOK, map[string]any{"events": []agentSessionEvent{}, "nextOffset": 0})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"events": events, "nextOffset": next})
+}
+
+func (a *API) handleRunAgentSessionEventsStream(w http.ResponseWriter, r *http.Request, id string) {
+	if a.AgentSessions == nil {
+		writeError(w, http.StatusNotImplemented, "agent session service not configured")
+		return
+	}
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		writeError(w, http.StatusInternalServerError, "streaming unsupported")
+		return
+	}
+	run, err := a.getHarnessRun(r.Context(), id)
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			writeError(w, http.StatusNotFound, "harness run not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "get harness run failed")
+		return
+	}
+	state := a.AgentSessions.GetState(run)
+	if state.Runtime == "" {
+		writeError(w, http.StatusNotFound, "agent session not configured for harness run")
+		return
+	}
+	bridge := a.AgentSessions.bridgeFor(run)
+	offset, _ := strconv.ParseInt(strings.TrimSpace(r.URL.Query().Get("offset")), 10, 64)
+	backlog, _, _ := a.AgentSessions.ListEvents(offset, 500, id, run.Labels["kocao.withakay.github.com/resumed-from"])
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	for _, event := range backlog {
+		b, _ := json.Marshal(event)
+		_, _ = fmt.Fprintf(w, "data: %s\n\n", b)
+	}
+	flusher.Flush()
+	ch, unsubscribe := bridge.subscribe()
+	defer unsubscribe()
+	ticker := time.NewTicker(250 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case <-ticker.C:
+			state := bridge.snapshot()
+			if state.Phase == operatorv1alpha1.AgentSessionPhaseCompleted || state.Phase == operatorv1alpha1.AgentSessionPhaseFailed {
+				return
+			}
+		case event := <-ch:
+			if event.Sequence <= offset {
+				continue
+			}
+			b, _ := json.Marshal(event)
+			_, _ = fmt.Fprintf(w, "data: %s\n\n", b)
+			flusher.Flush()
+		}
+	}
+}
+
+func (a *API) handleRunAgentSessionStop(w http.ResponseWriter, r *http.Request, id string) {
+	if a.AgentSessions == nil {
+		writeError(w, http.StatusNotImplemented, "agent session service not configured")
+		return
+	}
+	run, err := a.getHarnessRun(r.Context(), id)
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			writeError(w, http.StatusNotFound, "harness run not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "get harness run failed")
+		return
+	}
+	state, err := a.AgentSessions.Stop(r.Context(), run)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	a.updateHarnessRunAgentSessionStatus(r.Context(), run, state)
+	a.Audit.Append(r.Context(), principal(r.Context()), "agent-session.stop", "harness-run", id, "allowed", map[string]any{"sessionId": state.SessionID})
+	writeJSON(w, http.StatusOK, state)
+}
