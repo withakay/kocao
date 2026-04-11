@@ -25,8 +25,8 @@ ______________________________________________________________________
 - **Action**: Install `@tanstack/react-router`. Create code-based route tree with `createRootRoute`, `createRoute`, and `createHashHistory`. Replace `HashRouter`/`Routes`/`Route` in `App.tsx` with `createRouter` and `RouterProvider`.
 - **Verify**: `cd web && pnpm test`
 - **Done When**: App renders via TanStack Router with hash history; existing routes still resolve.
-- **Updated At**: 2026-02-24
-- **Status**: [ ] pending
+- **Updated At**: 2026-03-13
+- **Status**: [x] complete
 
 ### Task 1.2: Migrate page component hooks
 
@@ -35,8 +35,8 @@ ______________________________________________________________________
 - **Action**: Replace `useParams`, `useNavigate`, `useSearchParams`, `useLocation` from react-router-dom with TanStack Router equivalents. Update `Link` imports to TanStack's `Link`.
 - **Verify**: `cd web && pnpm test`
 - **Done When**: All page components import exclusively from `@tanstack/react-router`; no react-router-dom imports remain in page files.
-- **Updated At**: 2026-02-24
-- **Status**: [ ] pending
+- **Updated At**: 2026-03-13
+- **Status**: [x] complete
 
 ### Task 1.3: Migrate Shell navigation components
 
@@ -45,8 +45,8 @@ ______________________________________________________________________
 - **Action**: Replace `NavLink`, `Outlet`, `useLocation` with TanStack equivalents. Use `Link` with `activeProps` or `activeOptions` for active-link styling. Replace `Outlet` with TanStack's `Outlet`.
 - **Verify**: `cd web && pnpm test`
 - **Done When**: Shell uses only TanStack Router components; active nav styling preserved.
-- **Updated At**: 2026-02-24
-- **Status**: [ ] pending
+- **Updated At**: 2026-03-13
+- **Status**: [x] complete
 
 ______________________________________________________________________
 
@@ -61,8 +61,8 @@ ______________________________________________________________________
 - **Action**: Replace any react-router test wrappers with TanStack Router test utilities (`createMemoryHistory`, `RouterProvider`). Ensure all existing tests pass with new router context.
 - **Verify**: `cd web && pnpm test`
 - **Done When**: All tests pass using TanStack Router context; no react-router-dom imports in test files.
-- **Updated At**: 2026-02-24
-- **Status**: [ ] pending
+- **Updated At**: 2026-03-13
+- **Status**: [x] complete
 
 ### Task 2.2: Remove react-router-dom dependency
 
@@ -71,8 +71,8 @@ ______________________________________________________________________
 - **Action**: Uninstall `react-router-dom`. Verify no remaining imports via grep. Run full test suite.
 - **Verify**: `cd web && pnpm test && grep -r 'react-router-dom' src/ && echo 'FAIL: still present' || echo 'OK: removed'`
 - **Done When**: `react-router-dom` is absent from package.json and no source file imports it.
-- **Updated At**: 2026-02-24
-- **Status**: [ ] pending
+- **Updated At**: 2026-03-13
+- **Status**: [x] complete
 
 ______________________________________________________________________
 
@@ -87,5 +87,5 @@ ______________________________________________________________________
 - **Action**: Run full test suites (`pnpm test`, `make test`). Verify no React Router v7 deprecation warnings in browser console. Confirm hash-based URLs still work.
 - **Verify**: `cd web && pnpm test` and `make test`
 - **Done When**: All tests pass, zero deprecation warnings, hash routing works identically to before.
-- **Updated At**: 2026-02-24
-- **Status**: [ ] pending
+- **Updated At**: 2026-03-13
+- **Status**: [x] complete

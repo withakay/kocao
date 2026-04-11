@@ -354,7 +354,7 @@ func TestSymphonyProjectLifecycle_API(t *testing.T) {
 		"spec": map[string]any{
 			"source": map[string]any{
 				"project":        map[string]any{"owner": "withakay", "number": 42},
-				"tokenSecretRef": map[string]any{"name": "github-token"},
+				"githubToken":    "github_pat_demo_token_value",
 				"activeStates":   []string{"Queued"},
 				"terminalStates": []string{"Done"},
 			},
@@ -374,6 +374,16 @@ func TestSymphonyProjectLifecycle_API(t *testing.T) {
 	}
 	if created.Spec.Runtime.MaxConcurrentItems != operatorv1alpha1.DefaultSymphonyMaxConcurrentItems {
 		t.Fatalf("maxConcurrentItems = %d", created.Spec.Runtime.MaxConcurrentItems)
+	}
+	if created.Spec.Source.TokenSecretRef.Name != "symphony-demo-withakay-token" {
+		t.Fatalf("token secret ref = %#v", created.Spec.Source.TokenSecretRef)
+	}
+	var secret corev1.Secret
+	if err := api.K8s.Get(context.Background(), client.ObjectKey{Namespace: api.Namespace, Name: "symphony-demo-withakay-token"}, &secret); err != nil {
+		t.Fatalf("get symphony token secret: %v", err)
+	}
+	if string(secret.Data["token"]) != "github_pat_demo_token_value" {
+		t.Fatalf("secret token = %q", string(secret.Data["token"]))
 	}
 
 	var stored operatorv1alpha1.SymphonyProject
@@ -429,7 +439,7 @@ func TestSymphonyProjectLifecycle_API(t *testing.T) {
 			"paused": true,
 			"source": map[string]any{
 				"project":        map[string]any{"owner": "withakay", "number": 42},
-				"tokenSecretRef": map[string]any{"name": "github-token"},
+				"githubToken":    "github_pat_rotated_token_value",
 				"activeStates":   []string{"Queued"},
 				"terminalStates": []string{"Done"},
 			},
@@ -439,6 +449,35 @@ func TestSymphonyProjectLifecycle_API(t *testing.T) {
 	})
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("patch symphony project status = %d, want 200 (body=%s)", resp.StatusCode, string(b))
+	}
+	if err := api.K8s.Get(context.Background(), client.ObjectKey{Namespace: api.Namespace, Name: "symphony-demo-withakay-token"}, &secret); err != nil {
+		t.Fatalf("get updated symphony token secret: %v", err)
+	}
+	if string(secret.Data["token"]) != "github_pat_rotated_token_value" {
+		t.Fatalf("updated secret token = %q", string(secret.Data["token"]))
+	}
+
+	resp, b = doJSON(t, srv.Client(), http.MethodPatch, srv.URL+"/api/v1/symphony-projects/demo", "symphony", map[string]any{
+		"spec": map[string]any{
+			"paused": false,
+			"source": map[string]any{
+				"project":        map[string]any{"owner": "withakay", "number": 42},
+				"tokenSecretRef": map[string]any{"name": "symphony-demo-withakay-token"},
+				"activeStates":   []string{"Queued"},
+				"terminalStates": []string{"Done"},
+			},
+			"repositories": []map[string]any{{"owner": "withakay", "name": "kocao", "repoURL": "https://github.com/withakay/kocao", "branch": "main"}},
+			"runtime":      map[string]any{"image": "ghcr.io/withakay/kocao-harness:latest"},
+		},
+	})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("patch without github token status = %d, want 200 (body=%s)", resp.StatusCode, string(b))
+	}
+	if err := api.K8s.Get(context.Background(), client.ObjectKey{Namespace: api.Namespace, Name: "symphony-demo-withakay-token"}, &secret); err != nil {
+		t.Fatalf("get preserved symphony token secret: %v", err)
+	}
+	if string(secret.Data["token"]) != "github_pat_rotated_token_value" {
+		t.Fatalf("expected existing token to remain, got %q", string(secret.Data["token"]))
 	}
 
 	resp, _ = doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/symphony-projects/demo/pause", "symphony", nil)
@@ -462,6 +501,40 @@ func TestSymphonyProjectLifecycle_API(t *testing.T) {
 	}
 	if stored.Annotations[annotationSymphonyRefreshRequestedAt] == "" {
 		t.Fatalf("expected refresh annotation, got %#v", stored.Annotations)
+	}
+}
+
+func TestSymphonyProjectCreate_RejectsPATInSecretName(t *testing.T) {
+	api, cleanup := newTestAPI(t)
+	defer cleanup()
+
+	if err := api.Tokens.Create(context.Background(), "t-symphony", "symphony", []string{ScopeSymphonyProjectWrite}); err != nil {
+		t.Fatalf("create token: %v", err)
+	}
+
+	srv := httptest.NewServer(api.Handler())
+	defer srv.Close()
+
+	body := map[string]any{
+		"name": "demo",
+		"spec": map[string]any{
+			"source": map[string]any{
+				"project":        map[string]any{"owner": "withakay", "number": 42},
+				"tokenSecretRef": map[string]any{"name": "github_pat_should_not_be_here"},
+				"activeStates":   []string{"Queued"},
+				"terminalStates": []string{"Done"},
+			},
+			"repositories": []map[string]any{{"owner": "withakay", "name": "kocao", "repoURL": "https://github.com/withakay/kocao"}},
+			"runtime":      map[string]any{"image": "ghcr.io/withakay/kocao-harness:latest"},
+		},
+	}
+
+	resp, b := doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/symphony-projects", "symphony", body)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (body=%s)", resp.StatusCode, string(b))
+	}
+	if strings.Contains(string(b), "github_pat_should_not_be_here") {
+		t.Fatalf("response leaked raw token-like value: %s", string(b))
 	}
 }
 

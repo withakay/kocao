@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -129,6 +130,7 @@ func TestLoadProjectPaginatesUserProjects(t *testing.T) {
 						},
 					},
 				},
+				"errors": []map[string]any{{"message": "Could not resolve to an Organization with the login of 'withakay'."}},
 			})
 			return
 		}
@@ -147,6 +149,7 @@ func TestLoadProjectPaginatesUserProjects(t *testing.T) {
 					},
 				},
 			},
+			"errors": []map[string]any{{"message": "Could not resolve to an Organization with the login of 'withakay'."}},
 		})
 	}))
 	defer srv.Close()
@@ -175,6 +178,88 @@ func TestLoadProjectPaginatesUserProjects(t *testing.T) {
 	}
 	if snapshot.Candidates[1].Issue.Number != 2 {
 		t.Fatalf("second candidate issue number = %d", snapshot.Candidates[1].Issue.Number)
+	}
+}
+
+func TestLoadProjectIgnoresUserLookupErrorForOrganizationProjects(t *testing.T) {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeGraphQLResponse(t, w, map[string]any{
+			"data": map[string]any{
+				"organization": map[string]any{
+					"projectV2": map[string]any{
+						"id":    "PVT_project_org",
+						"title": "Org Symphony",
+						"items": map[string]any{
+							"pageInfo": map[string]any{"hasNextPage": false, "endCursor": ""},
+							"nodes": []map[string]any{
+								issueItem("PVT_item_org", false, "Todo", "ISSUE_ORG", 88, "acme", "platform", false, "OPEN"),
+							},
+						},
+					},
+				},
+			},
+			"errors": []map[string]any{{"message": "Could not resolve to a User with the login of 'acme'."}},
+		})
+	}))
+	defer srv.Close()
+
+	client, err := NewClient("github-token", Options{APIURL: srv.URL, HTTPClient: srv.Client()})
+	if err != nil {
+		t.Fatalf("NewClient error = %v", err)
+	}
+
+	snapshot, err := client.LoadProject(context.Background(), LoadOptions{
+		Project:        operatorv1alpha1.GitHubProjectRef{Owner: "acme", Number: 9},
+		ActiveStates:   []string{"Todo"},
+		TerminalStates: []string{"Done"},
+		Repositories:   []operatorv1alpha1.SymphonyProjectRepositorySpec{{Owner: "acme", Name: "platform"}},
+	})
+	if err != nil {
+		t.Fatalf("LoadProject error = %v", err)
+	}
+	if len(snapshot.Candidates) != 1 || snapshot.Candidates[0].Issue.Repository != "acme/platform" {
+		t.Fatalf("unexpected candidates = %#v", snapshot.Candidates)
+	}
+}
+
+func TestLoadProjectReturnsNonOwnerGraphQLErrors(t *testing.T) {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeGraphQLResponse(t, w, map[string]any{
+			"data": map[string]any{
+				"user": map[string]any{
+					"projectV2": map[string]any{
+						"id":    "PVT_project_2",
+						"title": "Paged Symphony",
+						"items": map[string]any{
+							"pageInfo": map[string]any{"hasNextPage": false, "endCursor": ""},
+							"nodes":    []map[string]any{},
+						},
+					},
+				},
+			},
+			"errors": []map[string]any{{"message": "Resource not accessible by personal access token"}},
+		})
+	}))
+	defer srv.Close()
+
+	client, err := NewClient("github-token", Options{APIURL: srv.URL, HTTPClient: srv.Client()})
+	if err != nil {
+		t.Fatalf("NewClient error = %v", err)
+	}
+
+	_, err = client.LoadProject(context.Background(), LoadOptions{
+		Project:        operatorv1alpha1.GitHubProjectRef{Owner: "withakay", Number: 8},
+		ActiveStates:   []string{"Todo"},
+		TerminalStates: []string{"Done"},
+		Repositories:   []operatorv1alpha1.SymphonyProjectRepositorySpec{{Owner: "withakay", Name: "kocao"}},
+	})
+	if err == nil {
+		t.Fatal("expected graphql accessibility error")
+	}
+	if got := err.Error(); !strings.Contains(got, "github graphql error") || !strings.Contains(got, "Resource not accessible by personal access token") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 

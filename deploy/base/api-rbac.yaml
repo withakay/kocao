@@ -6,6 +6,15 @@ rules:
   - apiGroups:
       - ""
     resources:
+      - secrets
+    verbs:
+      - get
+      - create
+      - update
+      - patch
+  - apiGroups:
+      - ""
+    resources:
       - pods/exec
     verbs:
       - create
@@ -38,6 +47,8 @@ rules:
   - apiGroups:
       - kocao.withakay.github.com
     resources:
+      - symphonyprojects
+      - symphonyprojects/status
       - sessions
       - harnessruns
     verbs:

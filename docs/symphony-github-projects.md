@@ -13,9 +13,20 @@ Kocao's Symphony integration lets you configure a GitHub Projects v2 board as an
 ## Required Inputs
 
 - A GitHub Projects v2 board owner and project number
-- A Kubernetes `Secret` containing the GitHub token used for board polling
+- A GitHub PAT entered through the Symphony UI/API, or an existing Kubernetes `Secret` for advanced/manual flows
 - One or more allowlisted repositories
 - A runtime image for Symphony-created harness runs
+
+## Managed GitHub Token Secret
+
+For the standard UI flow, operators paste a GitHub PAT into the Symphony form and Kocao creates the backing Kubernetes Secret automatically.
+
+- The Secret name is derived as `symphony-<project-name>-<github-owner>-token`
+- The PAT field is write-only
+- Leaving the PAT field blank while editing keeps the current stored Secret reference and token value
+- `spec.source.tokenSecretRef` remains the internal stored reference used by the operator
+
+For user-owned GitHub Projects v2, prefer a classic PAT with `read:project` and add `repo` when the linked issues live in private repositories.
 
 ## Example Resource
 
@@ -51,7 +62,7 @@ spec:
         apiKeySecretName: llm-api-keys
       egressMode: restricted
   runtime:
-    image: ghcr.io/withakay/kocao-harness:latest
+    image: kocao/harness-runtime:dev
     defaultRepoRevision: main
     maxConcurrentItems: 1
     retryBaseDelaySeconds: 60
@@ -64,10 +75,13 @@ spec:
 
 ## Operator Flow
 
-1. Create the GitHub polling `Secret` in the same namespace as the control plane.
-2. Create a `SymphonyProject` with the target board and repository allowlist.
+1. Create a `SymphonyProject` with the target board, GitHub PAT, and repository allowlist.
 3. Watch runtime state in `/#/symphony`, `kocao symphony get <name>`, or `GET /api/v1/symphony-projects/<name>`.
 4. Use pause, resume, and refresh controls to manage orchestration.
+
+For advanced/manual flows, you can still create the Secret yourself and point `spec.source.tokenSecretRef` at it directly.
+
+For local kind development, use the locally built harness image tag `kocao/harness-runtime:dev` so worker pods can start without pulling from GHCR.
 
 ## Validation Commands
 

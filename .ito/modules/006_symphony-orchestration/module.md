@@ -17,3 +17,4 @@ Add GitHub-project-backed work orchestration to Kocao so operators can configure
 ## Changes
 - [x] 006-01_add-symphony-github-project-orchestration
 - [x] 006-02_add-symphony-workflow-engine
+- [x] 006-03_add-symphony-inline-github-token-secret

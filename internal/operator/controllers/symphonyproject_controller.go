@@ -246,23 +246,33 @@ func (r *SymphonyProjectReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		return ctrl.Result{}, err
 	}
 	if err := r.releaseInactiveRuns(ctx, updated, snapshot, runsByItem); err != nil {
-		return ctrl.Result{}, err
+		r.setLifecycleError(updated, now, err, pollInterval)
+		changedStatus = true
+		return r.commit(ctx, &project, updated, changedMeta, changedStatus, ctrl.Result{RequeueAfter: pollInterval})
 	}
 
 	reconcileProjectRuntime(updated, snapshot, runsByItem, now.Time)
 	if err := r.materializeActiveClaims(ctx, updated, runsByItem, now.Time); err != nil {
-		return ctrl.Result{}, err
+		r.setLifecycleError(updated, now, err, pollInterval)
+		changedStatus = true
+		return r.commit(ctx, &project, updated, changedMeta, changedStatus, ctrl.Result{RequeueAfter: pollInterval})
 	}
 	runsByItem, err = r.listProjectRuns(ctx, updated)
 	if err != nil {
-		return ctrl.Result{}, err
+		r.setLifecycleError(updated, now, err, pollInterval)
+		changedStatus = true
+		return r.commit(ctx, &project, updated, changedMeta, changedStatus, ctrl.Result{RequeueAfter: pollInterval})
 	}
 	if err := r.executeRunnableClaims(ctx, updated, runsByItem, workerExecutor, now.Time); err != nil {
-		return ctrl.Result{}, err
+		r.setLifecycleError(updated, now, err, pollInterval)
+		changedStatus = true
+		return r.commit(ctx, &project, updated, changedMeta, changedStatus, ctrl.Result{RequeueAfter: pollInterval})
 	}
 	runsByItem, err = r.listProjectRuns(ctx, updated)
 	if err != nil {
-		return ctrl.Result{}, err
+		r.setLifecycleError(updated, now, err, pollInterval)
+		changedStatus = true
+		return r.commit(ctx, &project, updated, changedMeta, changedStatus, ctrl.Result{RequeueAfter: pollInterval})
 	}
 	reconcileProjectRuntime(updated, snapshot, runsByItem, now.Time)
 	updated.Status.Phase = operatorv1alpha1.SymphonyProjectPhaseReady
@@ -291,6 +301,15 @@ func (r *SymphonyProjectReconciler) materializeActiveClaims(ctx context.Context,
 		}
 		desiredRunName := symphonyRunName(project, *claim)
 		if existingRun, ok := runsByItem[claim.ItemID]; ok && existingRun.Name == desiredRunName {
+			if repo, ok := repositories[repositoryKeyFromStatus(claim.Issue)]; ok {
+				session, err := r.ensureClaimSession(ctx, project, repo, *claim)
+				if err != nil {
+					return err
+				}
+				if _, err := r.ensureClaimRun(ctx, project, session, repo, *claim); err != nil {
+					return err
+				}
+			}
 			project.Status.ActiveClaims[i] = buildClaimStatus(githubsource.CandidateItem{ItemID: claim.ItemID, Issue: githubsource.Issue{Repository: claim.Issue.Repository, Number: claim.Issue.Number, NodeID: claim.Issue.NodeID, URL: claim.Issue.URL, Title: claim.Issue.Title}}, existingRun, *claim, now)
 			continue
 		}
@@ -352,6 +371,36 @@ func (r *SymphonyProjectReconciler) ensureClaimSession(ctx context.Context, proj
 	desired := &operatorv1alpha1.Session{}
 	err := r.Get(ctx, client.ObjectKey{Namespace: project.Namespace, Name: name}, desired)
 	if err == nil {
+		updated := desired.DeepCopy()
+		if updated.Annotations == nil {
+			updated.Annotations = map[string]string{}
+		}
+		changed := false
+		for key, value := range map[string]string{
+			AnnotationAttachEnabled:     "true",
+			AnnotationEgressMode:        claimEgressMode(project.Spec.Runtime, repo),
+			AnnotationSymphonyIssueURL:  claim.Issue.URL,
+			AnnotationSymphonyIssueNode: claim.Issue.NodeID,
+		} {
+			if updated.Annotations[key] != value {
+				updated.Annotations[key] = value
+				changed = true
+			}
+		}
+		if updated.Spec.DisplayName != symphonySessionDisplayName(claim) {
+			updated.Spec.DisplayName = symphonySessionDisplayName(claim)
+			changed = true
+		}
+		if updated.Spec.RepoURL != repositoryRepoURL(repo) {
+			updated.Spec.RepoURL = repositoryRepoURL(repo)
+			changed = true
+		}
+		if changed {
+			if err := r.Patch(ctx, updated, client.MergeFrom(desired)); err != nil {
+				return nil, err
+			}
+			return updated, nil
+		}
 		return desired, nil
 	}
 	if !apierrors.IsNotFound(err) {
@@ -364,7 +413,7 @@ func (r *SymphonyProjectReconciler) ensureClaimSession(ctx context.Context, proj
 			Namespace: project.Namespace,
 			Labels:    symphonyObjectLabels(project, claim),
 			Annotations: map[string]string{
-				AnnotationAttachEnabled:     "false",
+				AnnotationAttachEnabled:     "true",
 				AnnotationEgressMode:        claimEgressMode(project.Spec.Runtime, repo),
 				AnnotationSymphonyIssueURL:  claim.Issue.URL,
 				AnnotationSymphonyIssueNode: claim.Issue.NodeID,
@@ -395,6 +444,52 @@ func (r *SymphonyProjectReconciler) ensureClaimRun(ctx context.Context, project 
 	run := &operatorv1alpha1.HarnessRun{}
 	err := r.Get(ctx, client.ObjectKey{Namespace: project.Namespace, Name: name}, run)
 	if err == nil {
+		updated := run.DeepCopy()
+		changed := false
+		if updated.Spec.WorkspaceSessionName != session.Name {
+			updated.Spec.WorkspaceSessionName = session.Name
+			changed = true
+		}
+		for _, apply := range []func(*operatorv1alpha1.HarnessRunSpec) bool{
+			func(spec *operatorv1alpha1.HarnessRunSpec) bool {
+				if spec.RepoURL != repositoryRepoURL(repo) {
+					spec.RepoURL = repositoryRepoURL(repo)
+					return true
+				}
+				return false
+			},
+			func(spec *operatorv1alpha1.HarnessRunSpec) bool {
+				if spec.RepoRevision != claimRepoRevision(project.Spec.Runtime, repo) {
+					spec.RepoRevision = claimRepoRevision(project.Spec.Runtime, repo)
+					return true
+				}
+				return false
+			},
+			func(spec *operatorv1alpha1.HarnessRunSpec) bool {
+				if spec.Image != project.Spec.Runtime.Image {
+					spec.Image = project.Spec.Runtime.Image
+					return true
+				}
+				return false
+			},
+			func(spec *operatorv1alpha1.HarnessRunSpec) bool {
+				if spec.EgressMode != claimEgressMode(project.Spec.Runtime, repo) {
+					spec.EgressMode = claimEgressMode(project.Spec.Runtime, repo)
+					return true
+				}
+				return false
+			},
+		} {
+			if apply(&updated.Spec) {
+				changed = true
+			}
+		}
+		if changed {
+			if err := r.Patch(ctx, updated, client.MergeFrom(run)); err != nil {
+				return nil, err
+			}
+			return updated, nil
+		}
 		return run, nil
 	}
 	if !apierrors.IsNotFound(err) {
@@ -630,10 +725,26 @@ func reconcileProjectRuntime(project *operatorv1alpha1.SymphonyProject, snapshot
 	totals := operatorv1alpha1.SymphonyProjectTokenTotalsStatus{}
 	consumed := map[string]struct{}{}
 	deferredRetry := map[string]operatorv1alpha1.SymphonyProjectRetryStatus{}
+	readyRetries := map[string]operatorv1alpha1.SymphonyProjectRetryStatus{}
 	readyRetryIDs := make([]string, 0)
 	freshCandidates := make([]githubsource.CandidateItem, 0)
 
 	for _, candidate := range snapshot.Candidates {
+		if retry, ok := previousRetries[candidate.ItemID]; ok {
+			if _, claimed := previousClaims[candidate.ItemID]; !claimed {
+				if retry.ReadyAt != nil && !retry.ReadyAt.Time.After(now) {
+					if len(claims) < maxConcurrent {
+						claims = append(claims, buildClaimFromRetry(candidate, retry, now))
+						consumed[candidate.ItemID] = struct{}{}
+					} else {
+						deferredRetry[candidate.ItemID] = retry
+					}
+					continue
+				}
+				deferredRetry[candidate.ItemID] = retry
+				continue
+			}
+		}
 		run, hasRun := runsByItem[candidate.ItemID]
 		if hasRun {
 			totals.InputTokens += runAnnotationInt64(run, AnnotationSymphonyInputTokens)
@@ -648,7 +759,12 @@ func reconcileProjectRuntime(project *operatorv1alpha1.SymphonyProject, snapshot
 				completed++
 				if retry, ok := buildContinuationRetryStatus(candidate, previousClaims[candidate.ItemID], previousRetries[candidate.ItemID], now); ok {
 					if retry.ReadyAt != nil && !retry.ReadyAt.Time.After(now) {
-						readyRetryIDs = append(readyRetryIDs, candidate.ItemID)
+						if len(claims) < maxConcurrent {
+							claims = append(claims, buildClaimFromRetry(candidate, retry, now))
+							consumed[candidate.ItemID] = struct{}{}
+						} else {
+							deferredRetry[candidate.ItemID] = retry
+						}
 					} else {
 						deferredRetry[candidate.ItemID] = retry
 					}
@@ -663,7 +779,12 @@ func reconcileProjectRuntime(project *operatorv1alpha1.SymphonyProject, snapshot
 				errors = append(errors, buildErrorStatus(candidate, run, previousClaimOrRetryAttempt(previousClaims[candidate.ItemID], previousRetries[candidate.ItemID]), now))
 				if retry, ok := buildRetryStatus(candidate, run, previousClaims[candidate.ItemID], previousRetries[candidate.ItemID], project.Spec.Runtime, now); ok {
 					if retry.ReadyAt != nil && !retry.ReadyAt.Time.After(now) {
-						readyRetryIDs = append(readyRetryIDs, candidate.ItemID)
+						if len(claims) < maxConcurrent {
+							claims = append(claims, buildClaimFromRetry(candidate, retry, now))
+							consumed[candidate.ItemID] = struct{}{}
+						} else {
+							deferredRetry[candidate.ItemID] = retry
+						}
 					} else {
 						deferredRetry[candidate.ItemID] = retry
 					}
@@ -678,6 +799,7 @@ func reconcileProjectRuntime(project *operatorv1alpha1.SymphonyProject, snapshot
 		}
 		if retry, ok := previousRetries[candidate.ItemID]; ok {
 			if retry.ReadyAt != nil && !retry.ReadyAt.Time.After(now) {
+				readyRetries[candidate.ItemID] = retry
 				readyRetryIDs = append(readyRetryIDs, candidate.ItemID)
 			} else {
 				deferredRetry[candidate.ItemID] = retry
@@ -689,8 +811,11 @@ func reconcileProjectRuntime(project *operatorv1alpha1.SymphonyProject, snapshot
 
 	sort.Strings(readyRetryIDs)
 	for _, itemID := range readyRetryIDs {
+		retry, ok := readyRetries[itemID]
+		if !ok {
+			retry = previousRetries[itemID]
+		}
 		if len(claims) >= maxConcurrent {
-			retry := previousRetries[itemID]
 			deferredRetry[itemID] = retry
 			continue
 		}
@@ -698,7 +823,7 @@ func reconcileProjectRuntime(project *operatorv1alpha1.SymphonyProject, snapshot
 		if !ok {
 			continue
 		}
-		claims = append(claims, buildClaimFromRetry(candidate, previousRetries[itemID], now))
+		claims = append(claims, buildClaimFromRetry(candidate, retry, now))
 		consumed[itemID] = struct{}{}
 	}
 
@@ -778,7 +903,7 @@ func buildClaimWithoutRun(candidate githubsource.CandidateItem, previous operato
 func buildRetryStatus(candidate githubsource.CandidateItem, run operatorv1alpha1.HarnessRun, previousClaim operatorv1alpha1.SymphonyProjectClaimStatus, previousRetry operatorv1alpha1.SymphonyProjectRetryStatus, runtime operatorv1alpha1.SymphonyProjectRuntimeSpec, now time.Time) (operatorv1alpha1.SymphonyProjectRetryStatus, bool) {
 	attempt := previousClaimOrRetryAttempt(previousClaim, previousRetry)
 	readyAt := previousRetry.ReadyAt
-	if readyAt == nil || previousRetry.Attempt != attempt || !readyAt.Time.After(now) {
+	if readyAt == nil || previousRetry.Attempt != attempt {
 		delay := retryDelay(runtime, attempt)
 		t := metav1.NewTime(now.Add(delay))
 		readyAt = &t
@@ -999,12 +1124,42 @@ func symphonyObjectLabels(project *operatorv1alpha1.SymphonyProject, claim opera
 		LabelSymphonyProjectName: project.Name,
 		LabelSymphonyProjectUID:  string(project.UID),
 		LabelSymphonyItemID:      claim.ItemID,
-		LabelGitHubRepository:    claim.Issue.Repository,
+		LabelGitHubRepository:    sanitizeLabelValue(claim.Issue.Repository),
 	}
 	if claim.Issue.Number > 0 {
 		labels[LabelGitHubIssueNumber] = strconv.FormatInt(claim.Issue.Number, 10)
 	}
 	return labels
+}
+
+func sanitizeLabelValue(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	b := strings.Builder{}
+	for _, r := range value {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '-', r == '_', r == '.':
+			b.WriteRune(r)
+		default:
+			b.WriteByte('-')
+		}
+	}
+	cleaned := strings.Trim(b.String(), "-._")
+	for strings.Contains(cleaned, "--") {
+		cleaned = strings.ReplaceAll(cleaned, "--", "-")
+	}
+	if cleaned == "" {
+		return "unknown"
+	}
+	if len(cleaned) > 63 {
+		cleaned = strings.Trim(cleaned[:63], "-._")
+		if cleaned == "" {
+			return "unknown"
+		}
+	}
+	return cleaned
 }
 
 func symphonyObjectAnnotations(claim operatorv1alpha1.SymphonyProjectClaimStatus) map[string]string {
@@ -1218,6 +1373,14 @@ func (r *SymphonyProjectReconciler) setSourceError(project *operatorv1alpha1.Sym
 	project.Status.ObservedGeneration = project.Generation
 	setCondition(&project.Status.Conditions, metav1.Condition{Type: ConditionSource, Status: metav1.ConditionFalse, Reason: "SyncFailed", Message: err.Error(), LastTransitionTime: now})
 	setCondition(&project.Status.Conditions, metav1.Condition{Type: ConditionLifecycle, Status: metav1.ConditionFalse, Reason: "Degraded", Message: "symphony orchestration is waiting for the next successful sync", LastTransitionTime: now})
+}
+
+func (r *SymphonyProjectReconciler) setLifecycleError(project *operatorv1alpha1.SymphonyProject, now metav1.Time, err error, pollInterval time.Duration) {
+	project.Status.Phase = operatorv1alpha1.SymphonyProjectPhaseError
+	project.Status.LastError = err.Error()
+	project.Status.LastSyncTime = &now
+	project.Status.NextSyncTime = &metav1.Time{Time: now.Time.Add(pollInterval)}
+	setCondition(&project.Status.Conditions, metav1.Condition{Type: ConditionLifecycle, Status: metav1.ConditionFalse, Reason: "ExecutionFailed", Message: err.Error(), LastTransitionTime: now})
 }
 
 func (r *SymphonyProjectReconciler) commit(ctx context.Context, original, updated *operatorv1alpha1.SymphonyProject, changedMeta, changedStatus bool, result ...ctrl.Result) (ctrl.Result, error) {

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { isUnauthorizedError } from './api'
 
 type QueryState<T> = {
@@ -17,6 +17,16 @@ export function usePollingQuery<T>(
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [nonce, setNonce] = useState(0)
+  const fnRef = useRef(fn)
+  const onUnauthorizedRef = useRef(opts.onUnauthorized)
+
+  useEffect(() => {
+    fnRef.current = fn
+  }, [fn])
+
+  useEffect(() => {
+    onUnauthorizedRef.current = opts.onUnauthorized
+  }, [opts.onUnauthorized])
 
   const reload = useCallback(() => {
     setNonce((n: number) => n + 1)
@@ -33,18 +43,21 @@ export function usePollingQuery<T>(
       return
     }
     let mounted = true
+    let running = false
 
     const run = async () => {
+      if (running) return
+      running = true
       setLoading(true)
       setError(null)
       try {
-        const out = await fn()
+        const out = await fnRef.current()
         if (!mounted) return
         setData(out)
       } catch (e) {
         if (!mounted) return
-        if (isUnauthorizedError(e) && opts.onUnauthorized) {
-          opts.onUnauthorized()
+        if (isUnauthorizedError(e) && onUnauthorizedRef.current) {
+          onUnauthorizedRef.current()
           setData(null)
           setError(null)
           return
@@ -52,6 +65,7 @@ export function usePollingQuery<T>(
         setError(e instanceof Error ? e.message : String(e))
       } finally {
         if (mounted) setLoading(false)
+        running = false
       }
     }
 
@@ -62,7 +76,7 @@ export function usePollingQuery<T>(
       mounted = false
       if (t !== null) window.clearInterval(t)
     }
-  }, [key, fn, opts.enabled, opts.intervalMs, opts.onUnauthorized, nonce])
+  }, [key, opts.enabled, opts.intervalMs, nonce])
 
   return { data, loading, error, reload }
 }

@@ -380,11 +380,18 @@ describe('workflow-ui-github', () => {
       http.get('/api/v1/symphony-projects', () => HttpResponse.json({ symphonyProjects: createdProject ? [createdProject] : [] })),
       http.post('/api/v1/symphony-projects', async ({ request }) => {
         const body = (await request.json()) as any
+        const derivedSecretName = `symphony-${String(body.name ?? '').trim()}-${String(body.spec?.source?.project?.owner ?? '').trim()}-token`.toLowerCase()
         createdProject = {
           name: body.name,
           paused: Boolean(body.spec?.paused),
           createdAt: '2026-03-09T00:00:00Z',
-          spec: body.spec,
+          spec: {
+            ...body.spec,
+            source: {
+              ...body.spec.source,
+              tokenSecretRef: { name: derivedSecretName },
+            },
+          },
             status: {
               phase: 'Ready',
               runningItems: 1,
@@ -499,6 +506,7 @@ describe('workflow-ui-github', () => {
     await userEvent.type(screen.getByLabelText('Name'), 'demo')
     await userEvent.clear(screen.getByLabelText('Project #'))
     await userEvent.type(screen.getByLabelText('Project #'), '7')
+    await userEvent.type(screen.getByLabelText('GitHub PAT'), 'github_pat_example_value')
     await userEvent.click(screen.getByRole('button', { name: 'Create Project' }))
 
     await screen.findByRole('heading', { name: 'Runtime' })
@@ -523,6 +531,7 @@ describe('workflow-ui-github', () => {
 
     await userEvent.click(screen.getByRole('button', { name: 'Save Changes' }))
     await screen.findByDisplayValue('demo')
+    await screen.findByDisplayValue('symphony-demo-withakay-token')
 
     unmount()
   })

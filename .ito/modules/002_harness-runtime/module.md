@@ -12,4 +12,4 @@ Define and harden the runtime environment used by ephemeral harness pods and dur
 - [x] 002-02_enforce-egress-and-session-artifacts
 - [x] 002-03_clarify-harness-run-and-session-terminology
 - [x] 002-04_fat-harness-image-with-mise
-- [ ] 002-05_install-agent-harness-clis
+- [x] 002-05_install-agent-harness-clis

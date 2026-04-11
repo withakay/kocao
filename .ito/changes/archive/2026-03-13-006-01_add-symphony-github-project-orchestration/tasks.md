@@ -72,8 +72,8 @@ ______________________________________________________________________
 - **Action**: Map each claimed issue to a durable Session plus per-attempt HarnessRun, including repository-specific auth, repo revision, labels, and lifecycle cleanup.
 - **Verify**: `go test ./internal/operator/... ./internal/controlplaneapi/...`
 - **Done When**: Claimed work creates or reuses the right Session, launches HarnessRuns, and links child resources back to the Symphony project in tests.
-- **Updated At**: 2026-03-09
-- **Status**: [>] in-progress
+- **Updated At**: 2026-03-10
+- **Status**: [x] complete
 
 ______________________________________________________________________
 
@@ -88,18 +88,28 @@ ______________________________________________________________________
 - **Action**: Add list/create/get/control endpoints plus auth scopes and client bindings for Symphony projects.
 - **Verify**: `go test ./internal/controlplaneapi/... ./internal/controlplanecli/...`
 - **Done When**: API and CLI paths expose Symphony project CRUD/control behavior with authz and serialization tests.
-- **Updated At**: 2026-03-09
-- **Status**: [ ] pending
+- **Updated At**: 2026-03-10
+- **Status**: [x] complete
 
 ### Task 3.2: Expose runtime detail and observability payloads
 
-- **Files**: `internal/controlplaneapi/`, `internal/operator/controllers/`, API/OpenAPI tests
-- **Dependencies**: Task 3.1
-- **Action**: Add bounded runtime detail payloads for active items, retries, recent errors, linked child objects, and aggregate counters.
-- **Verify**: `go test ./internal/controlplaneapi/... ./internal/operator/...`
-- **Done When**: Symphony detail responses include the agreed runtime fields and remain covered by API/controller tests.
-- **Updated At**: 2026-03-09
-- **Status**: [ ] pending
+- **Files**: `web/src/`, route definitions, UI tests, related API client bindings
+- **Dependencies**: None
+- **Action**: Add navigation, list views, and create/edit flows for Symphony project configuration in the web app.
+- **Verify**: `pnpm -C web test && pnpm -C web lint`
+- **Done When**: Operators can navigate to Symphony, create a project, and edit configuration with passing UI tests.
+- **Updated At**: 2026-03-10
+- **Status**: [x] complete
+
+### Task 3.3: Build Symphony runtime detail and operator controls UI
+
+- **Files**: `web/src/`, API hooks/clients, UI tests
+- **Dependencies**: Task 3.2
+- **Action**: Add project detail screens showing active/retrying work, skip reasons, child run links, and pause/resume/refresh controls.
+- **Verify**: `pnpm -C web test && pnpm -C web lint`
+- **Done When**: The Symphony detail view renders runtime state and operator controls correctly with passing tests.
+- **Updated At**: 2026-03-10
+- **Status**: [x] complete
 
 ______________________________________________________________________
 
@@ -107,25 +117,15 @@ ______________________________________________________________________
 
 - **Depends On**: Wave 3
 
-### Task 4.1: Build Symphony project list and configuration UI
+### Task 4.1: Expose runtime detail and observability payloads
 
-- **Files**: `web/src/`, route definitions, UI tests, related API client bindings
+- **Files**: `internal/controlplaneapi/`, `internal/operator/controllers/`, API/OpenAPI tests
 - **Dependencies**: None
-- **Action**: Add navigation, list views, and create/edit flows for Symphony project configuration in the web app.
-- **Verify**: `pnpm -C web test && pnpm -C web lint`
-- **Done When**: Operators can navigate to Symphony, create a project, and edit configuration with passing UI tests.
-- **Updated At**: 2026-03-09
-- **Status**: [ ] pending
-
-### Task 4.2: Build Symphony runtime detail and operator controls UI
-
-- **Files**: `web/src/`, API hooks/clients, UI tests
-- **Dependencies**: Task 4.1
-- **Action**: Add project detail screens showing active/retrying work, skip reasons, child run links, and pause/resume/refresh controls.
-- **Verify**: `pnpm -C web test && pnpm -C web lint`
-- **Done When**: The Symphony detail view renders runtime state and operator controls correctly with passing tests.
-- **Updated At**: 2026-03-09
-- **Status**: [ ] pending
+- **Action**: Add bounded runtime detail payloads for active items, retries, recent errors, linked child objects, and aggregate counters.
+- **Verify**: `go test ./internal/controlplaneapi/... ./internal/operator/...`
+- **Done When**: Symphony detail responses include the agreed runtime fields and remain covered by API/controller tests.
+- **Updated At**: 2026-03-10
+- **Status**: [x] complete
 
 ______________________________________________________________________
 
@@ -140,8 +140,8 @@ ______________________________________________________________________
 - **Action**: Finish security hardening for Symphony secrets, audit events, skip-reason visibility, and restricted-by-default worker egress.
 - **Verify**: `make test && make lint`
 - **Done When**: Symphony security-sensitive paths are covered by tests and default deployment posture remains least-privilege.
-- **Updated At**: 2026-03-09
-- **Status**: [ ] pending
+- **Updated At**: 2026-03-10
+- **Status**: [x] complete
 
 ### Task 5.2: Add end-to-end validation and docs for GitHub-backed orchestration
 
@@ -150,8 +150,8 @@ ______________________________________________________________________
 - **Action**: Add integration coverage and operator documentation for configuring a Symphony project, secrets, repository mappings, and expected runtime behavior.
 - **Verify**: `make test && pnpm -C web test && pnpm -C web lint`
 - **Done When**: Documentation covers setup and the end-to-end test suite validates the primary GitHub-backed Symphony flow.
-- **Updated At**: 2026-03-09
-- **Status**: [ ] pending
+- **Updated At**: 2026-03-10
+- **Status**: [x] complete
 
 ______________________________________________________________________
 

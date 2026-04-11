@@ -301,6 +301,9 @@ func (c *Client) query(ctx context.Context, reqBody graphQLRequest) (graphQLResp
 		return graphQLResponse{}, fmt.Errorf("decode github graphql response: %w", err)
 	}
 	if len(decoded.Errors) != 0 {
+		if decoded.Data.project() != nil && graphQLErrorsAreOwnerLookupOnly(decoded.Errors) {
+			return decoded, nil
+		}
 		parts := make([]string, 0, len(decoded.Errors))
 		for _, item := range decoded.Errors {
 			msg := strings.TrimSpace(item.Message)
@@ -314,6 +317,19 @@ func (c *Client) query(ctx context.Context, reqBody graphQLRequest) (graphQLResp
 		return graphQLResponse{}, fmt.Errorf("github graphql error: %s", strings.Join(parts, "; "))
 	}
 	return decoded, nil
+}
+
+func graphQLErrorsAreOwnerLookupOnly(items []graphQLError) bool {
+	if len(items) == 0 {
+		return false
+	}
+	for _, item := range items {
+		message := strings.TrimSpace(strings.ToLower(item.Message))
+		if !strings.Contains(message, "could not resolve to an organization with the login of") && !strings.Contains(message, "could not resolve to a user with the login of") {
+			return false
+		}
+	}
+	return true
 }
 
 func toIssue(item graphQLItem) (Issue, error) {

@@ -238,7 +238,11 @@ export type SymphonyProject = {
 
 export type SymphonyProjectRequest = {
   name: string
-  spec: SymphonyProjectSpec
+  spec: Omit<SymphonyProjectSpec, 'source'> & {
+    source: SymphonyProjectSpec['source'] & {
+      githubToken?: string
+    }
+  }
 }
 
 type FetchOptions = {

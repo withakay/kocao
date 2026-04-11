@@ -20,7 +20,8 @@ type SymphonyDraft = {
   paused: boolean
   projectOwner: string
   projectNumber: string
-  tokenSecretName: string
+  githubToken: string
+  managedSecretName: string
   fieldName: string
   activeStatesText: string
   terminalStatesText: string
@@ -35,14 +36,28 @@ const defaultDraft: SymphonyDraft = {
   paused: false,
   projectOwner: 'withakay',
   projectNumber: '1',
-  tokenSecretName: 'github-token',
+  githubToken: '',
+  managedSecretName: '',
   fieldName: 'Status',
   activeStatesText: 'Todo',
   terminalStatesText: 'Done',
   repositoriesText: 'withakay/kocao',
-  image: 'ghcr.io/withakay/kocao-harness:latest',
+  image: 'kocao/harness-runtime:dev',
   defaultRepoRevision: 'main',
   maxConcurrentItems: '1',
+}
+
+function deriveManagedSecretName(projectName: string, owner: string): string {
+	const sanitize = (value: string) =>
+		value
+			.trim()
+			.toLowerCase()
+			.replace(/[^a-z0-9-]+/g, '-')
+			.replace(/^-+|-+$/g, '')
+			.replace(/--+/g, '-')
+	const parts = ['symphony', sanitize(projectName), sanitize(owner), 'token'].filter(Boolean)
+	const joined = parts.join('-').slice(0, 63).replace(/-+$/g, '')
+	return joined || 'symphony-token'
 }
 
 function toDraft(project?: SymphonyProject): SymphonyDraft {
@@ -52,7 +67,8 @@ function toDraft(project?: SymphonyProject): SymphonyDraft {
     paused: project.paused,
     projectOwner: project.spec.source.project.owner,
     projectNumber: String(project.spec.source.project.number),
-    tokenSecretName: project.spec.source.tokenSecretRef.name,
+    githubToken: '',
+    managedSecretName: project.spec.source.tokenSecretRef.name,
     fieldName: project.spec.source.fieldName ?? 'Status',
     activeStatesText: (project.spec.source.activeStates ?? []).join(', '),
     terminalStatesText: (project.spec.source.terminalStates ?? []).join(', '),
@@ -88,10 +104,14 @@ function parseRepositories(raw: string) {
     })
 }
 
-function buildRequest(draft: SymphonyDraft): SymphonyProjectRequest {
+function buildRequest(draft: SymphonyDraft, initialProject?: SymphonyProject): SymphonyProjectRequest {
   const projectNumber = Number(draft.projectNumber)
   const maxConcurrentItems = Number(draft.maxConcurrentItems)
   const repositories = parseRepositories(draft.repositoriesText)
+  const githubToken = draft.githubToken.trim()
+  if (!initialProject && githubToken === '') {
+    throw new Error('GitHub PAT is required when creating a Symphony project.')
+  }
   const spec: SymphonyProjectSpec = {
     paused: draft.paused,
     source: {
@@ -100,7 +120,7 @@ function buildRequest(draft: SymphonyDraft): SymphonyProjectRequest {
         number: Number.isFinite(projectNumber) ? projectNumber : 0,
       },
       tokenSecretRef: {
-        name: draft.tokenSecretName.trim(),
+        name: draft.managedSecretName || deriveManagedSecretName(draft.name, draft.projectOwner),
       },
       fieldName: draft.fieldName.trim(),
       activeStates: parseList(draft.activeStatesText),
@@ -115,7 +135,13 @@ function buildRequest(draft: SymphonyDraft): SymphonyProjectRequest {
   }
   return {
     name: draft.name.trim(),
-    spec,
+    spec: {
+      ...spec,
+      source: {
+        ...spec.source,
+        githubToken: githubToken || undefined,
+      },
+    },
   }
 }
 
@@ -135,7 +161,7 @@ export function SymphonyProjectForm({ initialProject, submitLabel, busy = false,
         event.preventDefault()
         setLocalError(null)
         try {
-          await onSubmit(buildRequest(draft))
+          await onSubmit(buildRequest(draft, initialProject))
         } catch (submitError) {
           setLocalError(submitError instanceof Error ? submitError.message : String(submitError))
         }
@@ -169,8 +195,11 @@ export function SymphonyProjectForm({ initialProject, submitLabel, busy = false,
         <FormRow label="Project #">
           <Input aria-label="Project #" value={draft.projectNumber} onChange={(event) => setDraft((current) => ({ ...current, projectNumber: event.target.value }))} disabled={busy} inputMode="numeric" />
         </FormRow>
-        <FormRow label="Token Secret">
-          <Input aria-label="Token Secret" value={draft.tokenSecretName} onChange={(event) => setDraft((current) => ({ ...current, tokenSecretName: event.target.value }))} disabled={busy} />
+        <FormRow label="GitHub PAT" hint={initialProject ? 'Optional on edit. Leave blank to keep the current stored token. For user-owned Projects v2, a classic PAT with read:project (and repo for private repos) is recommended.' : 'Write-only. Kocao creates the backing Secret automatically. For user-owned Projects v2, a classic PAT with read:project (and repo for private repos) is recommended.'}>
+          <Input aria-label="GitHub PAT" type="password" value={draft.githubToken} onChange={(event) => setDraft((current) => ({ ...current, githubToken: event.target.value }))} disabled={busy} placeholder={initialProject ? 'Paste a new PAT to rotate the stored token' : 'github_pat_...'} autoComplete="new-password" />
+        </FormRow>
+        <FormRow label="Managed Secret">
+          <Input aria-label="Managed Secret" value={draft.managedSecretName || deriveManagedSecretName(draft.name, draft.projectOwner)} disabled readOnly />
         </FormRow>
         <FormRow label="Field Name">
           <Input aria-label="Field Name" value={draft.fieldName} onChange={(event) => setDraft((current) => ({ ...current, fieldName: event.target.value }))} disabled={busy} placeholder="Status" />
