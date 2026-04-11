@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -25,14 +26,15 @@ const (
 )
 
 type API struct {
-	Env       string
-	Namespace string
-	K8s       client.Client
-	Clientset kubernetes.Interface
-	Auth      *Authenticator
-	Tokens    *TokenStore
-	Audit     *AuditStore
-	Attach    *AttachService
+	Env           string
+	Namespace     string
+	K8s           client.Client
+	Clientset     kubernetes.Interface
+	Auth          *Authenticator
+	Tokens        *TokenStore
+	Audit         *AuditStore
+	Attach        *AttachService
+	AgentSessions *AgentSessionService
 
 	attachOrigins attachOriginAllowlist
 }
@@ -177,6 +179,48 @@ func (a *API) serveAPI(w http.ResponseWriter, r *http.Request) {
 		}, func(w http.ResponseWriter, r *http.Request) { a.handleRunGet(w, r, id) })
 		return
 	case len(segs) == 2 && segs[0] == "harness-runs":
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	case len(segs) == 3 && segs[0] == "harness-runs" && segs[2] == "agent-session" && r.Method == http.MethodGet:
+		id := segs[1]
+		a.serveAuthz(w, r, []string{"harness-run:read"}, func(_ *http.Request) (string, string, string) {
+			return "agent-session.get", "harness-run", id
+		}, func(w http.ResponseWriter, r *http.Request) { a.handleRunAgentSessionGet(w, r, id) })
+		return
+	case len(segs) == 3 && segs[0] == "harness-runs" && segs[2] == "agent-session" && r.Method == http.MethodPost:
+		id := segs[1]
+		a.serveAuthz(w, r, []string{"harness-run:write"}, func(_ *http.Request) (string, string, string) {
+			return "agent-session.create", "harness-run", id
+		}, func(w http.ResponseWriter, r *http.Request) { a.handleRunAgentSessionCreate(w, r, id) })
+		return
+	case len(segs) == 3 && segs[0] == "harness-runs" && segs[2] == "agent-session":
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	case len(segs) == 4 && segs[0] == "harness-runs" && segs[2] == "agent-session" && segs[3] == "prompt" && r.Method == http.MethodPost:
+		id := segs[1]
+		a.serveAuthz(w, r, []string{"harness-run:write"}, func(_ *http.Request) (string, string, string) {
+			return "agent-session.prompt", "harness-run", id
+		}, func(w http.ResponseWriter, r *http.Request) { a.handleRunAgentSessionPrompt(w, r, id) })
+		return
+	case len(segs) == 4 && segs[0] == "harness-runs" && segs[2] == "agent-session" && segs[3] == "events" && r.Method == http.MethodGet:
+		id := segs[1]
+		a.serveAuthz(w, r, []string{"harness-run:read"}, func(_ *http.Request) (string, string, string) {
+			return "agent-session.events", "harness-run", id
+		}, func(w http.ResponseWriter, r *http.Request) { a.handleRunAgentSessionEvents(w, r, id) })
+		return
+	case len(segs) == 5 && segs[0] == "harness-runs" && segs[2] == "agent-session" && segs[3] == "events" && segs[4] == "stream" && r.Method == http.MethodGet:
+		id := segs[1]
+		a.serveAuthz(w, r, []string{"harness-run:read"}, func(_ *http.Request) (string, string, string) {
+			return "agent-session.events.stream", "harness-run", id
+		}, func(w http.ResponseWriter, r *http.Request) { a.handleRunAgentSessionEventsStream(w, r, id) })
+		return
+	case len(segs) == 4 && segs[0] == "harness-runs" && segs[2] == "agent-session" && segs[3] == "stop" && r.Method == http.MethodPost:
+		id := segs[1]
+		a.serveAuthz(w, r, []string{"harness-run:write"}, func(_ *http.Request) (string, string, string) {
+			return "agent-session.stop", "harness-run", id
+		}, func(w http.ResponseWriter, r *http.Request) { a.handleRunAgentSessionStop(w, r, id) })
+		return
+	case len(segs) >= 4 && segs[0] == "harness-runs" && segs[2] == "agent-session":
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	case len(segs) == 3 && segs[0] == "harness-runs" && segs[2] == "stop" && r.Method == http.MethodPost:
@@ -397,16 +441,17 @@ func (a *API) handleSessionDelete(w http.ResponseWriter, r *http.Request, id str
 }
 
 type runCreateRequest struct {
-	RepoURL                 string                        `json:"repoURL"`
-	RepoRevision            string                        `json:"repoRevision,omitempty"`
-	Image                   string                        `json:"image"`
-	EgressMode              string                        `json:"egressMode,omitempty"`
-	Command                 []string                      `json:"command,omitempty"`
-	Args                    []string                      `json:"args,omitempty"`
-	WorkingDir              string                        `json:"workingDir,omitempty"`
-	Env                     []operatorv1alpha1.EnvVar     `json:"env,omitempty"`
-	GitAuth                 *operatorv1alpha1.GitAuthSpec `json:"gitAuth,omitempty"`
-	TTLSecondsAfterFinished *int32                        `json:"ttlSecondsAfterFinished,omitempty"`
+	RepoURL                 string                             `json:"repoURL"`
+	RepoRevision            string                             `json:"repoRevision,omitempty"`
+	Image                   string                             `json:"image"`
+	EgressMode              string                             `json:"egressMode,omitempty"`
+	Command                 []string                           `json:"command,omitempty"`
+	Args                    []string                           `json:"args,omitempty"`
+	WorkingDir              string                             `json:"workingDir,omitempty"`
+	Env                     []operatorv1alpha1.EnvVar          `json:"env,omitempty"`
+	GitAuth                 *operatorv1alpha1.GitAuthSpec      `json:"gitAuth,omitempty"`
+	AgentSession            *operatorv1alpha1.AgentSessionSpec `json:"agentSession,omitempty"`
+	TTLSecondsAfterFinished *int32                             `json:"ttlSecondsAfterFinished,omitempty"`
 }
 
 // isAllowedRepoURL validates that the repo URL uses an https scheme to prevent
@@ -434,6 +479,13 @@ func normalizeRunEgressMode(mode string) (string, bool) {
 	}
 }
 
+type agentSessionResponse struct {
+	Runtime   operatorv1alpha1.AgentRuntime      `json:"runtime,omitempty"`
+	Agent     operatorv1alpha1.AgentKind         `json:"agent,omitempty"`
+	SessionID string                             `json:"sessionId,omitempty"`
+	Phase     operatorv1alpha1.AgentSessionPhase `json:"phase,omitempty"`
+}
+
 type runResponse struct {
 	ID                 string                           `json:"id"`
 	DisplayName        string                           `json:"displayName,omitempty"`
@@ -443,6 +495,7 @@ type runResponse struct {
 	Image              string                           `json:"image"`
 	Phase              operatorv1alpha1.HarnessRunPhase `json:"phase,omitempty"`
 	PodName            string                           `json:"podName,omitempty"`
+	AgentSession       *agentSessionResponse            `json:"agentSession,omitempty"`
 
 	// GitHub outcome metadata (optional)
 	GitHubBranch      string `json:"gitHubBranch,omitempty"`
@@ -463,6 +516,24 @@ func runToResponse(run *operatorv1alpha1.HarnessRun, sessionDisplayName string) 
 		}
 		displayName = sessionDisplayName + "-" + suffix
 	}
+	var agentSession *agentSessionResponse
+	if run.Spec.AgentSession != nil || run.Status.AgentSession != nil {
+		agentSession = &agentSessionResponse{}
+		if run.Spec.AgentSession != nil {
+			agentSession.Runtime = run.Spec.AgentSession.Runtime
+			agentSession.Agent = run.Spec.AgentSession.Agent
+		}
+		if run.Status.AgentSession != nil {
+			if run.Status.AgentSession.Runtime != "" {
+				agentSession.Runtime = run.Status.AgentSession.Runtime
+			}
+			if run.Status.AgentSession.Agent != "" {
+				agentSession.Agent = run.Status.AgentSession.Agent
+			}
+			agentSession.SessionID = run.Status.AgentSession.SessionID
+			agentSession.Phase = run.Status.AgentSession.Phase
+		}
+	}
 	return runResponse{
 		ID:                 run.Name,
 		DisplayName:        displayName,
@@ -472,6 +543,7 @@ func runToResponse(run *operatorv1alpha1.HarnessRun, sessionDisplayName string) 
 		Image:              run.Spec.Image,
 		Phase:              run.Status.Phase,
 		PodName:            run.Status.PodName,
+		AgentSession:       agentSession,
 		GitHubBranch:       ann[controllers.AnnotationGitHubBranch],
 		PullRequestURL:     ann[controllers.AnnotationPullRequestURL],
 		PullRequestStatus:  ann[controllers.AnnotationPullRequestStatus],
@@ -525,6 +597,13 @@ func (a *API) handleSessionRunsCreate(w http.ResponseWriter, r *http.Request, wo
 			return
 		}
 	}
+	if req.AgentSession != nil {
+		req.AgentSession.ApplyDefaults()
+		if err := req.AgentSession.Validate(); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+	}
 	egressMode, ok := normalizeRunEgressMode(req.EgressMode)
 	if !ok {
 		writeError(w, http.StatusBadRequest, "invalid egressMode")
@@ -532,6 +611,14 @@ func (a *API) handleSessionRunsCreate(w http.ResponseWriter, r *http.Request, wo
 	}
 
 	id := newID()
+	var agentSessionStatus *operatorv1alpha1.AgentSessionStatus
+	if req.AgentSession != nil && req.AgentSession.Enabled() {
+		agentSessionStatus = &operatorv1alpha1.AgentSessionStatus{
+			Runtime: req.AgentSession.Runtime,
+			Agent:   req.AgentSession.Agent,
+			Phase:   operatorv1alpha1.AgentSessionPhaseProvisioning,
+		}
+	}
 	run := &operatorv1alpha1.HarnessRun{
 		TypeMeta:   metav1.TypeMeta{APIVersion: operatorv1alpha1.GroupVersion.String(), Kind: "HarnessRun"},
 		ObjectMeta: metav1.ObjectMeta{Name: id, Namespace: a.Namespace},
@@ -550,8 +637,10 @@ func (a *API) handleSessionRunsCreate(w http.ResponseWriter, r *http.Request, wo
 				ApiKeySecretName: "kocao-agent-api-keys",
 				OauthSecretName:  "kocao-agent-oauth",
 			},
+			AgentSession:            req.AgentSession,
 			TTLSecondsAfterFinished: req.TTLSecondsAfterFinished,
 		},
+		Status: operatorv1alpha1.HarnessRunStatus{AgentSession: agentSessionStatus},
 	}
 	if err := a.K8s.Create(r.Context(), run); err != nil {
 		writeError(w, http.StatusInternalServerError, "create harness run failed")
@@ -672,10 +761,19 @@ func (a *API) handleRunResumePost(w http.ResponseWriter, r *http.Request, id str
 		return
 	}
 	newID := newID()
+	var resumedAgentSession *operatorv1alpha1.AgentSessionStatus
+	if run.Spec.AgentSession != nil && run.Spec.AgentSession.Enabled() {
+		resumedAgentSession = &operatorv1alpha1.AgentSessionStatus{
+			Runtime: run.Spec.AgentSession.Runtime,
+			Agent:   run.Spec.AgentSession.Agent,
+			Phase:   operatorv1alpha1.AgentSessionPhaseProvisioning,
+		}
+	}
 	copy := &operatorv1alpha1.HarnessRun{
 		TypeMeta:   metav1.TypeMeta{APIVersion: operatorv1alpha1.GroupVersion.String(), Kind: "HarnessRun"},
 		ObjectMeta: metav1.ObjectMeta{Name: newID, Namespace: a.Namespace, Labels: map[string]string{"kocao.withakay.github.com/resumed-from": id}},
 		Spec:       run.Spec,
+		Status:     operatorv1alpha1.HarnessRunStatus{AgentSession: resumedAgentSession},
 	}
 	copy.Spec.TTLSecondsAfterFinished = run.Spec.TTLSecondsAfterFinished
 	if err := a.K8s.Create(r.Context(), copy); err != nil {
@@ -820,12 +918,22 @@ func New(namespace, auditPath, bootstrapToken string, restCfg *rest.Config, k8s 
 		return nil, err
 	}
 	var cs kubernetes.Interface
+	var agentTransport agentSessionTransport
 	if restCfg != nil {
 		clientset, err := kubernetes.NewForConfig(restCfg)
 		if err != nil {
 			return nil, err
 		}
 		cs = clientset
+		httpClient, err := rest.HTTPClientFor(restCfg)
+		if err != nil {
+			return nil, err
+		}
+		baseURL, err := url.Parse(strings.TrimSpace(restCfg.Host))
+		if err != nil {
+			return nil, err
+		}
+		agentTransport = newPodProxyAgentSessionTransport(namespace, httpClient, baseURL, "")
 	}
 
 	api := &API{
@@ -840,6 +948,9 @@ func New(namespace, auditPath, bootstrapToken string, restCfg *rest.Config, k8s 
 	}
 	if restCfg != nil {
 		api.Attach = newAttachService(namespace, restCfg, k8s, tokens, api.Audit)
+	}
+	if agentTransport != nil {
+		api.AgentSessions = newAgentSessionService(agentTransport, newAgentSessionStore(agentSessionStorePath(auditPath)))
 	}
 	if err := validateAPI(api); err != nil {
 		return nil, err

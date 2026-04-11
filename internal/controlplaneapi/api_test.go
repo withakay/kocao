@@ -1,9 +1,11 @@
 package controlplaneapi
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -11,7 +13,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/gorilla/websocket"
 	operatorv1alpha1 "github.com/withakay/kocao/internal/operator/api/v1alpha1"
@@ -90,6 +94,68 @@ func doJSON(t *testing.T, c *http.Client, method, url, token string, body any) (
 	t.Cleanup(func() { _ = resp.Body.Close() })
 	b, _ := io.ReadAll(resp.Body)
 	return resp, b
+}
+
+type fakeAgentSessionTransport struct {
+	mu         sync.Mutex
+	writer     *io.PipeWriter
+	sessionID  string
+	deleted    bool
+	postCalls  []string
+	lastPrompt string
+}
+
+func newFakeAgentSessionTransport() *fakeAgentSessionTransport {
+	return &fakeAgentSessionTransport{sessionID: "sas-123"}
+}
+
+func (f *fakeAgentSessionTransport) PostACP(_ context.Context, _ string, _ string, _ string, payload any) ([]byte, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	env, ok := payload.(jsonRPCEnvelope)
+	if !ok {
+		return nil, fmt.Errorf("unexpected payload type %T", payload)
+	}
+	f.postCalls = append(f.postCalls, env.Method)
+	switch env.Method {
+	case "initialize":
+		return []byte(`{"jsonrpc":"2.0","id":1,"result":{"authMethods":[]}}`), nil
+	case "session/new":
+		return []byte(`{"jsonrpc":"2.0","id":2,"result":{"sessionId":"sas-123"}}`), nil
+	case "session/prompt":
+		params, _ := env.Params.(map[string]any)
+		prompt, _ := params["prompt"].([]map[string]any)
+		if len(prompt) != 0 {
+			if text, ok := prompt[0]["text"].(string); ok {
+				f.lastPrompt = text
+			}
+		}
+		if f.writer != nil {
+			_, _ = fmt.Fprintf(f.writer, "data: {\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"%s\",\"sessionUpdate\":\"user_message_chunk\",\"content\":{\"type\":\"text\",\"text\":%q}}}\n\n", f.sessionID, f.lastPrompt)
+			_, _ = fmt.Fprintf(f.writer, "data: {\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"%s\",\"sessionUpdate\":\"agent_message_chunk\",\"content\":{\"type\":\"text\",\"text\":\"ack\"}}}\n\n", f.sessionID)
+		}
+		return []byte(`{"jsonrpc":"2.0","id":3,"result":{"stopReason":"completed"}}`), nil
+	default:
+		return []byte(`{"jsonrpc":"2.0","id":99,"result":{}}`), nil
+	}
+}
+
+func (f *fakeAgentSessionTransport) StreamACP(_ context.Context, _ string, _ string) (io.ReadCloser, error) {
+	reader, writer := io.Pipe()
+	f.mu.Lock()
+	f.writer = writer
+	f.mu.Unlock()
+	return reader, nil
+}
+
+func (f *fakeAgentSessionTransport) DeleteACP(_ context.Context, _ string, _ string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.deleted = true
+	if f.writer != nil {
+		_ = f.writer.Close()
+	}
+	return nil
 }
 
 func TestOpenAPI_Unauthenticated(t *testing.T) {
@@ -256,6 +322,7 @@ func TestLifecycle_SessionRunControlsAndAudit(t *testing.T) {
 		"image":        "alpine:3",
 		"args":         []string{"bash", "-lc", "make ci"},
 		"env":          []map[string]any{{"name": "GITHUB_TOKEN", "value": "redacted"}},
+		"agentSession": map[string]any{"agent": "codex"},
 	})
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("start run status = %d, want 201 (body=%s)", resp.StatusCode, string(b))
@@ -268,6 +335,18 @@ func TestLifecycle_SessionRunControlsAndAudit(t *testing.T) {
 	if run.RepoRevision != "main" {
 		t.Fatalf("repoRevision = %q, want main", run.RepoRevision)
 	}
+	if run.AgentSession == nil {
+		t.Fatalf("expected agentSession in run response")
+	}
+	if run.AgentSession.Runtime != operatorv1alpha1.AgentRuntimeSandboxAgent {
+		t.Fatalf("agent runtime = %q, want %q", run.AgentSession.Runtime, operatorv1alpha1.AgentRuntimeSandboxAgent)
+	}
+	if run.AgentSession.Agent != operatorv1alpha1.AgentKindCodex {
+		t.Fatalf("agent = %q, want %q", run.AgentSession.Agent, operatorv1alpha1.AgentKindCodex)
+	}
+	if run.AgentSession.Phase != operatorv1alpha1.AgentSessionPhaseProvisioning {
+		t.Fatalf("agent phase = %q, want %q", run.AgentSession.Phase, operatorv1alpha1.AgentSessionPhaseProvisioning)
+	}
 
 	// Simulate harness/outcome reporter adding GitHub metadata.
 	var stored operatorv1alpha1.HarnessRun
@@ -279,6 +358,12 @@ func TestLifecycle_SessionRunControlsAndAudit(t *testing.T) {
 	}
 	if len(stored.Spec.Args) != 3 || stored.Spec.Args[0] != "bash" || stored.Spec.Args[1] != "-lc" || stored.Spec.Args[2] != "make ci" {
 		t.Fatalf("run args not persisted: %#v", stored.Spec.Args)
+	}
+	if stored.Spec.AgentSession == nil || stored.Spec.AgentSession.Agent != operatorv1alpha1.AgentKindCodex {
+		t.Fatalf("agent session spec not persisted: %#v", stored.Spec.AgentSession)
+	}
+	if stored.Status.AgentSession == nil || stored.Status.AgentSession.Phase != operatorv1alpha1.AgentSessionPhaseProvisioning {
+		t.Fatalf("agent session status not initialized: %#v", stored.Status.AgentSession)
 	}
 	stored.Annotations["kocao.withakay.github.com/github-branch"] = "feature/mvp-ui"
 	stored.Annotations["kocao.withakay.github.com/pull-request-url"] = "https://github.com/withakay/kocao/pull/123"
@@ -312,6 +397,9 @@ func TestLifecycle_SessionRunControlsAndAudit(t *testing.T) {
 	if resumed.ID == "" || resumed.ID == run.ID {
 		t.Fatalf("expected new run id")
 	}
+	if resumed.AgentSession == nil || resumed.AgentSession.Agent != operatorv1alpha1.AgentKindCodex {
+		t.Fatalf("expected resumed run to retain agent session, got %+v", resumed.AgentSession)
+	}
 
 	resp, _ = doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/harness-runs/"+run.ID+"/stop", "full", nil)
 	if resp.StatusCode != http.StatusOK {
@@ -335,6 +423,168 @@ func TestLifecycle_SessionRunControlsAndAudit(t *testing.T) {
 	}
 	if !sawCred {
 		t.Fatalf("expected credential.use audit event")
+	}
+}
+
+func TestCreateHarnessRunRejectsUnsupportedAgentSession(t *testing.T) {
+	api, cleanup := newTestAPI(t)
+	defer cleanup()
+
+	if err := api.Tokens.Create(context.Background(), "t-full", "full", []string{"workspace-session:write", "workspace-session:read", "harness-run:write", "harness-run:read"}); err != nil {
+		t.Fatalf("create token: %v", err)
+	}
+
+	srv := httptest.NewServer(api.Handler())
+	defer srv.Close()
+
+	resp, b := doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/workspace-sessions", "full", map[string]any{"repoURL": "https://example.com/repo"})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create session status = %d, want 201 (body=%s)", resp.StatusCode, string(b))
+	}
+	var sess sessionResponse
+	_ = json.Unmarshal(b, &sess)
+
+	resp, b = doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/workspace-sessions/"+sess.ID+"/harness-runs", "full", map[string]any{
+		"repoURL":      "https://example.com/repo",
+		"repoRevision": "main",
+		"image":        "alpine:3",
+		"agentSession": map[string]any{"runtime": "sandbox-agent", "agent": "cursor"},
+	})
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (body=%s)", resp.StatusCode, string(b))
+	}
+	if !strings.Contains(string(b), "agentSession.agent") {
+		t.Fatalf("expected validation error mentioning agentSession.agent, got %s", string(b))
+	}
+}
+
+func TestAgentSessionLifecycle_API(t *testing.T) {
+	api, cleanup := newTestAPI(t)
+	defer cleanup()
+	transport := newFakeAgentSessionTransport()
+	api.AgentSessions = newAgentSessionService(transport, newAgentSessionStore(""))
+
+	if err := api.Tokens.Create(context.Background(), "t-full", "full", []string{"harness-run:write", "harness-run:read"}); err != nil {
+		t.Fatalf("create token: %v", err)
+	}
+
+	run := &operatorv1alpha1.HarnessRun{
+		TypeMeta:   metav1.TypeMeta{APIVersion: operatorv1alpha1.GroupVersion.String(), Kind: "HarnessRun"},
+		ObjectMeta: metav1.ObjectMeta{Name: "run-agent-session", Namespace: api.Namespace},
+		Spec: operatorv1alpha1.HarnessRunSpec{
+			WorkspaceSessionName: "sess-1",
+			RepoURL:              "https://example.com/repo",
+			Image:                "kocao/harness-runtime:dev",
+			WorkingDir:           "/workspace/repo",
+			AgentSession: &operatorv1alpha1.AgentSessionSpec{
+				Runtime: operatorv1alpha1.AgentRuntimeSandboxAgent,
+				Agent:   operatorv1alpha1.AgentKindCodex,
+			},
+		},
+	}
+	if err := api.K8s.Create(context.Background(), run); err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	var stored operatorv1alpha1.HarnessRun
+	if err := api.K8s.Get(context.Background(), client.ObjectKeyFromObject(run), &stored); err != nil {
+		t.Fatalf("get run: %v", err)
+	}
+	stored.Status.PodName = "pod-agent-session"
+	stored.Status.Phase = operatorv1alpha1.HarnessRunPhaseRunning
+	if err := api.K8s.Status().Update(context.Background(), &stored); err != nil {
+		t.Fatalf("update run status: %v", err)
+	}
+
+	srv := httptest.NewServer(api.Handler())
+	defer srv.Close()
+
+	resp, b := doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/harness-runs/"+run.Name+"/agent-session", "full", nil)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create agent session status = %d, want 201 (body=%s)", resp.StatusCode, string(b))
+	}
+	var created agentSessionState
+	if err := json.Unmarshal(b, &created); err != nil {
+		t.Fatalf("unmarshal create response: %v", err)
+	}
+	if created.SessionID != "sas-123" || created.Phase != operatorv1alpha1.AgentSessionPhaseReady {
+		t.Fatalf("unexpected agent session create response: %+v", created)
+	}
+	resp, b = doJSON(t, srv.Client(), http.MethodGet, srv.URL+"/api/v1/harness-runs/"+run.Name+"/agent-session", "full", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("get agent session status = %d, want 200 (body=%s)", resp.StatusCode, string(b))
+	}
+
+	streamReq, err := http.NewRequest(http.MethodGet, srv.URL+"/api/v1/harness-runs/"+run.Name+"/agent-session/events/stream?offset=0", nil)
+	if err != nil {
+		t.Fatalf("new stream request: %v", err)
+	}
+	streamReq.Header.Set("Authorization", "Bearer full")
+	streamResp, err := srv.Client().Do(streamReq)
+	if err != nil {
+		t.Fatalf("open stream: %v", err)
+	}
+	defer func() { _ = streamResp.Body.Close() }()
+	streamCh := make(chan string, 1)
+	go func() {
+		scanner := bufio.NewScanner(streamResp.Body)
+		for scanner.Scan() {
+			line := scanner.Text()
+			if strings.HasPrefix(line, "data: ") {
+				streamCh <- line
+				return
+			}
+		}
+		streamCh <- ""
+	}()
+
+	resp, b = doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/harness-runs/"+run.Name+"/agent-session/prompt", "full", map[string]any{"prompt": "hello sandbox"})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("prompt status = %d, want 200 (body=%s)", resp.StatusCode, string(b))
+	}
+	select {
+	case line := <-streamCh:
+		if !strings.Contains(line, "user_message_chunk") {
+			t.Fatalf("expected streamed event, got %q", line)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for stream event")
+	}
+
+	var eventsPayload struct {
+		Events []agentSessionEvent `json:"events"`
+	}
+	for i := 0; i < 20; i++ {
+		resp, b = doJSON(t, srv.Client(), http.MethodGet, srv.URL+"/api/v1/harness-runs/"+run.Name+"/agent-session/events?offset=0&limit=10", "full", nil)
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("events status = %d, want 200 (body=%s)", resp.StatusCode, string(b))
+		}
+		_ = json.Unmarshal(b, &eventsPayload)
+		if len(eventsPayload.Events) >= 2 {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if len(eventsPayload.Events) < 2 {
+		t.Fatalf("expected at least 2 events, got %d", len(eventsPayload.Events))
+	}
+
+	resp, b = doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/harness-runs/"+run.Name+"/agent-session/stop", "full", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("stop agent session status = %d, want 200 (body=%s)", resp.StatusCode, string(b))
+	}
+	if !transport.deleted {
+		t.Fatal("expected fake transport delete to be called")
+	}
+	resp, b = doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/harness-runs/"+run.Name+"/agent-session", "full", nil)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("restart agent session status = %d, want 201 (body=%s)", resp.StatusCode, string(b))
+	}
+
+	if err := api.K8s.Get(context.Background(), client.ObjectKeyFromObject(run), &stored); err != nil {
+		t.Fatalf("get updated run: %v", err)
+	}
+	if stored.Status.AgentSession == nil || stored.Status.AgentSession.SessionID != "sas-123" {
+		t.Fatalf("expected stored agent session status to be updated, got %#v", stored.Status.AgentSession)
 	}
 }
 

@@ -22,18 +22,43 @@ type WorkspaceSession struct {
 	CreatedAt   string `json:"createdAt,omitempty"`
 }
 
+type AgentSessionInfo struct {
+	Runtime   string `json:"runtime,omitempty"`
+	Agent     string `json:"agent,omitempty"`
+	SessionID string `json:"sessionId,omitempty"`
+	Phase     string `json:"phase,omitempty"`
+}
+
 type HarnessRun struct {
-	ID                 string `json:"id"`
-	DisplayName        string `json:"displayName,omitempty"`
-	WorkspaceSessionID string `json:"workspaceSessionID,omitempty"`
-	RepoURL            string `json:"repoURL"`
-	RepoRevision       string `json:"repoRevision,omitempty"`
-	Image              string `json:"image"`
-	Phase              string `json:"phase,omitempty"`
-	PodName            string `json:"podName,omitempty"`
-	GitHubBranch       string `json:"gitHubBranch,omitempty"`
-	PullRequestURL     string `json:"pullRequestURL,omitempty"`
-	PullRequestStatus  string `json:"pullRequestStatus,omitempty"`
+	ID                 string            `json:"id"`
+	DisplayName        string            `json:"displayName,omitempty"`
+	WorkspaceSessionID string            `json:"workspaceSessionID,omitempty"`
+	RepoURL            string            `json:"repoURL"`
+	RepoRevision       string            `json:"repoRevision,omitempty"`
+	Image              string            `json:"image"`
+	Phase              string            `json:"phase,omitempty"`
+	PodName            string            `json:"podName,omitempty"`
+	AgentSession       *AgentSessionInfo `json:"agentSession,omitempty"`
+	GitHubBranch       string            `json:"gitHubBranch,omitempty"`
+	PullRequestURL     string            `json:"pullRequestURL,omitempty"`
+	PullRequestStatus  string            `json:"pullRequestStatus,omitempty"`
+}
+
+type AgentSessionState struct {
+	HarnessRunID string `json:"harnessRunID"`
+	PodName      string `json:"podName,omitempty"`
+	ServerID     string `json:"serverID,omitempty"`
+	Runtime      string `json:"runtime,omitempty"`
+	Agent        string `json:"agent,omitempty"`
+	SessionID    string `json:"sessionId,omitempty"`
+	Phase        string `json:"phase,omitempty"`
+	LastSequence int64  `json:"lastSequence,omitempty"`
+}
+
+type AgentSessionEvent struct {
+	Sequence int64           `json:"sequence"`
+	At       string          `json:"at"`
+	Envelope json.RawMessage `json:"envelope"`
 }
 
 type PodLogs struct {
@@ -222,6 +247,64 @@ func (c *Client) ListHarnessRuns(ctx context.Context, workspaceSessionID string)
 		return nil, err
 	}
 	return payload.HarnessRuns, nil
+}
+
+func (c *Client) GetAgentSession(ctx context.Context, harnessRunID string) (AgentSessionState, error) {
+	var out AgentSessionState
+	route := "/api/v1/harness-runs/" + url.PathEscape(strings.TrimSpace(harnessRunID)) + "/agent-session"
+	if err := c.doJSON(ctx, http.MethodGet, route, nil, nil, &out); err != nil {
+		return AgentSessionState{}, err
+	}
+	return out, nil
+}
+
+func (c *Client) CreateAgentSession(ctx context.Context, harnessRunID string) (AgentSessionState, error) {
+	var out AgentSessionState
+	route := "/api/v1/harness-runs/" + url.PathEscape(strings.TrimSpace(harnessRunID)) + "/agent-session"
+	if err := c.doJSON(ctx, http.MethodPost, route, nil, nil, &out); err != nil {
+		return AgentSessionState{}, err
+	}
+	return out, nil
+}
+
+func (c *Client) PromptAgentSession(ctx context.Context, harnessRunID string, prompt string) (AgentSessionState, json.RawMessage, error) {
+	var payload struct {
+		Session AgentSessionState `json:"session"`
+		Result  json.RawMessage   `json:"result"`
+	}
+	route := "/api/v1/harness-runs/" + url.PathEscape(strings.TrimSpace(harnessRunID)) + "/agent-session/prompt"
+	if err := c.doJSON(ctx, http.MethodPost, route, nil, map[string]string{"prompt": prompt}, &payload); err != nil {
+		return AgentSessionState{}, nil, err
+	}
+	return payload.Session, payload.Result, nil
+}
+
+func (c *Client) ListAgentSessionEvents(ctx context.Context, harnessRunID string, offset int64, limit int) ([]AgentSessionEvent, int64, error) {
+	query := url.Values{}
+	if offset > 0 {
+		query.Set("offset", fmt.Sprintf("%d", offset))
+	}
+	if limit > 0 {
+		query.Set("limit", fmt.Sprintf("%d", limit))
+	}
+	var payload struct {
+		Events     []AgentSessionEvent `json:"events"`
+		NextOffset int64               `json:"nextOffset"`
+	}
+	route := "/api/v1/harness-runs/" + url.PathEscape(strings.TrimSpace(harnessRunID)) + "/agent-session/events"
+	if err := c.doJSON(ctx, http.MethodGet, route, query, nil, &payload); err != nil {
+		return nil, 0, err
+	}
+	return payload.Events, payload.NextOffset, nil
+}
+
+func (c *Client) StopAgentSession(ctx context.Context, harnessRunID string) (AgentSessionState, error) {
+	var out AgentSessionState
+	route := "/api/v1/harness-runs/" + url.PathEscape(strings.TrimSpace(harnessRunID)) + "/agent-session/stop"
+	if err := c.doJSON(ctx, http.MethodPost, route, nil, nil, &out); err != nil {
+		return AgentSessionState{}, err
+	}
+	return out, nil
 }
 
 func (c *Client) GetPodLogs(ctx context.Context, podName string, container string, tailLines int64) (PodLogs, error) {
