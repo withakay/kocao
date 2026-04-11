@@ -87,6 +87,23 @@ spec:
                       description: >-
                         Name of a Secret whose data keys are projected as
                         auth files at paths expected by each CLI.
+                agentSession:
+                  type: object
+                  description: >-
+                    Optional sandbox-backed coding-agent session configuration.
+                  properties:
+                    runtime:
+                      type: string
+                      description: Agent runtime (e.g. "sandbox-agent").
+                    agent:
+                      type: string
+                      description: Agent to launch (e.g. "codex", "claude", "opencode", "pi").
+                imagePullSecrets:
+                  type: array
+                  description: >-
+                    Secret names to attach to the run Pod for private registry auth.
+                  items:
+                    type: string
                 egressMode:
                   type: string
                 ttlSecondsAfterFinished:
@@ -115,6 +132,18 @@ spec:
                 completionTime:
                   type: string
                   format: date-time
+                agentSession:
+                  type: object
+                  description: Agent session status.
+                  properties:
+                    runtime:
+                      type: string
+                    agent:
+                      type: string
+                    sessionId:
+                      type: string
+                    phase:
+                      type: string
                 conditions:
                   type: array
                   items:

@@ -19,8 +19,9 @@ import (
 
 type HarnessRunReconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
-	Clock  clock.Clock
+	Scheme    *runtime.Scheme
+	Clock     clock.Clock
+	PodImages PodImages
 }
 
 func (r *HarnessRunReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -220,7 +221,7 @@ func (r *HarnessRunReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 				workspacePVC = sessionWorkspacePVCName(sess.Name)
 				displayName = sess.Spec.DisplayName
 			}
-			pod := buildHarnessPod(updated, workspacePVC, displayName)
+			pod := buildHarnessPod(updated, workspacePVC, displayName, r.PodImages)
 			if err := controllerutil.SetControllerReference(updated, pod, r.Scheme); err != nil {
 				return ctrl.Result{}, err
 			}

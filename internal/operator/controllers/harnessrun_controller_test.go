@@ -417,6 +417,41 @@ func TestBuildHarnessPod_NoAgentAuth(t *testing.T) {
 	}
 }
 
+func TestBuildHarnessPod_AgentSessionEnablesSandboxAgent(t *testing.T) {
+	run := &operatorv1alpha1.HarnessRun{
+		ObjectMeta: metav1.ObjectMeta{Name: "run-sandbox-agent", Namespace: "default"},
+		Spec: operatorv1alpha1.HarnessRunSpec{
+			RepoURL: "https://example.com/repo",
+			Image:   "busybox",
+			AgentSession: &operatorv1alpha1.AgentSessionSpec{
+				Runtime: operatorv1alpha1.AgentRuntimeSandboxAgent,
+				Agent:   operatorv1alpha1.AgentKindCodex,
+			},
+		},
+	}
+	pod := buildHarnessPod(run, "", "")
+	env := map[string]string{}
+	for _, ev := range pod.Spec.Containers[0].Env {
+		env[ev.Name] = ev.Value
+	}
+	if env["KOCAO_AGENT_RUNTIME"] != string(operatorv1alpha1.AgentRuntimeSandboxAgent) {
+		t.Fatalf("expected KOCAO_AGENT_RUNTIME to be set, got %q", env["KOCAO_AGENT_RUNTIME"])
+	}
+	if env["KOCAO_AGENT"] != string(operatorv1alpha1.AgentKindCodex) {
+		t.Fatalf("expected KOCAO_AGENT=codex, got %q", env["KOCAO_AGENT"])
+	}
+	if env["KOCAO_SANDBOX_AGENT_HOST"] != "0.0.0.0" {
+		t.Fatalf("expected KOCAO_SANDBOX_AGENT_HOST=0.0.0.0, got %q", env["KOCAO_SANDBOX_AGENT_HOST"])
+	}
+	if env["KOCAO_SANDBOX_AGENT_PORT"] != "2468" {
+		t.Fatalf("expected KOCAO_SANDBOX_AGENT_PORT=2468, got %q", env["KOCAO_SANDBOX_AGENT_PORT"])
+	}
+	ports := pod.Spec.Containers[0].Ports
+	if len(ports) != 1 || ports[0].Name != "sandbox-agent" || ports[0].ContainerPort != 2468 {
+		t.Fatalf("expected sandbox-agent container port, got %#v", ports)
+	}
+}
+
 func TestBuildHarnessPod_ApiKeySecretOnly(t *testing.T) {
 	run := &operatorv1alpha1.HarnessRun{
 		ObjectMeta: metav1.ObjectMeta{Name: "run-apikey", Namespace: "default"},
@@ -665,6 +700,247 @@ func TestHarnessRunReconcile_AgentAuthInjectsBothTiers(t *testing.T) {
 	if updated.Status.Phase != operatorv1alpha1.HarnessRunPhaseStarting {
 		t.Fatalf("expected Starting phase, got %q", updated.Status.Phase)
 	}
+}
+
+// --- Sidecar integration tests (007-01) ---
+
+func TestBuildHarnessPod_AgentSessionWithOauth_InjectsSidecar(t *testing.T) {
+	run := &operatorv1alpha1.HarnessRun{
+		ObjectMeta: metav1.ObjectMeta{Name: "run-sidecar", Namespace: "default"},
+		Spec: operatorv1alpha1.HarnessRunSpec{
+			RepoURL: "https://example.com/repo",
+			Image:   "busybox",
+			AgentAuth: &operatorv1alpha1.AgentAuthSpec{
+				OauthSecretName: "my-oauth",
+			},
+			AgentSession: &operatorv1alpha1.AgentSessionSpec{
+				Runtime: operatorv1alpha1.AgentRuntimeSandboxAgent,
+				Agent:   operatorv1alpha1.AgentKindCodex,
+			},
+		},
+	}
+	pod := buildHarnessPod(run, "", "")
+
+	// ServiceAccountName must be set.
+	if pod.Spec.ServiceAccountName != "harness-runner" {
+		t.Fatalf("expected ServiceAccountName=harness-runner, got %q", pod.Spec.ServiceAccountName)
+	}
+
+	// InitContainer "auth-seed" must exist.
+	var authSeed *corev1.Container
+	for i, ic := range pod.Spec.InitContainers {
+		if ic.Name == "auth-seed" {
+			authSeed = &pod.Spec.InitContainers[i]
+			break
+		}
+	}
+	if authSeed == nil {
+		t.Fatalf("expected initContainer auth-seed, got %#v", pod.Spec.InitContainers)
+	}
+	if authSeed.Image != "busybox:1.37" {
+		t.Fatalf("expected auth-seed image busybox:1.37, got %q", authSeed.Image)
+	}
+	// auth-seed security context must match harness.
+	if authSeed.SecurityContext == nil || authSeed.SecurityContext.RunAsUser == nil || *authSeed.SecurityContext.RunAsUser != 10001 {
+		t.Fatalf("expected auth-seed runAsUser=10001")
+	}
+
+	// Sidecar container "kocao-sidecar" must exist.
+	var sidecar *corev1.Container
+	for i, c := range pod.Spec.Containers {
+		if c.Name == "kocao-sidecar" {
+			sidecar = &pod.Spec.Containers[i]
+			break
+		}
+	}
+	if sidecar == nil {
+		t.Fatalf("expected kocao-sidecar container, got containers=%v", containerNames(pod.Spec.Containers))
+	}
+	if sidecar.Image != "kocao/kocao-sidecar:dev" {
+		t.Fatalf("expected sidecar image kocao/kocao-sidecar:dev, got %q", sidecar.Image)
+	}
+	// Sidecar security context must match harness.
+	if sidecar.SecurityContext == nil || sidecar.SecurityContext.RunAsUser == nil || *sidecar.SecurityContext.RunAsUser != 10001 {
+		t.Fatalf("expected sidecar runAsUser=10001")
+	}
+	if sidecar.SecurityContext.Capabilities == nil || len(sidecar.SecurityContext.Capabilities.Drop) == 0 || sidecar.SecurityContext.Capabilities.Drop[0] != "ALL" {
+		t.Fatalf("expected sidecar capabilities drop ALL")
+	}
+	if sidecar.SecurityContext.SeccompProfile == nil || sidecar.SecurityContext.SeccompProfile.Type != corev1.SeccompProfileTypeRuntimeDefault {
+		t.Fatalf("expected sidecar seccomp runtime/default")
+	}
+
+	// Sidecar env vars.
+	sidecarEnv := map[string]corev1.EnvVar{}
+	for _, ev := range sidecar.Env {
+		sidecarEnv[ev.Name] = ev
+	}
+	if ev, ok := sidecarEnv["KOCAO_NAMESPACE"]; !ok || ev.ValueFrom == nil || ev.ValueFrom.FieldRef == nil || ev.ValueFrom.FieldRef.FieldPath != "metadata.namespace" {
+		t.Fatalf("expected KOCAO_NAMESPACE from fieldRef metadata.namespace")
+	}
+	if ev, ok := sidecarEnv["KOCAO_SECRET_NAME"]; !ok || ev.Value != "kocao-agent-oauth" {
+		t.Fatalf("expected KOCAO_SECRET_NAME=kocao-agent-oauth, got %#v", sidecarEnv["KOCAO_SECRET_NAME"])
+	}
+
+	// Volume "agent-auth-live" (emptyDir) must exist.
+	hasLiveVol := false
+	for _, v := range pod.Spec.Volumes {
+		if v.Name == "agent-auth-live" && v.EmptyDir != nil {
+			hasLiveVol = true
+			break
+		}
+	}
+	if !hasLiveVol {
+		t.Fatalf("expected agent-auth-live emptyDir volume")
+	}
+
+	// Harness container must NOT have agent-oauth subPath mounts.
+	harness := pod.Spec.Containers[0]
+	for _, m := range harness.VolumeMounts {
+		if m.Name == "agent-oauth" {
+			t.Fatalf("harness container should not have direct agent-oauth mounts in session mode, got %#v", m)
+		}
+	}
+
+	// Harness container must have agent-auth-live directory mounts.
+	liveMounts := map[string]bool{}
+	for _, m := range harness.VolumeMounts {
+		if m.Name == "agent-auth-live" {
+			liveMounts[m.MountPath] = true
+		}
+	}
+	if !liveMounts["/home/kocao/.local/share/opencode"] {
+		t.Fatalf("expected harness mount agent-auth-live at /home/kocao/.local/share/opencode")
+	}
+	if !liveMounts["/home/kocao/.codex"] {
+		t.Fatalf("expected harness mount agent-auth-live at /home/kocao/.codex")
+	}
+
+	// Sidecar must also have agent-auth-live directory mounts.
+	sidecarLiveMounts := map[string]bool{}
+	for _, m := range sidecar.VolumeMounts {
+		if m.Name == "agent-auth-live" {
+			sidecarLiveMounts[m.MountPath] = true
+		}
+	}
+	if !sidecarLiveMounts["/home/kocao/.local/share/opencode"] {
+		t.Fatalf("expected sidecar mount agent-auth-live at /home/kocao/.local/share/opencode")
+	}
+	if !sidecarLiveMounts["/home/kocao/.codex"] {
+		t.Fatalf("expected sidecar mount agent-auth-live at /home/kocao/.codex")
+	}
+}
+
+func TestBuildHarnessPod_NoAgentSession_NoSidecar(t *testing.T) {
+	run := &operatorv1alpha1.HarnessRun{
+		ObjectMeta: metav1.ObjectMeta{Name: "run-no-session", Namespace: "default"},
+		Spec: operatorv1alpha1.HarnessRunSpec{
+			RepoURL: "https://example.com/repo",
+			Image:   "busybox",
+			AgentAuth: &operatorv1alpha1.AgentAuthSpec{
+				OauthSecretName: "my-oauth",
+			},
+			// No AgentSession — legacy path.
+		},
+	}
+	pod := buildHarnessPod(run, "", "")
+
+	// No ServiceAccountName.
+	if pod.Spec.ServiceAccountName != "" {
+		t.Fatalf("expected no ServiceAccountName, got %q", pod.Spec.ServiceAccountName)
+	}
+
+	// No initContainers.
+	for _, ic := range pod.Spec.InitContainers {
+		if ic.Name == "auth-seed" {
+			t.Fatalf("unexpected auth-seed initContainer")
+		}
+	}
+
+	// No sidecar container.
+	for _, c := range pod.Spec.Containers {
+		if c.Name == "kocao-sidecar" {
+			t.Fatalf("unexpected kocao-sidecar container")
+		}
+	}
+
+	// No agent-auth-live volume.
+	for _, v := range pod.Spec.Volumes {
+		if v.Name == "agent-auth-live" {
+			t.Fatalf("unexpected agent-auth-live volume")
+		}
+	}
+
+	// Agent OAuth mounts should be direct Secret subPath mounts (existing behavior).
+	oauthMounts := map[string]corev1.VolumeMount{}
+	for _, m := range pod.Spec.Containers[0].VolumeMounts {
+		if m.Name == "agent-oauth" {
+			oauthMounts[m.MountPath] = m
+		}
+	}
+	if m, ok := oauthMounts["/home/kocao/.local/share/opencode/auth.json"]; !ok {
+		t.Fatalf("expected opencode auth subPath mount")
+	} else if m.SubPath != "opencode-auth.json" || !m.ReadOnly {
+		t.Fatalf("unexpected opencode mount: %#v", m)
+	}
+	if m, ok := oauthMounts["/home/kocao/.codex/auth.json"]; !ok {
+		t.Fatalf("expected codex auth subPath mount")
+	} else if m.SubPath != "codex-auth.json" || !m.ReadOnly {
+		t.Fatalf("unexpected codex mount: %#v", m)
+	}
+}
+
+func TestBuildHarnessPod_AgentSessionWithoutOauth_NoSidecar(t *testing.T) {
+	// AgentSession enabled but no OAuth secret — sidecar should NOT be injected
+	// (there's nothing to refresh).
+	run := &operatorv1alpha1.HarnessRun{
+		ObjectMeta: metav1.ObjectMeta{Name: "run-session-no-oauth", Namespace: "default"},
+		Spec: operatorv1alpha1.HarnessRunSpec{
+			RepoURL: "https://example.com/repo",
+			Image:   "busybox",
+			AgentSession: &operatorv1alpha1.AgentSessionSpec{
+				Runtime: operatorv1alpha1.AgentRuntimeSandboxAgent,
+				Agent:   operatorv1alpha1.AgentKindOpenCode,
+			},
+			// No AgentAuth at all.
+		},
+	}
+	pod := buildHarnessPod(run, "", "")
+
+	// ServiceAccountName should still be set (agentSession is enabled).
+	if pod.Spec.ServiceAccountName != "harness-runner" {
+		t.Fatalf("expected ServiceAccountName=harness-runner, got %q", pod.Spec.ServiceAccountName)
+	}
+
+	// No sidecar container (no oauth to manage).
+	for _, c := range pod.Spec.Containers {
+		if c.Name == "kocao-sidecar" {
+			t.Fatalf("unexpected kocao-sidecar container when no oauth secret")
+		}
+	}
+
+	// No initContainers.
+	for _, ic := range pod.Spec.InitContainers {
+		if ic.Name == "auth-seed" {
+			t.Fatalf("unexpected auth-seed initContainer when no oauth secret")
+		}
+	}
+
+	// No agent-auth-live volume.
+	for _, v := range pod.Spec.Volumes {
+		if v.Name == "agent-auth-live" {
+			t.Fatalf("unexpected agent-auth-live volume when no oauth secret")
+		}
+	}
+}
+
+// containerNames is a test helper that returns container names for diagnostics.
+func containerNames(containers []corev1.Container) []string {
+	names := make([]string, len(containers))
+	for i, c := range containers {
+		names[i] = c.Name
+	}
+	return names
 }
 
 func TestHarnessRunReconcile_WithSession_CreatesPVCMountAndEgressNetworkPolicy(t *testing.T) {

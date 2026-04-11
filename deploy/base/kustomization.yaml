@@ -13,4 +13,5 @@ resources:
   - operator-rbac.yaml
   - api-deployment.yaml
   - api-service.yaml
+  - harness-rbac.yaml
   - operator-deployment.yaml

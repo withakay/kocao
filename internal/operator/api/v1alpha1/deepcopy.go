@@ -77,6 +77,12 @@ func (in *HarnessRun) DeepCopyInto(out *HarnessRun) {
 			OauthSecretName:  in.Spec.AgentAuth.OauthSecretName,
 		}
 	}
+	if in.Spec.AgentSession != nil {
+		out.Spec.AgentSession = &AgentSessionSpec{
+			Runtime: in.Spec.AgentSession.Runtime,
+			Agent:   in.Spec.AgentSession.Agent,
+		}
+	}
 	out.Spec.EgressMode = in.Spec.EgressMode
 	if in.Spec.TTLSecondsAfterFinished != nil {
 		v := *in.Spec.TTLSecondsAfterFinished
@@ -95,6 +101,14 @@ func (in *HarnessRun) DeepCopyInto(out *HarnessRun) {
 	if in.Status.Conditions != nil {
 		out.Status.Conditions = make([]metav1.Condition, len(in.Status.Conditions))
 		copy(out.Status.Conditions, in.Status.Conditions)
+	}
+	if in.Status.AgentSession != nil {
+		out.Status.AgentSession = &AgentSessionStatus{
+			Runtime:   in.Status.AgentSession.Runtime,
+			Agent:     in.Status.AgentSession.Agent,
+			SessionID: in.Status.AgentSession.SessionID,
+			Phase:     in.Status.AgentSession.Phase,
+		}
 	}
 }
 

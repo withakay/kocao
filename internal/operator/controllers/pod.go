@@ -2,6 +2,7 @@ package controllers
 
 import (
 	"fmt"
+	"os"
 	"strings"
 
 	operatorv1alpha1 "github.com/withakay/kocao/internal/operator/api/v1alpha1"
@@ -9,15 +10,52 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-func buildHarnessPod(run *operatorv1alpha1.HarnessRun, workspacePVCName string, sessionDisplayName string) *corev1.Pod {
+const (
+	DefaultSidecarImage       = "kocao/kocao-sidecar:dev"
+	DefaultInitContainerImage = "busybox:1.37"
+)
+
+// PodImages holds configurable container images used by the pod builder.
+// Values default to compile-time constants when empty.
+type PodImages struct {
+	Sidecar       string
+	InitContainer string
+}
+
+// Resolve returns a copy with empty fields filled from environment variables
+// or compile-time defaults.
+func (p PodImages) Resolve() PodImages {
+	if p.Sidecar == "" {
+		p.Sidecar = os.Getenv("KOCAO_SIDECAR_IMAGE")
+	}
+	if p.Sidecar == "" {
+		p.Sidecar = DefaultSidecarImage
+	}
+	if p.InitContainer == "" {
+		p.InitContainer = os.Getenv("KOCAO_INIT_CONTAINER_IMAGE")
+	}
+	if p.InitContainer == "" {
+		p.InitContainer = DefaultInitContainerImage
+	}
+	return p
+}
+
+func buildHarnessPod(run *operatorv1alpha1.HarnessRun, workspacePVCName string, sessionDisplayName string, images ...PodImages) *corev1.Pod {
 	const (
 		workspaceVolumeName = "workspace"
 		workspaceMountPath  = "/workspace"
 		gitAuthVolumeName   = "git-auth"
 		gitAuthMountPath    = "/var/run/secrets/kocao/git"
 
-		agentOauthVolumeName = "agent-oauth"
+		agentOauthVolumeName    = "agent-oauth"
+		agentAuthLiveVolumeName = "agent-auth-live"
 	)
+
+	var imgs PodImages
+	if len(images) > 0 {
+		imgs = images[0]
+	}
+	imgs = imgs.Resolve()
 
 	// Hardened defaults: run as non-root with a restrictive security context.
 	// Keep IDs in sync with build/Dockerfile.harness.
@@ -58,6 +96,14 @@ func buildHarnessPod(run *operatorv1alpha1.HarnessRun, workspacePVCName string, 
 		}
 		env = append(env, corev1.EnvVar{Name: e.Name, Value: e.Value})
 	}
+	if run.Spec.AgentSession != nil && run.Spec.AgentSession.Enabled() {
+		env = append(env,
+			corev1.EnvVar{Name: "KOCAO_AGENT_RUNTIME", Value: string(run.Spec.AgentSession.Runtime)},
+			corev1.EnvVar{Name: "KOCAO_AGENT", Value: string(run.Spec.AgentSession.Agent)},
+			corev1.EnvVar{Name: "KOCAO_SANDBOX_AGENT_HOST", Value: "0.0.0.0"},
+			corev1.EnvVar{Name: "KOCAO_SANDBOX_AGENT_PORT", Value: "2468"},
+		)
+	}
 
 	workspaceVolumeSource := corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}
 	if strings.TrimSpace(workspacePVCName) != "" {
@@ -93,7 +139,10 @@ func buildHarnessPod(run *operatorv1alpha1.HarnessRun, workspacePVCName string, 
 	}
 
 	// Agent credential injection (tier-1: API key env vars, tier-2: OAuth file mounts).
+	agentSessionEnabled := run.Spec.AgentSession != nil && run.Spec.AgentSession.Enabled()
 	var envFrom []corev1.EnvFromSource
+	var initContainers []corev1.Container
+	var sidecarContainers []corev1.Container
 	if run.Spec.AgentAuth != nil {
 		if secretName := strings.TrimSpace(run.Spec.AgentAuth.ApiKeySecretName); secretName != "" {
 			envFrom = append(envFrom, corev1.EnvFromSource{
@@ -105,11 +154,8 @@ func buildHarnessPod(run *operatorv1alpha1.HarnessRun, workspacePVCName string, 
 		}
 		if secretName := strings.TrimSpace(run.Spec.AgentAuth.OauthSecretName); secretName != "" {
 			oauthMode := int32(0600)
-			// No explicit Items list: the Secret is projected as a directory and
-			// individual SubPath mounts pick specific keys. This way, if only
-			// one CLI's auth key exists in the Secret, the other SubPath mount
-			// simply resolves to an empty file — the pod starts regardless of
-			// which keys the user populates.
+			// Always add the Secret volume — used directly (non-session) or by
+			// the auth-seed initContainer (session mode).
 			volumes = append(volumes, corev1.Volume{
 				Name: agentOauthVolumeName,
 				VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{
@@ -118,20 +164,77 @@ func buildHarnessPod(run *operatorv1alpha1.HarnessRun, workspacePVCName string, 
 					Optional:    boolPtr(true),
 				}},
 			})
-			// OpenCode auth: /home/kocao/.local/share/opencode/auth.json
-			volumeMounts = append(volumeMounts, corev1.VolumeMount{
-				Name:      agentOauthVolumeName,
-				MountPath: "/home/kocao/.local/share/opencode/auth.json",
-				SubPath:   "opencode-auth.json",
-				ReadOnly:  true,
-			})
-			// Codex CLI auth: /home/kocao/.codex/auth.json
-			volumeMounts = append(volumeMounts, corev1.VolumeMount{
-				Name:      agentOauthVolumeName,
-				MountPath: "/home/kocao/.codex/auth.json",
-				SubPath:   "codex-auth.json",
-				ReadOnly:  true,
-			})
+
+			if agentSessionEnabled {
+				// Session mode: auth files must be writable so the agent CLI
+				// can refresh tokens at runtime. Use an emptyDir seeded by an
+				// initContainer, and mount it into both the harness and sidecar.
+				volumes = append(volumes, corev1.Volume{
+					Name:         agentAuthLiveVolumeName,
+					VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}},
+				})
+
+				initContainers = append(initContainers, corev1.Container{
+					Name:    "auth-seed",
+					Image:   imgs.InitContainer,
+					Command: []string{"sh", "-c", "mkdir -p /live/.local/share/opencode /live/.codex && cp /secret/opencode-auth.json /live/.local/share/opencode/auth.json 2>/dev/null; cp /secret/codex-auth.json /live/.codex/auth.json 2>/dev/null; true"},
+					VolumeMounts: []corev1.VolumeMount{
+						{Name: agentOauthVolumeName, MountPath: "/secret", ReadOnly: true},
+						{Name: agentAuthLiveVolumeName, MountPath: "/live"},
+					},
+					SecurityContext: &corev1.SecurityContext{
+						RunAsNonRoot:             &runAsNonRoot,
+						RunAsUser:                &uid,
+						RunAsGroup:               &gid,
+						AllowPrivilegeEscalation: &allowPrivilegeEscalation,
+						Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
+						SeccompProfile:           &seccompProfile,
+					},
+				})
+
+				// Harness container gets emptyDir directory mounts (writable).
+				volumeMounts = append(volumeMounts,
+					corev1.VolumeMount{Name: agentAuthLiveVolumeName, MountPath: "/home/kocao/.local/share/opencode"},
+					corev1.VolumeMount{Name: agentAuthLiveVolumeName, MountPath: "/home/kocao/.codex"},
+				)
+
+				sidecarContainers = append(sidecarContainers, corev1.Container{
+					Name:  "kocao-sidecar",
+					Image: imgs.Sidecar,
+					VolumeMounts: []corev1.VolumeMount{
+						{Name: agentAuthLiveVolumeName, MountPath: "/home/kocao/.local/share/opencode"},
+						{Name: agentAuthLiveVolumeName, MountPath: "/home/kocao/.codex"},
+					},
+					Env: []corev1.EnvVar{
+						{Name: "KOCAO_NAMESPACE", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.namespace"}}},
+						{Name: "KOCAO_SECRET_NAME", Value: "kocao-agent-oauth"},
+					},
+					SecurityContext: &corev1.SecurityContext{
+						RunAsNonRoot:             &runAsNonRoot,
+						RunAsUser:                &uid,
+						RunAsGroup:               &gid,
+						AllowPrivilegeEscalation: &allowPrivilegeEscalation,
+						Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
+						SeccompProfile:           &seccompProfile,
+					},
+				})
+			} else {
+				// Non-session mode: read-only SubPath mounts directly from the Secret.
+				// OpenCode auth: /home/kocao/.local/share/opencode/auth.json
+				volumeMounts = append(volumeMounts, corev1.VolumeMount{
+					Name:      agentOauthVolumeName,
+					MountPath: "/home/kocao/.local/share/opencode/auth.json",
+					SubPath:   "opencode-auth.json",
+					ReadOnly:  true,
+				})
+				// Codex CLI auth: /home/kocao/.codex/auth.json
+				volumeMounts = append(volumeMounts, corev1.VolumeMount{
+					Name:      agentOauthVolumeName,
+					MountPath: "/home/kocao/.codex/auth.json",
+					SubPath:   "codex-auth.json",
+					ReadOnly:  true,
+				})
+			}
 		}
 	}
 
@@ -156,8 +259,14 @@ func buildHarnessPod(run *operatorv1alpha1.HarnessRun, workspacePVCName string, 
 	if container.WorkingDir == "" {
 		container.WorkingDir = workspaceMountPath
 	}
+	if run.Spec.AgentSession != nil && run.Spec.AgentSession.Enabled() {
+		container.Ports = append(container.Ports, corev1.ContainerPort{Name: "sandbox-agent", ContainerPort: 2468})
+	}
 
-	return &corev1.Pod{
+	containers := []corev1.Container{container}
+	containers = append(containers, sidecarContainers...)
+
+	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
 			Namespace: run.Namespace,
@@ -169,11 +278,19 @@ func buildHarnessPod(run *operatorv1alpha1.HarnessRun, workspacePVCName string, 
 				FSGroup:        &gid,
 				SeccompProfile: &seccompProfile,
 			},
-			RestartPolicy: corev1.RestartPolicyNever,
-			Containers:    []corev1.Container{container},
-			Volumes:       volumes,
+			RestartPolicy:  corev1.RestartPolicyNever,
+			InitContainers: initContainers,
+			Containers:     containers,
+			Volumes:        volumes,
 		},
 	}
+	if agentSessionEnabled {
+		pod.Spec.ServiceAccountName = "harness-runner"
+	}
+	for _, s := range run.Spec.ImagePullSecrets {
+		pod.Spec.ImagePullSecrets = append(pod.Spec.ImagePullSecrets, corev1.LocalObjectReference{Name: s})
+	}
+	return pod
 }
 
 func sanitizeDNSLabel(s string) string {
