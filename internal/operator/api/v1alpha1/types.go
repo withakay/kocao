@@ -515,6 +515,10 @@ type HarnessRunSpec struct {
 	// launch and manage within this Harness Run.
 	AgentSession *AgentSessionSpec `json:"agentSession,omitempty"`
 
+	// ImagePullSecrets lists secret names to attach to the run Pod for private
+	// registry authentication.
+	ImagePullSecrets []string `json:"imagePullSecrets,omitempty"`
+
 	// EgressMode controls the outbound network policy for the run Pod.
 	//
 	// Supported values (MVP):

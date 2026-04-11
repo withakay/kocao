@@ -168,7 +168,7 @@ func buildHarnessPod(run *operatorv1alpha1.HarnessRun, workspacePVCName string, 
 		container.Ports = append(container.Ports, corev1.ContainerPort{Name: "sandbox-agent", ContainerPort: 2468})
 	}
 
-	return &corev1.Pod{
+	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
 			Namespace: run.Namespace,
@@ -185,6 +185,10 @@ func buildHarnessPod(run *operatorv1alpha1.HarnessRun, workspacePVCName string, 
 			Volumes:       volumes,
 		},
 	}
+	for _, s := range run.Spec.ImagePullSecrets {
+		pod.Spec.ImagePullSecrets = append(pod.Spec.ImagePullSecrets, corev1.LocalObjectReference{Name: s})
+	}
+	return pod
 }
 
 func sanitizeDNSLabel(s string) string {

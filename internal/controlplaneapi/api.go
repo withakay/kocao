@@ -451,6 +451,7 @@ type runCreateRequest struct {
 	Env                     []operatorv1alpha1.EnvVar          `json:"env,omitempty"`
 	GitAuth                 *operatorv1alpha1.GitAuthSpec      `json:"gitAuth,omitempty"`
 	AgentSession            *operatorv1alpha1.AgentSessionSpec `json:"agentSession,omitempty"`
+	ImagePullSecrets        []string                           `json:"imagePullSecrets,omitempty"`
 	TTLSecondsAfterFinished *int32                             `json:"ttlSecondsAfterFinished,omitempty"`
 }
 
@@ -638,6 +639,7 @@ func (a *API) handleSessionRunsCreate(w http.ResponseWriter, r *http.Request, wo
 				OauthSecretName:  "kocao-agent-oauth",
 			},
 			AgentSession:            req.AgentSession,
+			ImagePullSecrets:        req.ImagePullSecrets,
 			TTLSecondsAfterFinished: req.TTLSecondsAfterFinished,
 		},
 		Status: operatorv1alpha1.HarnessRunStatus{AgentSession: agentSessionStatus},
