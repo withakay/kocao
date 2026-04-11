@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -60,14 +61,26 @@ func (p *K8sPatcher) Patch(ctx context.Context, key string, data []byte) error {
 		return fmt.Errorf("secret %s/%s not found: %w", p.namespace, p.secretName, err)
 	}
 
-	// On 409 (conflict) retry once.
+	// On 409 (conflict) retry with exponential backoff (up to 3 attempts).
 	if apierrors.IsConflict(err) {
-		slog.Warn("conflict patching secret, retrying once", "secret", p.secretName)
-		if retryErr := p.doPatch(ctx, patchBytes); retryErr != nil {
-			return fmt.Errorf("retry patch: %w", retryErr)
+		backoff := 100 * time.Millisecond
+		for attempt := 1; attempt <= 3; attempt++ {
+			slog.Warn("conflict patching secret, retrying", "secret", p.secretName, "attempt", attempt)
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(backoff):
+			}
+			if retryErr := p.doPatch(ctx, patchBytes); retryErr != nil {
+				if apierrors.IsConflict(retryErr) && attempt < 3 {
+					backoff *= 2
+					continue
+				}
+				return fmt.Errorf("retry patch (attempt %d): %w", attempt, retryErr)
+			}
+			slog.Info("synced secret key after retry", "key", key, "secret", p.secretName, "attempt", attempt)
+			return nil
 		}
-		slog.Info("synced secret key after retry", "key", key, "secret", p.secretName)
-		return nil
 	}
 
 	return fmt.Errorf("patch secret: %w", err)

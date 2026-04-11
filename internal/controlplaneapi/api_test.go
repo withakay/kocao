@@ -148,6 +148,24 @@ func (f *fakeAgentSessionTransport) StreamACP(_ context.Context, _ string, _ str
 	return reader, nil
 }
 
+func (f *fakeAgentSessionTransport) waitWriter(t *testing.T, timeout time.Duration) {
+	t.Helper()
+	deadline := time.After(timeout)
+	for {
+		f.mu.Lock()
+		w := f.writer
+		f.mu.Unlock()
+		if w != nil {
+			return
+		}
+		select {
+		case <-deadline:
+			t.Fatal("timed out waiting for fake transport writer to be established")
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+}
+
 func (f *fakeAgentSessionTransport) DeleteACP(_ context.Context, _ string, _ string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -537,6 +555,11 @@ func TestAgentSessionLifecycle_API(t *testing.T) {
 		streamCh <- ""
 	}()
 
+	// Wait for the streaming goroutine to connect and establish the pipe
+	// writer before sending the prompt. Without this, on slow CI runners the
+	// prompt can fire before the writer exists, causing events to be lost.
+	transport.waitWriter(t, 5*time.Second)
+
 	resp, b = doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/harness-runs/"+run.Name+"/agent-session/prompt", "full", map[string]any{"prompt": "hello sandbox"})
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("prompt status = %d, want 200 (body=%s)", resp.StatusCode, string(b))
@@ -546,7 +569,7 @@ func TestAgentSessionLifecycle_API(t *testing.T) {
 		if !strings.Contains(line, "user_message_chunk") {
 			t.Fatalf("expected streamed event, got %q", line)
 		}
-	case <-time.After(2 * time.Second):
+	case <-time.After(5 * time.Second):
 		t.Fatal("timed out waiting for stream event")
 	}
 

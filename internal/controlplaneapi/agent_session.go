@@ -54,7 +54,7 @@ func newPodProxyAgentSessionTransport(namespace string, restClient *http.Client,
 
 func (t *podProxyAgentSessionTransport) acpURL(podName, serverID string, bootstrapAgent string) string {
 	u := *t.baseURL
-	u.Path = strings.TrimRight(u.Path, "/") + "/api/v1/namespaces/" + url.PathEscape(t.namespace) + "/pods/" + url.PathEscape(podName+":2468") + "/proxy/v1/acp/" + url.PathEscape(serverID)
+	u.Path = strings.TrimRight(u.Path, "/") + "/api/v1/namespaces/" + url.PathEscape(t.namespace) + "/pods/" + url.PathEscape(podName) + ":2468/proxy/v1/acp/" + url.PathEscape(serverID)
 	q := url.Values{}
 	if bootstrapAgent != "" {
 		q.Set("agent", bootstrapAgent)
