@@ -1,0 +1,31 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: kocao-system
+
+resources:
+  - ../../base
+  - agent-secrets.yaml
+
+configMapGenerator:
+  - name: control-plane-config
+    envs:
+      - config.env
+
+generatorOptions:
+  disableNameSuffixHash: true
+
+images:
+  - name: kocao/control-plane-api
+    newName: ghcr.io/withakay/kocao/control-plane-api
+    newTag: dev-sandbox
+  - name: kocao/control-plane-operator
+    newName: ghcr.io/withakay/kocao/control-plane-operator
+    newTag: dev-sandbox
+  - name: kocao/control-plane-web
+    newName: ghcr.io/withakay/kocao/control-plane-web
+    newTag: dev-sandbox
+
+patches:
+  - path: patch-use-configmap.yaml
+  - path: patch-image-pull-secret.yaml
