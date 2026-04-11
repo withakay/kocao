@@ -27,6 +27,7 @@ help:
 		"  kind-down           Delete local kind cluster" \
 		"  images              Build local Docker images" \
 		"  kind-load-images    Load images into kind" \
+		"  seed-agent-secrets  Copy local OAuth auth into k8s secret" \
 		"  deploy              Apply kustomize overlay" \
 		"  deploy-restart      Apply overlay + restart control-plane pods" \
 		"  deploy-wait         Wait for control-plane rollout" \
@@ -107,6 +108,10 @@ kind-load-images: tools
 harness-smoke:
 	docker build -f build/Dockerfile.harness -t "$(HARNESS_IMAGE):$(IMAGE_TAG)" .
 	docker run --rm "$(HARNESS_IMAGE):$(IMAGE_TAG)" /usr/local/bin/kocao-harness-smoke
+
+.PHONY: seed-agent-secrets
+seed-agent-secrets:
+	bash ./hack/seed-agent-secrets.sh
 
 .PHONY: deploy
 deploy:
