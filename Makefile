@@ -9,6 +9,7 @@ K8S_NAMESPACE ?= kocao-system
 API_IMAGE ?= kocao/control-plane-api
 OPERATOR_IMAGE ?= kocao/control-plane-operator
 HARNESS_IMAGE ?= kocao/harness-runtime
+SIDECAR_IMAGE ?= kocao/kocao-sidecar
 WEB_IMAGE ?= kocao/control-plane-web
 IMAGE_TAG ?= dev
 
@@ -92,6 +93,7 @@ images:
 	docker build -f build/Dockerfile.operator -t "$(OPERATOR_IMAGE):$(IMAGE_TAG)" .
 	docker build -f build/Dockerfile.web -t "$(WEB_IMAGE):$(IMAGE_TAG)" .
 	docker build -f build/Dockerfile.harness -t "$(HARNESS_IMAGE):$(IMAGE_TAG)" .
+	docker build -f build/Dockerfile.sidecar -t "$(SIDECAR_IMAGE):$(IMAGE_TAG)" .
 
 .PHONY: kind-load-images
 kind-load-images: tools
@@ -99,6 +101,7 @@ kind-load-images: tools
 	KIND_CLUSTER_NAME="$(KIND_CLUSTER_NAME)" KIND_BIN="$(KIND)" bash ./hack/kind/load-image.sh "$(OPERATOR_IMAGE):$(IMAGE_TAG)"
 	KIND_CLUSTER_NAME="$(KIND_CLUSTER_NAME)" KIND_BIN="$(KIND)" bash ./hack/kind/load-image.sh "$(WEB_IMAGE):$(IMAGE_TAG)"
 	KIND_CLUSTER_NAME="$(KIND_CLUSTER_NAME)" KIND_BIN="$(KIND)" bash ./hack/kind/load-image.sh "$(HARNESS_IMAGE):$(IMAGE_TAG)"
+	KIND_CLUSTER_NAME="$(KIND_CLUSTER_NAME)" KIND_BIN="$(KIND)" bash ./hack/kind/load-image.sh "$(SIDECAR_IMAGE):$(IMAGE_TAG)"
 
 .PHONY: harness-smoke
 harness-smoke:

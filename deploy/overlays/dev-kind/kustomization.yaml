@@ -22,6 +22,9 @@ images:
   - name: kocao/control-plane-operator
     newName: kocao/control-plane-operator
     newTag: dev
+  - name: kocao/kocao-sidecar
+    newName: kocao/kocao-sidecar
+    newTag: dev
 
 patches:
   - path: patch-use-configmap.yaml
