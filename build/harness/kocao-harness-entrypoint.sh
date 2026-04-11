@@ -58,12 +58,13 @@ require_safe_paths() {
 
 workspace_dir=${KOCAO_WORKSPACE_DIR:-/workspace}
 repo_dir=${KOCAO_REPO_DIR:-"${workspace_dir}/repo"}
+sandbox_agent_pid=""
 
 require_safe_paths "${workspace_dir}" "${repo_dir}"
 workspace_dir="$(canon_path "${workspace_dir}")"
 repo_dir="$(canon_path "${repo_dir}")"
 
-mkdir -p "${workspace_dir}" "${workspace_dir}/home"
+mkdir -p "${workspace_dir}" "${workspace_dir}/home" "${workspace_dir}/.kocao"
 export HOME="${HOME:-${workspace_dir}/home}"
 
 # Disable interactive git prompts.
@@ -73,6 +74,47 @@ export GIT_TERMINAL_PROMPT=${GIT_TERMINAL_PROMPT:-0}
 if [[ -n "${KOCAO_GIT_TOKEN_FILE:-}" && -f "${KOCAO_GIT_TOKEN_FILE}" ]]; then
   export GIT_ASKPASS=${GIT_ASKPASS:-/usr/local/bin/kocao-git-askpass}
 fi
+
+cleanup() {
+  if [[ -n "${sandbox_agent_pid}" ]] && kill -0 "${sandbox_agent_pid}" >/dev/null 2>&1; then
+    kill "${sandbox_agent_pid}" >/dev/null 2>&1 || true
+    wait "${sandbox_agent_pid}" 2>/dev/null || true
+  fi
+}
+
+start_sandbox_agent() {
+  local host port token log_file
+  host=${KOCAO_SANDBOX_AGENT_HOST:-0.0.0.0}
+  port=${KOCAO_SANDBOX_AGENT_PORT:-2468}
+  token=${KOCAO_SANDBOX_AGENT_TOKEN:-}
+  log_file=${KOCAO_SANDBOX_AGENT_LOG:-${workspace_dir}/.kocao/sandbox-agent.log}
+
+  mkdir -p "$(dirname "${log_file}")"
+
+  if [[ -n "${token}" ]]; then
+    sandbox-agent server --token "${token}" --host "${host}" --port "${port}" >"${log_file}" 2>&1 &
+  else
+    sandbox-agent server --no-token --host "${host}" --port "${port}" >"${log_file}" 2>&1 &
+  fi
+  sandbox_agent_pid=$!
+
+  for _ in $(seq 1 30); do
+    if curl -fsS "http://127.0.0.1:${port}/v1/health" >/dev/null 2>&1; then
+      export KOCAO_SANDBOX_AGENT_ENDPOINT="http://127.0.0.1:${port}"
+      return 0
+    fi
+    if ! kill -0 "${sandbox_agent_pid}" >/dev/null 2>&1; then
+      sed -n '1,120p' "${log_file}" >&2 || true
+      die "sandbox-agent exited before becoming healthy"
+    fi
+    sleep 1
+  done
+
+  sed -n '1,120p' "${log_file}" >&2 || true
+  die "sandbox-agent health endpoint did not become ready"
+}
+
+trap cleanup EXIT
 
 if [[ -n "${KOCAO_REPO_URL:-}" ]]; then
   if [[ ! -d "${repo_dir}/.git" ]]; then
@@ -93,6 +135,10 @@ if [[ -n "${KOCAO_REPO_URL:-}" ]]; then
 fi
 
 cd "${repo_dir}" 2>/dev/null || cd "${workspace_dir}"
+
+if [[ "${KOCAO_AGENT_RUNTIME:-}" == "sandbox-agent" ]]; then
+  start_sandbox_agent
+fi
 
 # Default behavior: keep the pod alive for interactive exec unless a command is provided.
 if [[ "$#" -eq 0 ]]; then

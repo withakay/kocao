@@ -59,6 +59,59 @@ for tool in $(jq -r '.tools | keys[]' "${matrix}"); do
 done
 
 echo ""
+echo "=== Validating sandbox-agent API contract ==="
+
+sandbox_host=127.0.0.1
+sandbox_port=2468
+sandbox_log="$(mktemp -t sandbox-agent-smoke.XXXXXX.log)"
+sandbox_pid=""
+cleanup() {
+  if [[ -n "${sandbox_pid}" ]] && kill -0 "${sandbox_pid}" >/dev/null 2>&1; then
+    kill "${sandbox_pid}" >/dev/null 2>&1 || true
+    wait "${sandbox_pid}" 2>/dev/null || true
+  fi
+  rm -f "${sandbox_log}"
+}
+trap cleanup EXIT
+
+sandbox-agent server --no-token --host 0.0.0.0 --port "${sandbox_port}" >"${sandbox_log}" 2>&1 &
+sandbox_pid=$!
+
+health_ok=0
+for _ in $(seq 1 30); do
+  if curl -fsS "http://${sandbox_host}:${sandbox_port}/v1/health" >/dev/null 2>&1; then
+    health_ok=1
+    break
+  fi
+  if ! kill -0 "${sandbox_pid}" >/dev/null 2>&1; then
+    break
+  fi
+  sleep 1
+done
+
+if [[ "${health_ok}" -ne 1 ]]; then
+  echo "FAIL: sandbox-agent health endpoint did not become ready" >&2
+  if [[ -f "${sandbox_log}" ]]; then
+    sed -n '1,120p' "${sandbox_log}" >&2 || true
+  fi
+  fail=1
+else
+  echo "  ok: sandbox-agent health endpoint is reachable"
+fi
+
+if [[ "${health_ok}" -eq 1 ]]; then
+  agents_json="$(curl -fsS "http://${sandbox_host}:${sandbox_port}/v1/agents" 2>/dev/null || true)"
+  for required_agent in claude codex opencode pi; do
+    if [[ -z "${agents_json}" ]] || ! jq -e --arg agent "${required_agent}" '.agents[]? | select(.id == $agent)' >/dev/null <<<"${agents_json}"; then
+      echo "FAIL: sandbox-agent catalog missing ${required_agent}" >&2
+      fail=1
+    else
+      echo "  ok: sandbox-agent catalog includes ${required_agent}"
+    fi
+  done
+fi
+
+echo ""
 if [[ "${fail}" -ne 0 ]]; then
   echo "FAIL: one or more checks failed" >&2
   exit 1

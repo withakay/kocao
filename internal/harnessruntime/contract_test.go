@@ -40,8 +40,8 @@ func TestHarnessDockerfileIsPinnedAndCopiesContractArtifacts(t *testing.T) {
 		}
 	}
 
-	// Verify agent CLIs are present in the tools section.
-	for _, tool := range []string{"claude", "opencode", "codex"} {
+	// Verify agent CLIs and sandbox-agent are present in the tools section.
+	for _, tool := range []string{"claude", "opencode", "codex", "pi", "sandbox-agent"} {
 		if _, ok := mat.Tools[tool]; !ok {
 			t.Fatalf("runtime matrix must include agent CLI tool %q", tool)
 		}
@@ -62,6 +62,12 @@ func TestHarnessDockerfileIsPinnedAndCopiesContractArtifacts(t *testing.T) {
 	for _, s := range requiredCopies {
 		if !strings.Contains(dockerfile, s) {
 			t.Fatalf("dockerfile must include %q", s)
+		}
+	}
+
+	for _, token := range []string{"sandbox-agent --version", "pi --version"} {
+		if !strings.Contains(dockerfile, token) {
+			t.Fatalf("dockerfile must validate %q during build", token)
 		}
 	}
 
