@@ -143,3 +143,31 @@ func TestAddToSchemeRegistersSymphonyProject(t *testing.T) {
 		t.Fatalf("expected status phase %q, got %q", SymphonyProjectPhaseReady, updated.Status.Phase)
 	}
 }
+
+func TestAgentSessionSpecApplyDefaultsAndValidate(t *testing.T) {
+	spec := &AgentSessionSpec{Agent: AgentKind(" CODEX ")}
+	spec.ApplyDefaults()
+	if spec.Runtime != AgentRuntimeSandboxAgent {
+		t.Fatalf("runtime = %q, want %q", spec.Runtime, AgentRuntimeSandboxAgent)
+	}
+	if spec.Agent != AgentKindCodex {
+		t.Fatalf("agent = %q, want %q", spec.Agent, AgentKindCodex)
+	}
+	if err := spec.Validate(); err != nil {
+		t.Fatalf("validate: %v", err)
+	}
+}
+
+func TestAgentSessionSpecValidateRejectsInvalidConfig(t *testing.T) {
+	cases := []AgentSessionSpec{
+		{Runtime: AgentRuntime("custom"), Agent: AgentKindCodex},
+		{Runtime: AgentRuntimeSandboxAgent},
+		{Runtime: AgentRuntimeSandboxAgent, Agent: AgentKind("cursor")},
+	}
+	for _, tc := range cases {
+		tc.ApplyDefaults()
+		if err := tc.Validate(); err == nil {
+			t.Fatalf("expected validation error for %#v", tc)
+		}
+	}
+}

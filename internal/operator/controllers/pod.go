@@ -58,6 +58,14 @@ func buildHarnessPod(run *operatorv1alpha1.HarnessRun, workspacePVCName string, 
 		}
 		env = append(env, corev1.EnvVar{Name: e.Name, Value: e.Value})
 	}
+	if run.Spec.AgentSession != nil && run.Spec.AgentSession.Enabled() {
+		env = append(env,
+			corev1.EnvVar{Name: "KOCAO_AGENT_RUNTIME", Value: string(run.Spec.AgentSession.Runtime)},
+			corev1.EnvVar{Name: "KOCAO_AGENT", Value: string(run.Spec.AgentSession.Agent)},
+			corev1.EnvVar{Name: "KOCAO_SANDBOX_AGENT_HOST", Value: "0.0.0.0"},
+			corev1.EnvVar{Name: "KOCAO_SANDBOX_AGENT_PORT", Value: "2468"},
+		)
+	}
 
 	workspaceVolumeSource := corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}
 	if strings.TrimSpace(workspacePVCName) != "" {
@@ -155,6 +163,9 @@ func buildHarnessPod(run *operatorv1alpha1.HarnessRun, workspacePVCName string, 
 	}
 	if container.WorkingDir == "" {
 		container.WorkingDir = workspaceMountPath
+	}
+	if run.Spec.AgentSession != nil && run.Spec.AgentSession.Enabled() {
+		container.Ports = append(container.Ports, corev1.ContainerPort{Name: "sandbox-agent", ContainerPort: 2468})
 	}
 
 	return &corev1.Pod{

@@ -417,6 +417,41 @@ func TestBuildHarnessPod_NoAgentAuth(t *testing.T) {
 	}
 }
 
+func TestBuildHarnessPod_AgentSessionEnablesSandboxAgent(t *testing.T) {
+	run := &operatorv1alpha1.HarnessRun{
+		ObjectMeta: metav1.ObjectMeta{Name: "run-sandbox-agent", Namespace: "default"},
+		Spec: operatorv1alpha1.HarnessRunSpec{
+			RepoURL: "https://example.com/repo",
+			Image:   "busybox",
+			AgentSession: &operatorv1alpha1.AgentSessionSpec{
+				Runtime: operatorv1alpha1.AgentRuntimeSandboxAgent,
+				Agent:   operatorv1alpha1.AgentKindCodex,
+			},
+		},
+	}
+	pod := buildHarnessPod(run, "", "")
+	env := map[string]string{}
+	for _, ev := range pod.Spec.Containers[0].Env {
+		env[ev.Name] = ev.Value
+	}
+	if env["KOCAO_AGENT_RUNTIME"] != string(operatorv1alpha1.AgentRuntimeSandboxAgent) {
+		t.Fatalf("expected KOCAO_AGENT_RUNTIME to be set, got %q", env["KOCAO_AGENT_RUNTIME"])
+	}
+	if env["KOCAO_AGENT"] != string(operatorv1alpha1.AgentKindCodex) {
+		t.Fatalf("expected KOCAO_AGENT=codex, got %q", env["KOCAO_AGENT"])
+	}
+	if env["KOCAO_SANDBOX_AGENT_HOST"] != "0.0.0.0" {
+		t.Fatalf("expected KOCAO_SANDBOX_AGENT_HOST=0.0.0.0, got %q", env["KOCAO_SANDBOX_AGENT_HOST"])
+	}
+	if env["KOCAO_SANDBOX_AGENT_PORT"] != "2468" {
+		t.Fatalf("expected KOCAO_SANDBOX_AGENT_PORT=2468, got %q", env["KOCAO_SANDBOX_AGENT_PORT"])
+	}
+	ports := pod.Spec.Containers[0].Ports
+	if len(ports) != 1 || ports[0].Name != "sandbox-agent" || ports[0].ContainerPort != 2468 {
+		t.Fatalf("expected sandbox-agent container port, got %#v", ports)
+	}
+}
+
 func TestBuildHarnessPod_ApiKeySecretOnly(t *testing.T) {
 	run := &operatorv1alpha1.HarnessRun{
 		ObjectMeta: metav1.ObjectMeta{Name: "run-apikey", Namespace: "default"},
