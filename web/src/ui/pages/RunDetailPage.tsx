@@ -7,7 +7,7 @@ import { StatusPill } from '../components/StatusPill'
 import { Topbar } from '../components/Topbar'
 import {
   Btn, btnClass, CollapsibleSection, DetailRow, ErrorBanner,
-  ScopeBadge, Table, Td, Th, EmptyRow,
+  FormRow, ScopeBadge, Table, Td, Textarea, Th, EmptyRow,
 } from '../components/primitives'
 
 export function RunDetailPage() {
@@ -17,6 +17,9 @@ export function RunDetailPage() {
   const nav = useNavigate()
   const [actionErr, setActionErr] = useState<string | null>(null)
   const [acting, setActing] = useState(false)
+  const [agentPrompt, setAgentPrompt] = useState('')
+  const [agentErr, setAgentErr] = useState<string | null>(null)
+  const [agentActing, setAgentActing] = useState(false)
 
   const onUnauthorized = useCallback(() => {
     invalidateToken('Bearer token rejected (401). Please re-enter a valid token in Settings.')
@@ -32,12 +35,23 @@ export function RunDetailPage() {
     () => api.listAudit(token, 250),
     { intervalMs: 3000, enabled: token.trim() !== '', onUnauthorized }
   )
+  const agentSessionQ = usePollingQuery(
+    `agent-session:${id}:${token}`,
+    () => api.getAgentSession(token, id),
+    { intervalMs: 1500, enabled: token.trim() !== '' && id !== '' && Boolean(runQ.data?.agentSession?.agent), onUnauthorized }
+  )
+  const agentEventsQ = usePollingQuery(
+    `agent-session-events:${id}:${token}`,
+    () => api.listAgentSessionEvents(token, id, { limit: 200 }),
+    { intervalMs: 1500, enabled: token.trim() !== '' && id !== '' && Boolean(runQ.data?.agentSession?.agent), onUnauthorized }
+  )
 
   const run = runQ.data
   const events = useMemo(() => {
     const evs = auditQ.data?.events ?? []
     return evs.filter((e) => e.resourceID === id).slice(-40)
   }, [auditQ.data, id])
+  const agentEvents = useMemo(() => agentEventsQ.data?.events ?? [], [agentEventsQ.data])
 
   const stop = useCallback(async () => {
     setActing(true)
@@ -66,6 +80,53 @@ export function RunDetailPage() {
       setActing(false)
     }
   }, [token, id, nav, onUnauthorized])
+
+  const startAgentSession = useCallback(async () => {
+    setAgentActing(true)
+    setAgentErr(null)
+    try {
+      await api.createAgentSession(token, id)
+      agentSessionQ.reload()
+      agentEventsQ.reload()
+    } catch (e) {
+      if (isUnauthorizedError(e)) { onUnauthorized(); return }
+      setAgentErr(e instanceof Error ? e.message : String(e))
+    } finally {
+      setAgentActing(false)
+    }
+  }, [token, id, agentSessionQ, agentEventsQ, onUnauthorized])
+
+  const promptAgentSession = useCallback(async () => {
+    if (agentPrompt.trim() === '') return
+    setAgentActing(true)
+    setAgentErr(null)
+    try {
+      await api.promptAgentSession(token, id, agentPrompt.trim())
+      setAgentPrompt('')
+      agentSessionQ.reload()
+      agentEventsQ.reload()
+    } catch (e) {
+      if (isUnauthorizedError(e)) { onUnauthorized(); return }
+      setAgentErr(e instanceof Error ? e.message : String(e))
+    } finally {
+      setAgentActing(false)
+    }
+  }, [token, id, agentPrompt, agentSessionQ, agentEventsQ, onUnauthorized])
+
+  const stopAgentSession = useCallback(async () => {
+    setAgentActing(true)
+    setAgentErr(null)
+    try {
+      await api.stopAgentSession(token, id)
+      agentSessionQ.reload()
+      agentEventsQ.reload()
+    } catch (e) {
+      if (isUnauthorizedError(e)) { onUnauthorized(); return }
+      setAgentErr(e instanceof Error ? e.message : String(e))
+    } finally {
+      setAgentActing(false)
+    }
+  }, [token, id, agentSessionQ, agentEventsQ, onUnauthorized])
 
   const attachLinks = run?.workspaceSessionID
     ? {
@@ -136,6 +197,47 @@ export function RunDetailPage() {
           </div>
           {actionErr ? <ErrorBanner>{actionErr}</ErrorBanner> : null}
         </CollapsibleSection>
+
+        {run?.agentSession?.agent ? (
+          <CollapsibleSection title="Agent Session" persistKey="kocao.section.run.agent-session" defaultOpen={true} headerRight={<span className="text-[10px] text-muted-foreground/50 font-mono">sandbox-agent</span>}>
+            <DetailRow label="Runtime">{agentSessionQ.data?.runtime ?? run.agentSession.runtime ?? '\u2014'}</DetailRow>
+            <DetailRow label="Agent">{agentSessionQ.data?.agent ?? run.agentSession.agent ?? '\u2014'}</DetailRow>
+            <DetailRow label="Session ID">{agentSessionQ.data?.sessionId ?? run.agentSession.sessionId ?? '\u2014'}</DetailRow>
+            <DetailRow label="Phase"><StatusPill phase={agentSessionQ.data?.phase ?? run.agentSession.phase} /></DetailRow>
+            <div className="flex items-center gap-2 mt-3 mb-2">
+              <Btn disabled={agentActing || token.trim() === ""} onClick={startAgentSession} type="button">
+                {agentActing ? "Working…" : "Start / Resume Agent Session"}
+              </Btn>
+              <Btn variant="danger" disabled={agentActing || token.trim() === ""} onClick={stopAgentSession} type="button">
+                Stop Agent Session
+              </Btn>
+            </div>
+            <FormRow label="Prompt">
+              <Textarea rows={3} value={agentPrompt} onChange={(e) => setAgentPrompt(e.target.value)} placeholder="Ask the agent to inspect or modify the repository…" />
+            </FormRow>
+            <div className="flex items-center gap-2 pl-27">
+              <Btn variant="primary" disabled={agentActing || token.trim() === "" || agentPrompt.trim() === ""} onClick={promptAgentSession} type="button">
+                Send Prompt
+              </Btn>
+            </div>
+            {agentErr ? <ErrorBanner>{agentErr}</ErrorBanner> : null}
+            <div className="mt-4 space-y-2">
+              <div className="text-xs font-medium text-foreground/80">Transcript / Events</div>
+              {agentEvents.length === 0 ? (
+                <div className="text-xs text-muted-foreground">{agentEventsQ.loading ? "Loading…" : "No agent session events yet."}</div>
+              ) : (
+                <div className="rounded-md border border-border/50 bg-muted/20 p-3 space-y-2 max-h-96 overflow-y-auto">
+                  {agentEvents.map((event) => (
+                    <div key={event.sequence} className="rounded border border-border/30 bg-background/60 p-2">
+                      <div className="text-[10px] font-mono text-muted-foreground mb-1">#{event.sequence} · {new Date(event.at).toLocaleTimeString()}</div>
+                      <pre className="whitespace-pre-wrap break-words text-[11px] leading-relaxed text-foreground/90">{JSON.stringify(event.envelope, null, 2)}</pre>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </CollapsibleSection>
+        ) : null}
 
         {/* Attach */}
         <CollapsibleSection

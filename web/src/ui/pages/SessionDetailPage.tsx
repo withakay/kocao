@@ -47,6 +47,7 @@ export function SessionDetailPage() {
   const [task, setTask] = useState('')
   const [advancedArgs, setAdvancedArgs] = useState('')
   const [image, setImage] = useState('kocao/harness-runtime:dev')
+  const [agent, setAgent] = useState<'opencode' | 'claude' | 'codex' | 'pi'>('codex')
   const [egressMode, setEgressMode] = useState<'restricted' | 'full'>('restricted')
   const [starting, setStarting] = useState(false)
   const [startErr, setStartErr] = useState<string | null>(null)
@@ -99,6 +100,7 @@ export function SessionDetailPage() {
         image: image.trim(),
         egressMode,
         args,
+        agentSession: { agent },
       })
       nav({ to: '/harness-runs/$harnessRunID', params: { harnessRunID: out.id } })
     } catch (e) {
@@ -107,7 +109,7 @@ export function SessionDetailPage() {
     } finally {
       setStarting(false)
     }
-  }, [token, id, repoURL, repoRevision, task, advancedArgs, image, egressMode, nav, sessQ.data, onUnauthorized])
+  }, [token, id, repoURL, repoRevision, task, advancedArgs, image, agent, egressMode, nav, sessQ.data, onUnauthorized])
 
   const sess = sessQ.data
   const effectiveRepo = repoURL.trim() !== '' ? repoURL.trim() : sess?.repoURL ?? ''
@@ -167,6 +169,14 @@ export function SessionDetailPage() {
           </FormRow>
           <FormRow label="Image">
             <Input value={image} onChange={(e) => setImage(e.target.value)} placeholder="kocao/harness-runtime:dev" />
+          </FormRow>
+          <FormRow label="Agent">
+            <Select aria-label="Agent" value={agent} onChange={(e) => setAgent(e.target.value as 'opencode' | 'claude' | 'codex' | 'pi')}>
+              <option value="opencode">OpenCode</option>
+              <option value="claude">Claude</option>
+              <option value="codex">Codex</option>
+              <option value="pi">Pi</option>
+            </Select>
           </FormRow>
           <FormRow label="Egress">
             <Select value={egressMode} onChange={(e) => setEgressMode(e.target.value as 'restricted' | 'full')}>
