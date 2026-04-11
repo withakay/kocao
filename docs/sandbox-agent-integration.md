@@ -107,12 +107,37 @@ This means the replacement run can:
 - show the prior session id metadata
 - continue the user-visible workflow from the same Workspace Session context
 
+## Kocao Sidecar and Token Sync
+
+Each Harness Run pod includes a `kocao-sidecar` container alongside the main `harness` container. The sidecar handles:
+
+- **Token sync**: polls watched auth files inside the harness container (`/home/kocao/.local/share/opencode/auth.json`, `/home/kocao/.codex/auth.json`) and patches the `kocao-agent-oauth` Secret with any changes. This allows agents that perform interactive OAuth flows to persist their tokens back to the cluster.
+
+An `auth-seed` init container runs before the main containers to bootstrap initial auth tokens from the `kocao-agent-oauth` Secret into the shared `agent-auth-live` emptyDir volume.
+
+### Pod container layout
+
+| Container | Role |
+|-----------|------|
+| `auth-seed` (init) | Copies initial OAuth tokens from Secret to shared volume |
+| `harness` | Runs the agent runtime (sandbox-agent, git clone, agent CLI) |
+| `kocao-sidecar` | Watches for auth file changes and syncs them back to the Secret |
+
+### Seeding real OAuth tokens for local development
+
+```bash
+make seed-agent-secrets
+```
+
+This copies `~/.local/share/opencode/auth.json` and `~/.codex/auth.json` from the local machine into the `kocao-agent-oauth` Secret in the `kocao-system` namespace. The auth-seed init container then makes these available to the harness container at pod startup.
+
 ## Security notes
 
 - Browsers only talk to Kocao endpoints.
 - Kocao proxies sandbox-agent traffic internally.
 - Provider credentials remain pod-scoped.
 - Persisted event envelopes redact secret-shaped values before storage.
+- The kocao-sidecar has RBAC access only to patch the `kocao-agent-oauth` Secret in its own namespace.
 
 ## Validation commands
 
@@ -126,6 +151,19 @@ kubectl kustomize deploy/base >/dev/null
 make harness-smoke
 ```
 
+## Local Kind Setup
+
+```bash
+kubectl config current-context  # Must be kind-kocao-dev
+make images                     # Build all images (api, operator, web, harness, sidecar)
+make kind-load-images           # Load into Kind
+make deploy                     # Apply kustomize overlay
+make deploy-wait                # Wait for rollout
+make seed-agent-secrets         # Copy local OAuth tokens
+```
+
+**Important**: When creating Harness Runs in Kind, use `"egressMode":"full"` to allow the pod to reach external git hosts and API endpoints. The default `restricted` egress mode only allows DNS.
+
 ## Acceptance checklist
 
 The intended happy path is:
@@ -133,6 +171,8 @@ The intended happy path is:
 1. Run Kocao in Kubernetes.
 2. Create a Workspace Session.
 3. Start a Harness Run from the UI or API with one of `opencode`, `claude`, `codex`, or `pi`.
-4. Create or resume the run's sandbox-backed agent session.
-5. Send prompts and observe transcript events.
-6. Stop or resume the session/run and retain visible history.
+4. Verify the pod has three containers: `auth-seed` (init), `harness`, `kocao-sidecar`.
+5. Create or resume the run's sandbox-backed agent session.
+6. Send prompts and observe transcript events.
+7. Stop or resume the session/run and retain visible history.
+8. Verify the kocao-sidecar syncs auth tokens back to the Secret.
