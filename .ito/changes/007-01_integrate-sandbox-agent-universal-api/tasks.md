@@ -27,8 +27,8 @@ ______________________________________________________________________
 - **Verify**: `go test ./internal/controlplaneapi/... ./internal/operator/api/v1alpha1/...`
 - **Done When**: Kocao contracts can describe a sandbox-backed session for `opencode`, `claude`, `codex`, and `pi` without provider-specific public endpoints.
 - **Requirements**: sandbox-agent-runtime:unified-session-contract, sandbox-agent-runtime:supported-agent-catalog, sandbox-agent-runtime:normalized-agent-lifecycle, control-plane-api:sandbox-agent-session-management-endpoints, control-plane-api:sandbox-agent-lifecycle-control-api
-- **Updated At**: 2026-04-09
-- **Status**: [ ] pending
+- **Updated At**: 2026-04-11
+- **Status**: [x] complete
 
 ### Task 1.2: Add sandbox-agent to harness runtime
 
@@ -38,8 +38,8 @@ ______________________________________________________________________
 - **Verify**: `make harness-smoke && go test ./internal/harnessruntime/... ./internal/operator/controllers/...`
 - **Done When**: A harness pod can start sandbox-agent reliably, Kocao can target it as the single in-pod agent API, and contract drift in the pinned sandbox-agent dependency is caught by automated validation.
 - **Requirements**: harness-runtime:sandbox-agent-server-present, harness-runtime:supported-agent-dependencies-available, harness-runtime:sandbox-agent-version-and-api-contract-are-verified, harness-runtime:reproducible-harness-runtime-image
-- **Updated At**: 2026-04-09
-- **Status**: [ ] pending
+- **Updated At**: 2026-04-11
+- **Status**: [x] complete
 
 ______________________________________________________________________
 
@@ -55,8 +55,8 @@ ______________________________________________________________________
 - **Verify**: `go test ./internal/controlplaneapi/... ./internal/operator/controllers/...`
 - **Done When**: Authorized API clients can launch, interact with, and manage sandbox-backed sessions without direct access to sandbox-agent.
 - **Requirements**: control-plane-api:sandbox-agent-session-management-endpoints, control-plane-api:sandbox-agent-messaging-and-event-replay-api, control-plane-api:sandbox-agent-lifecycle-control-api, security-posture:sandbox-agent-access-is-control-plane-mediated
-- **Updated At**: 2026-04-09
-- **Status**: [ ] pending
+- **Updated At**: 2026-04-11
+- **Status**: [x] complete
 
 ### Task 2.2: Persist transcript history and resume metadata
 
@@ -66,8 +66,8 @@ ______________________________________________________________________
 - **Verify**: `go test ./internal/controlplaneapi/... ./internal/operator/controllers/... ./internal/auditlog/...`
 - **Done When**: Transcript history survives client reconnects and resumed runs preserve prior session context.
 - **Requirements**: sandbox-agent-runtime:ordered-prompt-and-event-interaction, session-durability:sandbox-agent-event-history-is-durable, session-durability:resumed-runs-preserve-agent-session-context, session-durability:workspace-session-is-the-durable-workspace-anchor, security-posture:provider-credentials-remain-pod-scoped, security-posture:workflow-and-agent-secrets-stay-bounded
-- **Updated At**: 2026-04-09
-- **Status**: [ ] pending
+- **Updated At**: 2026-04-11
+- **Status**: [x] complete
 
 ______________________________________________________________________
 
@@ -83,8 +83,8 @@ ______________________________________________________________________
 - **Verify**: `pnpm -C web test && pnpm -C web lint`
 - **Done When**: Users can start an OpenCode/Claude/Codex/Pi sandbox-backed session from the UI, interact with it, and stop/resume/reconnect without losing context.
 - **Requirements**: agent-session-ui:agent-selection-and-launch, agent-session-ui:live-agent-interaction-view, agent-session-ui:lifecycle-controls-and-reconnect
-- **Updated At**: 2026-04-09
-- **Status**: [ ] pending
+- **Updated At**: 2026-04-11
+- **Status**: [x] complete
 
 ### Task 3.2: Validate Kubernetes, API, and UI happy paths
 
