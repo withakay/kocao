@@ -1,21 +1,21 @@
-# Demo: AI Assistant Managing Remote Agents
+# Demo: AI Assistant Managing Remote Sessions
 
-This demo shows an AI assistant (OpenCode) using the `kocao-agent` skill to
-manage remote coding agents on a Kocao cluster.
+This demo shows an AI assistant using the `kocao-agent` skill to manage remote
+Kocao workspace sessions.
 
 ## Prerequisites
 
-- Kocao cluster deployed and accessible
+- Kocao cluster deployed and reachable
 - `kocao` CLI installed and configured (`KOCAO_API_URL`, `KOCAO_TOKEN`)
 - OpenCode with the `kocao-agent` skill loaded
 
 ---
 
-## Scene 1: Start a remote agent
+## Scene 1: Start a remote session
 
-**User:** Start a codex agent on the cluster to work on the kocao repo.
+**User:** Start a remote session for the kocao repo and label it for codex work.
 
-**Assistant:** Starting a codex agent for the kocao repository.
+**Assistant:** Creating a workspace session for the kocao repository.
 
 ```bash
 $ .opencode/skills/kocao-agent/scripts/agent-start.sh \
@@ -25,24 +25,31 @@ $ .opencode/skills/kocao-agent/scripts/agent-start.sh \
 
 ```json
 {
-  "id": "ws-a1b2c3d4",
-  "displayName": "codex-1712937600",
-  "repoURL": "https://github.com/withakay/kocao",
-  "phase": "Running",
-  "createdAt": "2026-04-12T10:00:00Z"
+  "session": {
+    "id": "ws-a1b2c3d4",
+    "displayName": "codex-1712937600",
+    "phase": "Running",
+    "repoURL": "https://github.com/withakay/kocao",
+    "createdAt": "2026-04-12T10:00:00Z"
+  },
+  "run": {
+    "id": "hr-e5f6g7h8",
+    "phase": "Running",
+    "podName": "harness-ws-a1b2c3d4-xk9m2"
+  }
 }
 ```
 
-**Assistant:** Session `ws-a1b2c3d4` is running. The codex agent is ready and
-has cloned the repository.
+**Assistant:** Session `ws-a1b2c3d4` is running. The `codex` label makes the
+session easy to identify, and the harness pod is ready.
 
 ---
 
-## Scene 2: Send a task to the agent
+## Scene 2: Send a task to the session
 
 **User:** Ask it to review the README and suggest improvements.
 
-**Assistant:** Sending the task to the remote agent.
+**Assistant:** Sending the task through the exec endpoint.
 
 ```bash
 $ .opencode/skills/kocao-agent/scripts/agent-exec.sh ws-a1b2c3d4 \
@@ -56,16 +63,16 @@ $ .opencode/skills/kocao-agent/scripts/agent-exec.sh ws-a1b2c3d4 \
 }
 ```
 
-**Assistant:** Task sent to agent `ws-a1b2c3d4`. The codex agent is now
-reviewing the README. Let me check on its progress.
+**Assistant:** Task sent to session `ws-a1b2c3d4`. If the control-plane did not
+support `/exec`, I would fall back to `kocao sessions attach ... --driver`.
 
 ---
 
-## Scene 3: Check agent status
+## Scene 3: Check session status
 
 **User:** How is it doing?
 
-**Assistant:** Checking the agent status.
+**Assistant:** Checking the session status.
 
 ```bash
 $ .opencode/skills/kocao-agent/scripts/agent-status.sh ws-a1b2c3d4
@@ -88,22 +95,21 @@ $ .opencode/skills/kocao-agent/scripts/agent-status.sh ws-a1b2c3d4
 }
 ```
 
-**Assistant:** Agent `ws-a1b2c3d4` is still running. The harness run `hr-e5f6g7h8`
-is active in pod `harness-ws-a1b2c3d4-xk9m2`.
+**Assistant:** The session is still active and the harness run is healthy.
 
 ---
 
-## Scene 4: View agent logs
+## Scene 4: View logs
 
 **User:** Show me what it's been doing.
 
-**Assistant:** Fetching the last 50 lines of logs.
+**Assistant:** Fetching the last 50 log lines.
 
 ```bash
 $ .opencode/skills/kocao-agent/scripts/agent-logs.sh ws-a1b2c3d4 --tail 50 --no-json
 ```
 
-```
+```text
 [agent] Cloned https://github.com/withakay/kocao (branch: main)
 [agent] Analyzing README.md...
 [agent] Found 3 areas for improvement:
@@ -111,23 +117,16 @@ $ .opencode/skills/kocao-agent/scripts/agent-logs.sh ws-a1b2c3d4 --tail 50 --no-
 [agent]   2. Installation instructions reference deprecated flag
 [agent]   3. API reference section is incomplete
 [agent] Generating suggestions...
-[agent] Creating branch: readme-improvements
-[agent] Committing changes...
-[agent] Opening pull request...
-[agent] PR created: #47 "Improve README clarity and completeness"
 [agent] Task complete.
 ```
 
-**Assistant:** The codex agent has completed its review. It found 3 areas for
-improvement and created PR #47 with the suggested changes.
-
 ---
 
-## Scene 5: List all running agents
+## Scene 5: List active sessions
 
-**User:** What other agents are running?
+**User:** What other sessions are running?
 
-**Assistant:** Listing all active sessions.
+**Assistant:** Listing active sessions.
 
 ```bash
 $ .opencode/skills/kocao-agent/scripts/agent-list.sh
@@ -152,17 +151,13 @@ $ .opencode/skills/kocao-agent/scripts/agent-list.sh
 }
 ```
 
-**Assistant:** There are 2 active sessions:
-1. `ws-a1b2c3d4` (codex) — the one we started for README review
-2. `ws-z9y8x7w6` (opencode) — running API tests, started 30 minutes ago
-
 ---
 
-## Scene 6: Stop the agent
+## Scene 6: Stop the session
 
-**User:** The codex agent is done. Stop it.
+**User:** That session is done. Stop it.
 
-**Assistant:** Stopping the codex session.
+**Assistant:** Stopping the workspace session.
 
 ```bash
 $ .opencode/skills/kocao-agent/scripts/agent-stop.sh ws-a1b2c3d4
@@ -175,22 +170,15 @@ $ .opencode/skills/kocao-agent/scripts/agent-stop.sh ws-a1b2c3d4
 }
 ```
 
-**Assistant:** Session `ws-a1b2c3d4` has been stopped. The codex agent's work
-(PR #47) is preserved in GitHub.
-
 ---
 
 ## Summary
 
-This demo showed the full lifecycle of managing a remote coding agent:
+This demo covered the full lifecycle:
 
-1. **Start** — Created a codex agent session on the cluster
-2. **Exec** — Sent a review task to the running agent
-3. **Status** — Checked the agent's current phase and run info
-4. **Logs** — Viewed the agent's output and progress
-5. **List** — Saw all active agent sessions
-6. **Stop** — Terminated the completed session
-
-The `kocao-agent` skill provides an AI assistant with full control over remote
-coding agents, enabling multi-agent workflows where tasks are distributed
-across specialized agents running in isolated Kubernetes pods.
+1. create a remote workspace session
+2. send a task through the optional exec endpoint
+3. inspect session status
+4. review logs
+5. list active sessions
+6. stop the finished session

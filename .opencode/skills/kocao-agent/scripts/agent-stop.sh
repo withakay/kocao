@@ -3,104 +3,70 @@
 # Exit codes: 0=success, 1=runtime error, 2=usage error
 set -euo pipefail
 
-# --- Preflight ---
-if ! command -v kocao &>/dev/null; then
-  echo "error: kocao binary not found in PATH" >&2
-  echo "Install: go install github.com/withakay/kocao/cmd/kocao@latest" >&2
-  exit 2
-fi
+SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+# shellcheck source=.opencode/skills/kocao-agent/scripts/common.sh
+source "${SCRIPT_DIR}/common.sh"
 
-if ! command -v curl &>/dev/null; then
-  echo "error: curl is required but not found in PATH" >&2
-  exit 2
-fi
+usage() {
+  cat <<'EOF'
+Usage: agent-stop.sh <session-id> [--no-json]
 
-if ! command -v jq &>/dev/null; then
-  echo "error: jq is required but not found in PATH" >&2
-  exit 2
-fi
+Stop a workspace session.
 
-# --- Defaults ---
-SESSION_ID=""
-API_URL="${KOCAO_API_URL:-http://127.0.0.1:8080}"
-TOKEN="${KOCAO_TOKEN:-}"
-OUTPUT_JSON=true
+Arguments:
+  session-id    Workspace session ID to stop
 
-# --- Parse args ---
-while [[ $# -gt 0 ]]; do
+Options:
+  --no-json     Output a short confirmation line instead of JSON
+  --help        Show this help
+EOF
+}
+
+require_commands curl jq
+
+session_id=""
+json_out=true
+api_response_file=""
+trap '[[ -n "$api_response_file" ]] && rm -f "$api_response_file"' EXIT
+
+while (($#)); do
   case "$1" in
     --no-json)
-      OUTPUT_JSON=false
+      json_out=false
       shift
       ;;
     --help|-h)
-      echo "Usage: agent-stop.sh <session-id> [--no-json]"
-      echo ""
-      echo "Stop a workspace session."
-      echo ""
-      echo "Arguments:"
-      echo "  session-id    Workspace session ID to stop"
-      echo ""
-      echo "Options:"
-      echo "  --no-json     Output human-readable text instead of JSON"
-      echo "  --help        Show this help"
+      usage
       exit 0
       ;;
     -*)
-      echo "error: unknown flag: $1" >&2
-      exit 2
+      usage_error "unknown flag: $1"
       ;;
     *)
-      if [[ -z "$SESSION_ID" ]]; then
-        SESSION_ID="$1"
-      else
-        echo "error: unexpected argument: $1" >&2
-        exit 2
+      if [[ -n "$session_id" ]]; then
+        usage_error "unexpected argument: $1"
       fi
+      session_id="$1"
       shift
       ;;
   esac
 done
 
-if [[ -z "$SESSION_ID" ]]; then
-  echo "error: session-id is required" >&2
-  echo "Usage: agent-stop.sh <session-id>" >&2
-  exit 2
-fi
+require_nonempty "$session_id" "session-id"
 
-if [[ -z "$TOKEN" ]]; then
-  echo "error: KOCAO_TOKEN is not set" >&2
-  exit 2
-fi
-
-# --- Stop session ---
-API_URL="${API_URL%/}"
-RESPONSE=$(curl -s -w "\n%{http_code}" \
-  -X DELETE \
-  -H "Authorization: Bearer ${TOKEN}" \
-  -H "Accept: application/json" \
-  "${API_URL}/api/v1/workspace-sessions/$(printf '%s' "$SESSION_ID" | jq -sRr @uri)" \
-  2>&1) || {
-  echo "error: failed to call control-plane API" >&2
-  exit 1
-}
-
-HTTP_CODE=$(echo "$RESPONSE" | tail -1)
-BODY=$(echo "$RESPONSE" | sed '$d')
-
-if [[ "$HTTP_CODE" -lt 200 || "$HTTP_CODE" -ge 300 ]]; then
-  echo "error: API returned HTTP ${HTTP_CODE}" >&2
-  echo "$BODY" >&2
+api_request DELETE "/api/v1/workspace-sessions/$(urlencode "$session_id")"
+api_response_file="$API_RESPONSE_FILE"
+if ! api_request_ok; then
+  print_api_error "$API_RESPONSE_CODE" "$API_RESPONSE_FILE"
   exit 1
 fi
 
-# --- Output ---
-if [[ "$OUTPUT_JSON" == true ]]; then
-  if [[ -n "$BODY" ]]; then
-    echo "$BODY" | jq . 2>/dev/null || jq -n --arg sid "$SESSION_ID" '{status:"stopped",sessionId:$sid}'
+if [[ "$json_out" == true ]]; then
+  if [[ -s "$API_RESPONSE_FILE" ]]; then
+    print_json_or_raw "$API_RESPONSE_FILE"
   else
-    jq -n --arg sid "$SESSION_ID" '{status:"stopped",sessionId:$sid}'
+    jq -n --arg sid "$session_id" '{status:"stopped",sessionId:$sid}'
   fi
 else
-  echo "Stopped session: ${SESSION_ID}"
+  echo "Stopped session: ${session_id}"
 fi

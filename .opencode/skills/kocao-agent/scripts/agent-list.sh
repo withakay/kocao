@@ -4,39 +4,49 @@
 # Exit codes: 0=success, 1=runtime error, 2=usage error
 set -euo pipefail
 
-# --- Preflight ---
-if ! command -v kocao &>/dev/null; then
-  echo "error: kocao binary not found in PATH" >&2
-  echo "Install: go install github.com/withakay/kocao/cmd/kocao@latest" >&2
-  exit 2
-fi
+SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+# shellcheck source=.opencode/skills/kocao-agent/scripts/common.sh
+source "${SCRIPT_DIR}/common.sh"
 
-# --- Parse args ---
-OUTPUT_FORMAT="--json"
-EXTRA_ARGS=()
+usage() {
+  cat <<'EOF'
+Usage: agent-list.sh [--no-json] [extra kocao flags]
 
-while [[ $# -gt 0 ]]; do
+List all workspace sessions.
+
+Options:
+  --no-json   Output the default kocao table instead of JSON
+  --help      Show this help
+
+Any additional arguments are passed through to `kocao sessions ls`.
+EOF
+}
+
+require_commands kocao
+
+json_out=true
+extra_args=()
+while (($#)); do
   case "$1" in
     --no-json)
-      OUTPUT_FORMAT=""
+      json_out=false
       shift
       ;;
     --help|-h)
-      echo "Usage: agent-list.sh [--no-json]"
-      echo ""
-      echo "List all workspace sessions."
-      echo ""
-      echo "Options:"
-      echo "  --no-json   Output human-readable table instead of JSON"
-      echo "  --help      Show this help"
+      usage
       exit 0
       ;;
     *)
-      EXTRA_ARGS+=("$1")
+      extra_args+=("$1")
       shift
       ;;
   esac
 done
 
-# --- Execute ---
-exec kocao sessions ls ${OUTPUT_FORMAT} "${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}"
+cmd=(kocao sessions ls)
+if [[ "$json_out" == true ]]; then
+  cmd+=(--json)
+fi
+cmd+=("${extra_args[@]}")
+
+exec "${cmd[@]}"

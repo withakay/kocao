@@ -1,112 +1,121 @@
 ---
 name: kocao-agent
 description: |
-    Manage remote Kocao sandbox agents (workspace sessions) via the kocao CLI.
-    Use when: starting an agent on the cluster, managing remote agents, running
-    codex/claude/opencode remotely, listing running agents, sending a task to a
-    remote agent, checking agent status, stopping a remote agent, streaming agent
-    logs, or attaching to a running session.
+    Manage remote Kocao workspace sessions from an AI assistant.
+    Use when: listing remote sessions, creating a new session, checking session
+    status, viewing logs, stopping a session, or sending a prompt through the
+    experimental exec endpoint when the control-plane supports it.
 ---
 
-Manage remote Kocao coding-agent sandbox sessions from an AI assistant context.
+Manage remote Kocao workspace sessions from an AI assistant context.
 
-The `kocao` CLI communicates with the Kocao control-plane API to create, inspect,
-and control workspace sessions that run coding agents in ephemeral Kubernetes pods.
+The `kocao` CLI communicates with the Kocao control-plane API to create,
+inspect, and control workspace sessions that run inside ephemeral Kubernetes
+pods. This skill wraps the common session-management actions in small shell
+scripts with consistent output and error handling.
 
 ## Prerequisites
 
-- `kocao` binary in PATH (see `reference/agents.md` for install)
-- `KOCAO_API_URL` and `KOCAO_TOKEN` environment variables set (or a config file at `~/.config/kocao/settings.json`)
+- `kocao` binary in `PATH` for list/status/logs workflows
+- `curl` and `jq` for the API-backed helper scripts
+- `KOCAO_API_URL` and `KOCAO_TOKEN` environment variables set, or a config file at `~/.config/kocao/settings.json`
 - Cluster deployed and agent secrets seeded (`seed-agent-secrets`)
 
 ## Quick Reference
 
-| Action | Script | CLI equivalent |
+| Action | Script | Backing capability |
 |---|---|---|
 | List sessions | `scripts/agent-list.sh` | `kocao sessions ls --json` |
-| Start/create session | `scripts/agent-start.sh` | (via control-plane API — see workflow) |
+| Create session | `scripts/agent-start.sh` | `POST /api/v1/workspace-sessions` |
 | Get session details | `scripts/agent-status.sh` | `kocao sessions status <id> --json` |
-| Stream logs | `scripts/agent-logs.sh` | `kocao sessions logs <id> --json` |
-| Execute/send task | `scripts/agent-exec.sh` | `kocao sessions attach <id> --driver` |
-| Stop a session | `scripts/agent-stop.sh` | (via control-plane API — see workflow) |
+| Fetch logs | `scripts/agent-logs.sh` | `kocao sessions logs <id> ...` |
+| Send a prompt | `scripts/agent-exec.sh` | Experimental `POST /api/v1/workspace-sessions/<id>/exec` |
+| Stop a session | `scripts/agent-stop.sh` | `DELETE /api/v1/workspace-sessions/<id>` |
+
+## Script Conventions
+
+All scripts now follow the same shape:
+
+- `--help` prints a concise usage block
+- usage problems exit with code `2`
+- API/runtime failures exit with code `1`
+- JSON is the default output unless `--no-json` says otherwise
+- API scripts reuse `scripts/common.sh` for dependency checks, URL encoding, and HTTP error formatting
 
 ## Workflows
 
 ### 1. List running agents
 
-List all workspace sessions to see what agents are active.
+List all workspace sessions to see what is active.
 
 ```bash
 scripts/agent-list.sh
 ```
 
-Parse the JSON output to show session IDs, names, phases, and creation times.
-Filter by phase `Running` to find active agents.
+Filter the JSON output by `.workspaceSessions[] | select(.phase == "Running")`
+to find active sessions.
 
 ### 2. Check agent status
 
-Get detailed status for a specific workspace session, including its current
-harness run, pod name, and phase.
+Get the current session phase plus the latest harness-run details.
 
 ```bash
 scripts/agent-status.sh <session-id>
 ```
 
-The response includes:
-- Session phase (Pending, Running, Succeeded, Failed)
-- Active harness run ID and phase
-- Pod name (for logs/debugging)
+The JSON response includes:
+- session ID, display name, phase, and repo URL
+- current harness run ID and phase (when present)
+- pod name for debugging/log lookup
 
 ### 3. Stream agent logs
 
-Fetch recent log output from an agent's pod.
+Fetch recent log output from the active harness pod.
 
 ```bash
-# Last 200 lines (default)
-scripts/agent-logs.sh <session-id>
+# JSON one-shot fetch
+scripts/agent-logs.sh <session-id> --tail 200
 
-# Last 50 lines
-scripts/agent-logs.sh <session-id> --tail 50
+# Plain text
+scripts/agent-logs.sh <session-id> --tail 50 --no-json
 
-# Follow mode (continuous polling)
-scripts/agent-logs.sh <session-id> --follow
+# Follow mode
+scripts/agent-logs.sh <session-id> --follow --no-json
 ```
 
-Note: `--follow` and `--json` cannot be combined. Use `--json` for structured
-one-shot fetches; omit it when following.
+`--follow` and `--json` are mutually exclusive.
 
-### 4. Send a task to a remote agent (exec/attach)
+### 4. Create a remote session
 
-Attach to a running session in driver mode to send input.
+Create a new workspace session for a repository.
 
 ```bash
-scripts/agent-exec.sh <session-id> --prompt "Review PR #42 and suggest improvements"
+scripts/agent-start.sh --repo https://github.com/org/repo --agent codex
 ```
 
-This attaches in driver mode, sends the prompt text, then detaches.
-For interactive sessions, use `kocao sessions attach <id> --driver` directly.
+Important details:
+- `--repo` is required
+- `--agent` currently acts as a **display-name label only** (`opencode`, `codex`, `claude`, `pi`)
+- the control-plane API creates a generic session; it does **not** switch images or runtime behavior based on `--agent`
+- by default the script waits for `Running` and then prints the final status JSON
+- `--quiet` prints just the session ID for shell pipelines
 
-**Important:** `attach` requires an interactive TTY for full bidirectional I/O.
-The `agent-exec.sh` script provides a fire-and-forget prompt delivery mode
-suitable for AI assistant use.
+### 5. Send a task to a remote session
 
-### 5. Start a remote agent
-
-Start a new workspace session. This is typically done through the control-plane
-API or UI. The script wraps the session creation flow.
+Send a prompt through the control-plane exec endpoint when that endpoint exists.
 
 ```bash
-scripts/agent-start.sh --repo https://github.com/org/repo --agent opencode
+scripts/agent-exec.sh <session-id> --prompt "Review PR #42 and summarize the risks"
 ```
 
-Supported `--agent` values: `opencode`, `codex`, `claude`, `pi`
+If the API returns HTTP 404, the control-plane does not expose the exec
+endpoint yet. In that case, use an interactive terminal instead:
 
-The script will:
-1. Call the control-plane API to create a workspace session
-2. Wait for the session to reach `Running` phase
-3. Output the session ID in JSON format
+```bash
+kocao sessions attach <session-id> --driver
+```
 
-### 6. Stop a remote agent
+### 6. Stop a remote session
 
 Stop/terminate a workspace session.
 
@@ -114,26 +123,18 @@ Stop/terminate a workspace session.
 scripts/agent-stop.sh <session-id>
 ```
 
-This requests graceful termination of the session's harness run.
-
-### 7. Multi-agent workflow
-
-Start multiple agents and distribute tasks:
+### 7. Multi-session workflow
 
 ```bash
-# Start agents
 session1=$(scripts/agent-start.sh --repo https://github.com/org/repo --agent opencode --quiet)
 session2=$(scripts/agent-start.sh --repo https://github.com/org/repo --agent codex --quiet)
 
-# Send tasks
 scripts/agent-exec.sh "$session1" --prompt "Implement the auth module"
 scripts/agent-exec.sh "$session2" --prompt "Write tests for the API endpoints"
 
-# Monitor
 scripts/agent-status.sh "$session1"
 scripts/agent-status.sh "$session2"
 
-# Collect logs
 scripts/agent-logs.sh "$session1" --tail 50
 scripts/agent-logs.sh "$session2" --tail 50
 ```
@@ -144,68 +145,38 @@ For managed multi-agent orchestration driven by GitHub Projects, use the
 `kocao symphony` commands directly:
 
 ```bash
-kocao symphony ls --json          # List symphony projects
-kocao symphony get <name> --json  # Get project details
-kocao symphony create --file <path> --json  # Create from spec
-kocao symphony pause <name>       # Pause processing
-kocao symphony resume <name>      # Resume processing
-kocao symphony refresh <name>     # Force re-sync
+kocao symphony ls --json
+kocao symphony get <name> --json
+kocao symphony create --file <path> --json
+kocao symphony pause <name>
+kocao symphony resume <name>
+kocao symphony refresh <name>
 ```
 
-## Usage Examples
+## Example Triggers
 
-**User:** "Start a codex agent on the cluster to work on this repo"
-```
-scripts/agent-start.sh --repo https://github.com/withakay/kocao --agent codex
-```
+Use this skill for prompts like:
 
-**User:** "What agents are running?"
-```
-scripts/agent-list.sh
-```
-
-**User:** "Check on agent abc-123"
-```
-scripts/agent-status.sh abc-123
-```
-
-**User:** "Show me the logs for that agent"
-```
-scripts/agent-logs.sh abc-123 --tail 100
-```
-
-**User:** "Ask the remote agent to review this PR"
-```
-scripts/agent-exec.sh abc-123 --prompt "Review PR #42"
-```
-
-**User:** "Stop all agents"
-```
-# List all, then stop each
-for id in $(scripts/agent-list.sh | jq -r '.workspaceSessions[] | select(.phase == "Running") | .id'); do
-  scripts/agent-stop.sh "$id"
-done
-```
-
-**User:** "Stream the agent's output"
-```
-scripts/agent-logs.sh abc-123 --follow
-```
+- “What Kocao sessions are running right now?”
+- “Start a remote session for this repo and wait until it is running.”
+- “Check the status of session `ws-123`.”
+- “Show the last 100 lines from that agent session.”
+- “Stop the finished session.”
+- “Send this prompt to the remote session if exec is supported.”
 
 ## Environment Variables
 
 | Variable | Description | Required |
 |---|---|---|
-| `KOCAO_API_URL` | Control-plane API base URL | Yes (or config file) |
-| `KOCAO_TOKEN` | Bearer token for authentication | Yes (or config file) |
-| `KOCAO_TIMEOUT` | HTTP request timeout (e.g. `30s`) | No (default: 15s) |
-| `KOCAO_VERBOSE` | Enable debug output (`true`/`false`) | No |
+| `KOCAO_API_URL` | Control-plane API base URL | Yes for API-backed scripts unless config is used |
+| `KOCAO_TOKEN` | Bearer token for authentication | Yes for API-backed scripts unless config is used |
+| `KOCAO_TIMEOUT` | HTTP request timeout for the CLI | No |
+| `KOCAO_VERBOSE` | Enable CLI debug output | No |
 
 ## Error Handling
 
-All scripts exit with meaningful codes:
 - `0` — success
-- `1` — API/runtime error (check stderr for details)
-- `2` — usage error (bad arguments, missing binary)
+- `1` — API or runtime error
+- `2` — usage error or missing dependency
 
-Common errors and fixes are documented in `reference/agents.md`.
+See `reference/agents.md` for setup notes and troubleshooting.

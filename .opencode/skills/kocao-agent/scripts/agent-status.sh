@@ -4,65 +4,57 @@
 # Exit codes: 0=success, 1=runtime error, 2=usage error
 set -euo pipefail
 
-# --- Preflight ---
-if ! command -v kocao &>/dev/null; then
-  echo "error: kocao binary not found in PATH" >&2
-  echo "Install: go install github.com/withakay/kocao/cmd/kocao@latest" >&2
-  exit 2
-fi
+SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+# shellcheck source=.opencode/skills/kocao-agent/scripts/common.sh
+source "${SCRIPT_DIR}/common.sh"
 
-# --- Defaults ---
-SESSION_ID=""
-JSON_OUT=true
+usage() {
+  cat <<'EOF'
+Usage: agent-status.sh <session-id> [--no-json]
 
-# --- Parse args ---
-while [[ $# -gt 0 ]]; do
+Get detailed status for a workspace session.
+
+Arguments:
+  session-id    Workspace session ID
+
+Options:
+  --no-json     Output the default kocao text format instead of JSON
+  --help        Show this help
+EOF
+}
+
+require_commands kocao
+
+session_id=""
+json_out=true
+while (($#)); do
   case "$1" in
     --no-json)
-      JSON_OUT=false
+      json_out=false
       shift
       ;;
     --help|-h)
-      echo "Usage: agent-status.sh <session-id> [--no-json]"
-      echo ""
-      echo "Get detailed status of a workspace session."
-      echo ""
-      echo "Arguments:"
-      echo "  session-id    Workspace session ID"
-      echo ""
-      echo "Options:"
-      echo "  --no-json     Output human-readable text instead of JSON"
-      echo "  --help        Show this help"
+      usage
       exit 0
       ;;
     -*)
-      echo "error: unknown flag: $1" >&2
-      exit 2
+      usage_error "unknown flag: $1"
       ;;
     *)
-      if [[ -z "$SESSION_ID" ]]; then
-        SESSION_ID="$1"
-      else
-        echo "error: unexpected argument: $1" >&2
-        exit 2
+      if [[ -n "$session_id" ]]; then
+        usage_error "unexpected argument: $1"
       fi
+      session_id="$1"
       shift
       ;;
   esac
 done
 
-if [[ -z "$SESSION_ID" ]]; then
-  echo "error: session-id is required" >&2
-  echo "Usage: agent-status.sh <session-id>" >&2
-  exit 2
+require_nonempty "$session_id" "session-id"
+
+cmd=(kocao sessions status "$session_id")
+if [[ "$json_out" == true ]]; then
+  cmd+=(--json)
 fi
 
-# --- Build command ---
-CMD=(kocao sessions status "$SESSION_ID")
-
-if [[ "$JSON_OUT" == true ]]; then
-  CMD+=(--json)
-fi
-
-# --- Execute ---
-exec "${CMD[@]}"
+exec "${cmd[@]}"

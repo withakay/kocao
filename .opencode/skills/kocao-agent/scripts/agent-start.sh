@@ -1,175 +1,151 @@
 #!/usr/bin/env bash
 # agent-start.sh — Create a new workspace session via the kocao control-plane API.
-# This script calls the API directly since the CLI does not yet have a
-# "sessions create" subcommand.
+# The API currently creates a generic workspace session; the --agent flag is kept
+# as a naming hint so older examples keep working.
 # Exit codes: 0=success, 1=runtime error, 2=usage error
 set -euo pipefail
 
-# --- Preflight ---
-if ! command -v kocao &>/dev/null; then
-  echo "error: kocao binary not found in PATH" >&2
-  echo "Install: go install github.com/withakay/kocao/cmd/kocao@latest" >&2
-  exit 2
-fi
+SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+# shellcheck source=.opencode/skills/kocao-agent/scripts/common.sh
+source "${SCRIPT_DIR}/common.sh"
 
-if ! command -v curl &>/dev/null; then
-  echo "error: curl is required but not found in PATH" >&2
-  exit 2
-fi
+usage() {
+  cat <<'EOF'
+Usage: agent-start.sh --repo <url> [--agent <name>] [--name <display-name>] [--quiet] [--no-wait] [--wait-timeout SEC]
 
-if ! command -v jq &>/dev/null; then
-  echo "error: jq is required but not found in PATH" >&2
-  exit 2
-fi
+Create a new workspace session.
 
-# --- Defaults ---
-REPO_URL=""
-AGENT="opencode"
-DISPLAY_NAME=""
-QUIET=false
-API_URL="${KOCAO_API_URL:-http://127.0.0.1:8080}"
-TOKEN="${KOCAO_TOKEN:-}"
-WAIT=true
-WAIT_TIMEOUT=120
+Options:
+  --repo URL          Repository URL to clone into the session (required)
+  --agent NAME        Session label for the intended agent workflow: opencode, codex, claude, pi
+  --name NAME         Explicit display name for the session
+  --quiet, -q         Output only the session ID
+  --no-wait           Return immediately after creation
+  --wait-timeout SEC  Max seconds to wait for the session to become Running
+  --help              Show this help
 
-# --- Parse args ---
-while [[ $# -gt 0 ]]; do
+Notes:
+  --agent is currently a display-name hint only. The control-plane API creates a
+  generic workspace session and does not switch runtime images based on this flag.
+EOF
+}
+
+require_commands kocao curl jq
+
+repo_url=""
+agent_label="opencode"
+display_name=""
+quiet=false
+wait_for_running=true
+wait_timeout=120
+api_response_file=""
+trap '[[ -n "$api_response_file" ]] && rm -f "$api_response_file"' EXIT
+
+while (($#)); do
   case "$1" in
     --repo)
-      REPO_URL="$2"
+      require_flag_value "$1" "$#"
+      repo_url="$2"
       shift 2
       ;;
     --agent)
-      AGENT="$2"
+      require_flag_value "$1" "$#"
+      agent_label="$2"
       shift 2
       ;;
     --name)
-      DISPLAY_NAME="$2"
+      require_flag_value "$1" "$#"
+      display_name="$2"
       shift 2
       ;;
     --quiet|-q)
-      QUIET=true
+      quiet=true
       shift
       ;;
     --no-wait)
-      WAIT=false
+      wait_for_running=false
       shift
       ;;
     --wait-timeout)
-      WAIT_TIMEOUT="$2"
+      require_flag_value "$1" "$#"
+      wait_timeout="$2"
+      require_positive_integer "$wait_timeout" "--wait-timeout"
       shift 2
       ;;
     --help|-h)
-      echo "Usage: agent-start.sh --repo <url> [--agent <name>] [--name <display-name>] [--quiet] [--no-wait]"
-      echo ""
-      echo "Create a new workspace session."
-      echo ""
-      echo "Options:"
-      echo "  --repo URL          Repository URL (required)"
-      echo "  --agent NAME        Agent type: opencode, codex, claude, pi (default: opencode)"
-      echo "  --name NAME         Display name for the session"
-      echo "  --quiet             Output only the session ID"
-      echo "  --no-wait           Don't wait for Running phase"
-      echo "  --wait-timeout SEC  Max seconds to wait for Running (default: 120)"
-      echo "  --help              Show this help"
+      usage
       exit 0
       ;;
+    -*)
+      usage_error "unknown flag: $1"
+      ;;
     *)
-      echo "error: unknown flag: $1" >&2
-      echo "Run with --help for usage" >&2
-      exit 2
+      usage_error "unexpected argument: $1"
       ;;
   esac
 done
 
-if [[ -z "$REPO_URL" ]]; then
-  echo "error: --repo is required" >&2
-  exit 2
-fi
-
-if [[ -z "$TOKEN" ]]; then
-  echo "error: KOCAO_TOKEN is not set" >&2
-  exit 2
-fi
-
-# Validate agent type
-case "$AGENT" in
+require_nonempty "$repo_url" "--repo"
+case "$agent_label" in
   opencode|codex|claude|pi) ;;
   *)
-    echo "error: unsupported agent type: $AGENT (expected: opencode, codex, claude, pi)" >&2
-    exit 2
+    usage_error "unsupported --agent value: ${agent_label} (expected: opencode, codex, claude, pi)"
     ;;
 esac
 
-# --- Build request ---
-if [[ -z "$DISPLAY_NAME" ]]; then
-  DISPLAY_NAME="${AGENT}-$(date +%s)"
+if [[ -z "$display_name" ]]; then
+  display_name="${agent_label}-$(date +%s)"
 fi
 
-PAYLOAD=$(jq -n \
-  --arg displayName "$DISPLAY_NAME" \
-  --arg repoURL "$REPO_URL" \
-  --arg agent "$AGENT" \
-  '{displayName: $displayName, repoURL: $repoURL, agent: $agent}')
-
-# --- Create session ---
-API_URL="${API_URL%/}"
-RESPONSE=$(curl -s -w "\n%{http_code}" \
-  -X POST \
-  -H "Authorization: Bearer ${TOKEN}" \
-  -H "Content-Type: application/json" \
-  -H "Accept: application/json" \
-  -d "$PAYLOAD" \
-  "${API_URL}/api/v1/workspace-sessions" \
-  2>&1) || {
-  echo "error: failed to call control-plane API" >&2
-  exit 1
-}
-
-HTTP_CODE=$(echo "$RESPONSE" | tail -1)
-BODY=$(echo "$RESPONSE" | sed '$d')
-
-if [[ "$HTTP_CODE" -lt 200 || "$HTTP_CODE" -ge 300 ]]; then
-  echo "error: API returned HTTP ${HTTP_CODE}" >&2
-  echo "$BODY" >&2
+payload="$(jq -n --arg displayName "$display_name" --arg repoURL "$repo_url" '{displayName: $displayName, repoURL: $repoURL}')"
+api_request POST '/api/v1/workspace-sessions' "$payload"
+api_response_file="$API_RESPONSE_FILE"
+if ! api_request_ok; then
+  print_api_error "$API_RESPONSE_CODE" "$API_RESPONSE_FILE"
   exit 1
 fi
 
-SESSION_ID=$(echo "$BODY" | jq -r '.id // empty' 2>/dev/null)
-if [[ -z "$SESSION_ID" ]]; then
-  echo "error: could not extract session ID from response" >&2
-  echo "$BODY" >&2
+session_id="$(jq -r '.id // empty' "$API_RESPONSE_FILE" 2>/dev/null)"
+if [[ -z "$session_id" ]]; then
+  echo 'error: create response did not include a session id' >&2
+  print_json_or_raw "$API_RESPONSE_FILE" >&2 || true
   exit 1
 fi
 
-# --- Wait for Running (optional) ---
-if [[ "$WAIT" == true ]]; then
-  ELAPSED=0
-  while [[ $ELAPSED -lt $WAIT_TIMEOUT ]]; do
-    STATUS_JSON=$(kocao sessions status "$SESSION_ID" --json 2>/dev/null) || true
-    PHASE=$(echo "$STATUS_JSON" | jq -r '.session.phase // empty' 2>/dev/null)
-    case "$PHASE" in
+final_output="$API_RESPONSE_FILE"
+if [[ "$wait_for_running" == true ]]; then
+  elapsed=0
+  current_phase=""
+  while (( elapsed < wait_timeout )); do
+    status_json="$(kocao sessions status "$session_id" --json 2>/dev/null || true)"
+    current_phase="$(jq -r '.session.phase // empty' <<<"$status_json" 2>/dev/null || true)"
+    case "$current_phase" in
       Running)
+        status_file="$(mktemp)"
+        printf '%s' "$status_json" > "$status_file"
+        final_output="$status_file"
+        api_response_file="$status_file"
         break
         ;;
       Failed)
-        echo "error: session entered Failed phase" >&2
-        echo "$STATUS_JSON" | jq . >&2 2>/dev/null || echo "$STATUS_JSON" >&2
+        echo "error: session ${session_id} entered Failed phase" >&2
+        if [[ -n "$status_json" ]]; then
+          jq . <<<"$status_json" >&2 2>/dev/null || echo "$status_json" >&2
+        fi
         exit 1
         ;;
     esac
     sleep 3
-    ELAPSED=$((ELAPSED + 3))
+    elapsed=$((elapsed + 3))
   done
 
-  if [[ $ELAPSED -ge $WAIT_TIMEOUT ]]; then
-    echo "warning: timed out waiting for Running phase (current: ${PHASE:-unknown})" >&2
+  if (( elapsed >= wait_timeout )) && [[ "$current_phase" != "Running" ]]; then
+    echo "warning: timed out waiting for session ${session_id} to reach Running (current: ${current_phase:-unknown})" >&2
   fi
 fi
 
-# --- Output ---
-if [[ "$QUIET" == true ]]; then
-  echo "$SESSION_ID"
+if [[ "$quiet" == true ]]; then
+  echo "$session_id"
 else
-  echo "$BODY" | jq . 2>/dev/null || echo "$BODY"
+  print_json_or_raw "$final_output"
 fi
