@@ -37,6 +37,7 @@ tail_lines=""
 container_name=""
 follow=false
 json_out=true
+explicit_json=false
 while (($#)); do
   case "$1" in
     --tail)
@@ -52,10 +53,14 @@ while (($#)); do
       ;;
     --follow|-f)
       follow=true
+      if [[ "$explicit_json" == false ]]; then
+        json_out=false
+      fi
       shift
       ;;
     --json)
       json_out=true
+      explicit_json=true
       shift
       ;;
     --no-json)
@@ -80,7 +85,7 @@ while (($#)); do
 done
 
 require_nonempty "$session_id" "session-id"
-if [[ "$follow" == true && "$json_out" == true ]]; then
+if [[ "$follow" == true && "$explicit_json" == true ]]; then
   usage_error "--follow cannot be combined with --json"
 fi
 

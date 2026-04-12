@@ -137,7 +137,7 @@ api_request() {
     } >>"$config_file"
   fi
 
-  status_code="$(curl -sS -o "$body_file" -w '%{http_code}' --config "$config_file")" || {
+  status_code="$(curl -sS -o "$body_file" -w '%{http_code}' --connect-timeout "${KOCAO_CURL_CONNECT_TIMEOUT:-10}" --max-time "${KOCAO_CURL_MAX_TIMEOUT:-30}" --config "$config_file")" || {
     rm -f "$body_file"
     fail "failed to reach $(api_base_url). Check KOCAO_API_URL and your network connection."
   }

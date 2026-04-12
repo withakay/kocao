@@ -30,7 +30,7 @@ Notes:
 EOF
 }
 
-require_commands kocao curl jq
+require_commands curl jq
 
 repo_url=""
 agent_label="opencode"
@@ -84,6 +84,10 @@ while (($#)); do
       ;;
   esac
 done
+
+if [[ "$wait_for_running" == true ]]; then
+  require_command kocao
+fi
 
 require_nonempty "$repo_url" "--repo"
 case "$agent_label" in
