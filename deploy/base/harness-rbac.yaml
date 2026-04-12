@@ -1,0 +1,26 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: harness-runner
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: harness-sidecar
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: ["kocao-agent-oauth"]
+    verbs: ["get", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: harness-sidecar
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: harness-sidecar
+subjects:
+  - kind: ServiceAccount
+    name: harness-runner

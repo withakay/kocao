@@ -1,0 +1,9 @@
+web/node_modules
+web/dist
+.git
+.ito
+.opencode
+.claude
+.codex
+*.md
+!docs/*.md

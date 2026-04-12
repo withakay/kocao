@@ -16,8 +16,11 @@ rules:
       - ""
     resources:
       - pods/exec
+      - pods/proxy
     verbs:
       - create
+      - get
+      - delete
   - apiGroups:
       - ""
     resources:

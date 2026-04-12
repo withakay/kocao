@@ -17,17 +17,15 @@ generatorOptions:
 
 images:
   - name: kocao/control-plane-api
-    newName: kocao/control-plane-api
-    newTag: dev
+    newName: ghcr.io/withakay/kocao/control-plane-api
+    newTag: dev-sandbox
   - name: kocao/control-plane-operator
-    newName: kocao/control-plane-operator
-    newTag: dev
-  - name: kocao/kocao-sidecar
-    newName: kocao/kocao-sidecar
-    newTag: dev
+    newName: ghcr.io/withakay/kocao/control-plane-operator
+    newTag: dev-sandbox
+  - name: kocao/control-plane-web
+    newName: ghcr.io/withakay/kocao/control-plane-web
+    newTag: dev-sandbox
 
 patches:
   - path: patch-use-configmap.yaml
-
-# Optional Tailscale sidecar plan overlay (disabled by default):
-# kustomize build deploy/overlays/dev-kind-tailscale
+  - path: patch-image-pull-secret.yaml

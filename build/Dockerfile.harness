@@ -99,11 +99,21 @@ ARG CODEX_VERSION=0.106.0
 RUN npm install -g "@openai/codex@${CODEX_VERSION}" \
   && codex --version
 
-# ── Prepare OAuth token mount directories ──
+# Pi — installed via npm.
+ARG PI_VERSION=0.66.1
+RUN npm install -g "@mariozechner/pi-coding-agent@${PI_VERSION}" \
+  && pi --version
+
+# Sandbox Agent CLI — installed via npm wrapper with pinned version.
+ARG SANDBOX_AGENT_VERSION=0.4.2
+RUN npm install -g "@sandbox-agent/cli@${SANDBOX_AGENT_VERSION}" \
+  && sandbox-agent --version
+
+# ── Prepare agent state directories ──
 # These directories must exist with correct ownership so that Kubernetes
 # Secret volume mounts land correctly (projected files are read-only).
-RUN mkdir -p /home/kocao/.local/share/opencode /home/kocao/.codex \
-  && chown -R 10001:10001 /home/kocao/.local/share/opencode /home/kocao/.codex
+RUN mkdir -p /home/kocao/.local/share/opencode /home/kocao/.codex /home/kocao/.pi \
+  && chown -R 10001:10001 /home/kocao/.local/share/opencode /home/kocao/.codex /home/kocao/.pi
 
 # ── Create symlink for fd (Ubuntu packages it as fdfind) ──
 USER root

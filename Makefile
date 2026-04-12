@@ -9,6 +9,7 @@ K8S_NAMESPACE ?= kocao-system
 API_IMAGE ?= kocao/control-plane-api
 OPERATOR_IMAGE ?= kocao/control-plane-operator
 HARNESS_IMAGE ?= kocao/harness-runtime
+SIDECAR_IMAGE ?= kocao/kocao-sidecar
 WEB_IMAGE ?= kocao/control-plane-web
 IMAGE_TAG ?= dev
 
@@ -26,6 +27,7 @@ help:
 		"  kind-down           Delete local kind cluster" \
 		"  images              Build local Docker images" \
 		"  kind-load-images    Load images into kind" \
+		"  seed-agent-secrets  Copy local OAuth auth into k8s secret" \
 		"  deploy              Apply kustomize overlay" \
 		"  deploy-restart      Apply overlay + restart control-plane pods" \
 		"  deploy-wait         Wait for control-plane rollout" \
@@ -92,6 +94,7 @@ images:
 	docker build -f build/Dockerfile.operator -t "$(OPERATOR_IMAGE):$(IMAGE_TAG)" .
 	docker build -f build/Dockerfile.web -t "$(WEB_IMAGE):$(IMAGE_TAG)" .
 	docker build -f build/Dockerfile.harness -t "$(HARNESS_IMAGE):$(IMAGE_TAG)" .
+	docker build -f build/Dockerfile.sidecar -t "$(SIDECAR_IMAGE):$(IMAGE_TAG)" .
 
 .PHONY: kind-load-images
 kind-load-images: tools
@@ -99,11 +102,16 @@ kind-load-images: tools
 	KIND_CLUSTER_NAME="$(KIND_CLUSTER_NAME)" KIND_BIN="$(KIND)" bash ./hack/kind/load-image.sh "$(OPERATOR_IMAGE):$(IMAGE_TAG)"
 	KIND_CLUSTER_NAME="$(KIND_CLUSTER_NAME)" KIND_BIN="$(KIND)" bash ./hack/kind/load-image.sh "$(WEB_IMAGE):$(IMAGE_TAG)"
 	KIND_CLUSTER_NAME="$(KIND_CLUSTER_NAME)" KIND_BIN="$(KIND)" bash ./hack/kind/load-image.sh "$(HARNESS_IMAGE):$(IMAGE_TAG)"
+	KIND_CLUSTER_NAME="$(KIND_CLUSTER_NAME)" KIND_BIN="$(KIND)" bash ./hack/kind/load-image.sh "$(SIDECAR_IMAGE):$(IMAGE_TAG)"
 
 .PHONY: harness-smoke
 harness-smoke:
 	docker build -f build/Dockerfile.harness -t "$(HARNESS_IMAGE):$(IMAGE_TAG)" .
 	docker run --rm "$(HARNESS_IMAGE):$(IMAGE_TAG)" /usr/local/bin/kocao-harness-smoke
+
+.PHONY: seed-agent-secrets
+seed-agent-secrets:
+	bash ./hack/seed-agent-secrets.sh
 
 .PHONY: deploy
 deploy:

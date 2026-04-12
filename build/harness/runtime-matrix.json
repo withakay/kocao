@@ -49,8 +49,10 @@
     "mise": "mise --version",
     "nvim": "nvim --version",
     "opencode": "opencode --version",
+    "pi": "pi --version",
     "pkg-config": "pkg-config --version",
     "rg": "rg --version",
+    "sandbox-agent": "sandbox-agent --version",
     "tmux": "tmux -V",
     "yq": "yq --version"
   }

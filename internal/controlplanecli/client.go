@@ -22,18 +22,26 @@ type WorkspaceSession struct {
 	CreatedAt   string `json:"createdAt,omitempty"`
 }
 
+type AgentSessionInfo struct {
+	Runtime   string `json:"runtime,omitempty"`
+	Agent     string `json:"agent,omitempty"`
+	SessionID string `json:"sessionId,omitempty"`
+	Phase     string `json:"phase,omitempty"`
+}
+
 type HarnessRun struct {
-	ID                 string `json:"id"`
-	DisplayName        string `json:"displayName,omitempty"`
-	WorkspaceSessionID string `json:"workspaceSessionID,omitempty"`
-	RepoURL            string `json:"repoURL"`
-	RepoRevision       string `json:"repoRevision,omitempty"`
-	Image              string `json:"image"`
-	Phase              string `json:"phase,omitempty"`
-	PodName            string `json:"podName,omitempty"`
-	GitHubBranch       string `json:"gitHubBranch,omitempty"`
-	PullRequestURL     string `json:"pullRequestURL,omitempty"`
-	PullRequestStatus  string `json:"pullRequestStatus,omitempty"`
+	ID                 string            `json:"id"`
+	DisplayName        string            `json:"displayName,omitempty"`
+	WorkspaceSessionID string            `json:"workspaceSessionID,omitempty"`
+	RepoURL            string            `json:"repoURL"`
+	RepoRevision       string            `json:"repoRevision,omitempty"`
+	Image              string            `json:"image"`
+	Phase              string            `json:"phase,omitempty"`
+	PodName            string            `json:"podName,omitempty"`
+	AgentSession       *AgentSessionInfo `json:"agentSession,omitempty"`
+	GitHubBranch       string            `json:"gitHubBranch,omitempty"`
+	PullRequestURL     string            `json:"pullRequestURL,omitempty"`
+	PullRequestStatus  string            `json:"pullRequestStatus,omitempty"`
 }
 
 type PodLogs struct {

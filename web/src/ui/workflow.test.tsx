@@ -30,6 +30,12 @@ type HarnessRun = {
   image: string
   phase?: string
   podName?: string
+  agentSession?: {
+    runtime?: string
+    agent?: string
+    sessionId?: string
+    phase?: string
+  }
   gitHubBranch?: string
   pullRequestURL?: string
   pullRequestStatus?: string
@@ -268,6 +274,76 @@ describe('workflow-ui-github', () => {
     expect(prLink).toHaveAttribute('href', 'https://github.com/withakay/kocao/pull/123')
     within(card as HTMLElement).getByText('feature/mvp-ui')
     within(card as HTMLElement).getByText('merged')
+
+    unmount()
+  })
+
+  it('starts and interacts with a sandbox agent session from the run detail page', async () => {
+    sessionStorage.setItem('kocao.apiToken', 't-full')
+    window.location.hash = '#/harness-runs/run-agent'
+
+    let promptBody: any = null
+    let createCount = 0
+
+    server.use(
+      http.get('/api/v1/harness-runs/run-agent', () =>
+        HttpResponse.json({
+          id: 'run-agent',
+          workspaceSessionID: 'sess-1',
+          repoURL: 'https://example.com/repo',
+          image: 'kocao/harness-runtime:dev',
+          phase: 'Running',
+          podName: 'pod-agent',
+          agentSession: { runtime: 'sandbox-agent', agent: 'codex', phase: 'Provisioning' }
+        })
+      ),
+      http.get('/api/v1/audit', () => HttpResponse.json({ events: [] })),
+      http.get('/api/v1/harness-runs/run-agent/agent-session', () =>
+        HttpResponse.json({ harnessRunID: 'run-agent', runtime: 'sandbox-agent', agent: 'codex', sessionId: 'sas-123', phase: 'Ready', lastSequence: 2 })
+      ),
+      http.post('/api/v1/harness-runs/run-agent/agent-session', () => {
+        createCount += 1
+        return HttpResponse.json({ harnessRunID: 'run-agent', runtime: 'sandbox-agent', agent: 'codex', sessionId: 'sas-123', phase: 'Ready', lastSequence: 0 }, { status: 201 })
+      }),
+      http.post('/api/v1/harness-runs/run-agent/agent-session/prompt', async ({ request }) => {
+        promptBody = await request.json()
+        return HttpResponse.json({
+          session: { harnessRunID: 'run-agent', runtime: 'sandbox-agent', agent: 'codex', sessionId: 'sas-123', phase: 'Active', lastSequence: 2 },
+          result: { stopReason: 'completed' }
+        })
+      }),
+      http.post('/api/v1/harness-runs/run-agent/agent-session/stop', () =>
+        HttpResponse.json({ harnessRunID: 'run-agent', runtime: 'sandbox-agent', agent: 'codex', sessionId: 'sas-123', phase: 'Completed', lastSequence: 2 })
+      ),
+      http.get('/api/v1/harness-runs/run-agent/agent-session/events', () =>
+        HttpResponse.json({
+          events: [
+            { sequence: 1, at: '2026-04-10T07:10:00Z', envelope: { method: 'session/update', params: { sessionUpdate: 'user_message_chunk', content: { text: 'hello sandbox' } } } },
+            { sequence: 2, at: '2026-04-10T07:10:01Z', envelope: { method: 'session/update', params: { sessionUpdate: 'agent_message_chunk', content: { text: 'ack' } } } },
+          ],
+          nextOffset: 2,
+        })
+      )
+    )
+
+    const { unmount } = render(<App />)
+
+    await screen.findByRole('heading', { name: /Run run-agent/i })
+    await screen.findByRole('heading', { name: /Agent Session/i })
+
+    const startResume = await screen.findByRole('button', { name: 'Start / Resume Agent Session' })
+    await userEvent.click(startResume)
+    expect(createCount).toBeGreaterThan(0)
+
+    const promptInput = await screen.findByPlaceholderText('Ask the agent to inspect or modify the repository…')
+    await userEvent.type(promptInput, 'hello sandbox')
+    const sendPrompt = await screen.findByRole('button', { name: 'Send Prompt' })
+    await userEvent.click(sendPrompt)
+
+    expect(promptBody).toEqual({ prompt: 'hello sandbox' })
+    await screen.findByText(/Transcript \/ Events/i)
+    await screen.findByText(/user_message_chunk/i)
+    await screen.findByText(/agent_message_chunk/i)
 
     unmount()
   })

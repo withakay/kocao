@@ -372,6 +372,101 @@ type GitAuthSpec struct {
 	UsernameKey string `json:"usernameKey,omitempty"`
 }
 
+type AgentRuntime string
+
+const (
+	AgentRuntimeSandboxAgent AgentRuntime = "sandbox-agent"
+)
+
+type AgentKind string
+
+const (
+	AgentKindOpenCode AgentKind = "opencode"
+	AgentKindClaude   AgentKind = "claude"
+	AgentKindCodex    AgentKind = "codex"
+	AgentKindPi       AgentKind = "pi"
+)
+
+type AgentSessionPhase string
+
+const (
+	AgentSessionPhaseProvisioning AgentSessionPhase = "Provisioning"
+	AgentSessionPhaseReady        AgentSessionPhase = "Ready"
+	AgentSessionPhaseActive       AgentSessionPhase = "Active"
+	AgentSessionPhaseStopping     AgentSessionPhase = "Stopping"
+	AgentSessionPhaseCompleted    AgentSessionPhase = "Completed"
+	AgentSessionPhaseFailed       AgentSessionPhase = "Failed"
+)
+
+type AgentSessionSpec struct {
+	// Runtime identifies the provider-neutral in-sandbox agent control runtime.
+	Runtime AgentRuntime `json:"runtime,omitempty"`
+	// Agent identifies the supported coding agent launched behind the runtime.
+	Agent AgentKind `json:"agent,omitempty"`
+}
+
+func (in *AgentSessionSpec) ApplyDefaults() {
+	if in == nil {
+		return
+	}
+	in.Runtime = NormalizeAgentRuntime(string(in.Runtime))
+	in.Agent = NormalizeAgentKind(string(in.Agent))
+	if in.Agent != "" && in.Runtime == "" {
+		in.Runtime = AgentRuntimeSandboxAgent
+	}
+}
+
+func (in *AgentSessionSpec) Enabled() bool {
+	if in == nil {
+		return false
+	}
+	return in.Runtime != "" || in.Agent != ""
+}
+
+func (in *AgentSessionSpec) Validate() error {
+	if in == nil || !in.Enabled() {
+		return nil
+	}
+	if in.Runtime != AgentRuntimeSandboxAgent {
+		return fmt.Errorf("agentSession.runtime must be %q", AgentRuntimeSandboxAgent)
+	}
+	switch in.Agent {
+	case AgentKindOpenCode, AgentKindClaude, AgentKindCodex, AgentKindPi:
+		return nil
+	case "":
+		return fmt.Errorf("agentSession.agent is required when agentSession is set")
+	default:
+		return fmt.Errorf("agentSession.agent must be one of %q, %q, %q, %q", AgentKindOpenCode, AgentKindClaude, AgentKindCodex, AgentKindPi)
+	}
+}
+
+type AgentSessionStatus struct {
+	Runtime   AgentRuntime      `json:"runtime,omitempty"`
+	Agent     AgentKind         `json:"agent,omitempty"`
+	SessionID string            `json:"sessionId,omitempty"`
+	Phase     AgentSessionPhase `json:"phase,omitempty"`
+}
+
+func NormalizeAgentRuntime(raw string) AgentRuntime {
+	return AgentRuntime(strings.ToLower(strings.TrimSpace(raw)))
+}
+
+func NormalizeAgentKind(raw string) AgentKind {
+	normalized := strings.ToLower(strings.TrimSpace(raw))
+	switch normalized {
+	case string(AgentKindOpenCode):
+		return AgentKindOpenCode
+	case string(AgentKindClaude):
+		return AgentKindClaude
+	case string(AgentKindCodex):
+		return AgentKindCodex
+	case string(AgentKindPi):
+		return AgentKindPi
+	default:
+		return AgentKind(normalized)
+	}
+}
+
 // HarnessRun describes a single run execution that is reconciled into a Pod.
 type HarnessRun struct {
 	metav1.TypeMeta   `json:",inline"`
@@ -410,6 +505,14 @@ type HarnessRunSpec struct {
 	// mounts) are supported. Optional — pods start without credentials if nil.
 	AgentAuth *AgentAuthSpec `json:"agentAuth,omitempty"`
 
+	// AgentSession describes an optional sandbox-backed coding-agent session to
+	// launch and manage within this Harness Run.
+	AgentSession *AgentSessionSpec `json:"agentSession,omitempty"`
+
+	// ImagePullSecrets lists secret names to attach to the run Pod for private
+	// registry authentication.
+	ImagePullSecrets []string `json:"imagePullSecrets,omitempty"`
+
 	// EgressMode controls the outbound network policy for the run Pod.
 	//
 	// Supported values (MVP):
@@ -422,12 +525,13 @@ type HarnessRunSpec struct {
 }
 
 type HarnessRunStatus struct {
-	ObservedGeneration int64              `json:"observedGeneration,omitempty"`
-	Phase              HarnessRunPhase    `json:"phase,omitempty"`
-	PodName            string             `json:"podName,omitempty"`
-	StartTime          *metav1.Time       `json:"startTime,omitempty"`
-	CompletionTime     *metav1.Time       `json:"completionTime,omitempty"`
-	Conditions         []metav1.Condition `json:"conditions,omitempty"`
+	ObservedGeneration int64               `json:"observedGeneration,omitempty"`
+	Phase              HarnessRunPhase     `json:"phase,omitempty"`
+	PodName            string              `json:"podName,omitempty"`
+	StartTime          *metav1.Time        `json:"startTime,omitempty"`
+	CompletionTime     *metav1.Time        `json:"completionTime,omitempty"`
+	Conditions         []metav1.Condition  `json:"conditions,omitempty"`
+	AgentSession       *AgentSessionStatus `json:"agentSession,omitempty"`
 }
 
 type HarnessRunList struct {

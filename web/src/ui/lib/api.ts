@@ -6,6 +6,13 @@ export type WorkspaceSession = {
   createdAt?: string
 }
 
+export type AgentSessionInfo = {
+  runtime?: string
+  agent?: string
+  sessionId?: string
+  phase?: string
+}
+
 export type HarnessRun = {
   id: string
   displayName?: string
@@ -15,9 +22,27 @@ export type HarnessRun = {
   image: string
   phase?: string
   podName?: string
+  agentSession?: AgentSessionInfo
   gitHubBranch?: string
   pullRequestURL?: string
   pullRequestStatus?: string
+}
+
+export type AgentSessionState = {
+  harnessRunID: string
+  podName?: string
+  serverID?: string
+  runtime?: string
+  agent?: string
+  sessionId?: string
+  phase?: string
+  lastSequence?: number
+}
+
+export type AgentSessionEvent = {
+  sequence: number
+  at: string
+  envelope: unknown
 }
 
 export type AuditEvent = {
@@ -314,6 +339,10 @@ export const api = {
       egressMode?: string
       args?: string[]
       ttlSecondsAfterFinished?: number
+      agentSession?: {
+        runtime?: string
+        agent: 'opencode' | 'claude' | 'codex' | 'pi'
+      }
     }
   ) =>
     apiFetch<HarnessRun>(`/api/v1/workspace-sessions/${encodeURIComponent(workspaceSessionID)}/harness-runs`, {
@@ -325,9 +354,29 @@ export const api = {
         image: input.image,
         egressMode: input.egressMode,
         args: input.args,
+        agentSession: input.agentSession,
         ttlSecondsAfterFinished: input.ttlSecondsAfterFinished
       }
     }),
+  getAgentSession: (token: string, harnessRunID: string) =>
+    apiFetch<AgentSessionState>(`/api/v1/harness-runs/${encodeURIComponent(harnessRunID)}/agent-session`, { token }),
+  createAgentSession: (token: string, harnessRunID: string) =>
+    apiFetch<AgentSessionState>(`/api/v1/harness-runs/${encodeURIComponent(harnessRunID)}/agent-session`, { method: 'POST', token }),
+  promptAgentSession: (token: string, harnessRunID: string, prompt: string) =>
+    apiFetch<{ session: AgentSessionState; result: unknown }>(`/api/v1/harness-runs/${encodeURIComponent(harnessRunID)}/agent-session/prompt`, {
+      method: 'POST',
+      token,
+      body: { prompt }
+    }),
+  listAgentSessionEvents: (token: string, harnessRunID: string, opts?: { offset?: number; limit?: number }) => {
+    const qs = new URLSearchParams()
+    if ((opts?.offset ?? 0) > 0) qs.set('offset', String(opts?.offset))
+    if ((opts?.limit ?? 0) > 0) qs.set('limit', String(opts?.limit))
+    const suffix = qs.toString() ? `?${qs.toString()}` : ''
+    return apiFetch<{ events: AgentSessionEvent[]; nextOffset: number }>(`/api/v1/harness-runs/${encodeURIComponent(harnessRunID)}/agent-session/events${suffix}`, { token })
+  },
+  stopAgentSession: (token: string, harnessRunID: string) =>
+    apiFetch<AgentSessionState>(`/api/v1/harness-runs/${encodeURIComponent(harnessRunID)}/agent-session/stop`, { method: 'POST', token }),
   stopHarnessRun: (token: string, harnessRunID: string) =>
     apiFetch<{ stopped: boolean }>(`/api/v1/harness-runs/${encodeURIComponent(harnessRunID)}/stop`, { method: 'POST', token }),
   resumeHarnessRun: (token: string, harnessRunID: string) =>
