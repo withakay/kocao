@@ -18,7 +18,7 @@ Kocao workspace sessions.
 **Assistant:** Creating a workspace session for the kocao repository.
 
 ```bash
-$ .opencode/skills/kocao-agent/scripts/agent-start.sh \
+.opencode/skills/kocao-agent/scripts/agent-start.sh \
     --repo https://github.com/withakay/kocao \
     --agent codex
 ```
@@ -52,7 +52,7 @@ session easy to identify, and the harness pod is ready.
 **Assistant:** Sending the task through the exec endpoint.
 
 ```bash
-$ .opencode/skills/kocao-agent/scripts/agent-exec.sh ws-a1b2c3d4 \
+.opencode/skills/kocao-agent/scripts/agent-exec.sh ws-a1b2c3d4 \
     --prompt "Review the README.md file and suggest improvements for clarity, completeness, and developer experience."
 ```
 
@@ -75,7 +75,7 @@ support `/exec`, I would fall back to `kocao sessions attach ... --driver`.
 **Assistant:** Checking the session status.
 
 ```bash
-$ .opencode/skills/kocao-agent/scripts/agent-status.sh ws-a1b2c3d4
+.opencode/skills/kocao-agent/scripts/agent-status.sh ws-a1b2c3d4
 ```
 
 ```json
@@ -106,7 +106,7 @@ $ .opencode/skills/kocao-agent/scripts/agent-status.sh ws-a1b2c3d4
 **Assistant:** Fetching the last 50 log lines.
 
 ```bash
-$ .opencode/skills/kocao-agent/scripts/agent-logs.sh ws-a1b2c3d4 --tail 50 --no-json
+.opencode/skills/kocao-agent/scripts/agent-logs.sh ws-a1b2c3d4 --tail 50 --no-json
 ```
 
 ```text
@@ -129,7 +129,7 @@ $ .opencode/skills/kocao-agent/scripts/agent-logs.sh ws-a1b2c3d4 --tail 50 --no-
 **Assistant:** Listing active sessions.
 
 ```bash
-$ .opencode/skills/kocao-agent/scripts/agent-list.sh
+.opencode/skills/kocao-agent/scripts/agent-list.sh
 ```
 
 ```json
@@ -160,7 +160,7 @@ $ .opencode/skills/kocao-agent/scripts/agent-list.sh
 **Assistant:** Stopping the workspace session.
 
 ```bash
-$ .opencode/skills/kocao-agent/scripts/agent-stop.sh ws-a1b2c3d4
+.opencode/skills/kocao-agent/scripts/agent-stop.sh ws-a1b2c3d4
 ```
 
 ```json

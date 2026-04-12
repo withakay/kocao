@@ -66,14 +66,33 @@ require_positive_integer() {
   fi
 }
 
-require_token() {
-  if [[ -z "${KOCAO_TOKEN:-}" ]]; then
-    usage_error "KOCAO_TOKEN is not set. Export KOCAO_TOKEN or configure ~/.config/kocao/settings.json."
+_config_value() {
+  local key="$1"
+  local config_file="${HOME}/.config/kocao/settings.json"
+  if [[ -f "$config_file" ]]; then
+    jq -r --arg k "$key" '.[$k] // empty' "$config_file" 2>/dev/null || true
   fi
 }
 
+require_token() {
+  if [[ -n "${KOCAO_TOKEN:-}" ]]; then
+    return
+  fi
+  local cfg_token
+  cfg_token="$(_config_value token)"
+  if [[ -n "$cfg_token" ]]; then
+    export KOCAO_TOKEN="$cfg_token"
+    return
+  fi
+  usage_error "KOCAO_TOKEN is not set. Export KOCAO_TOKEN or configure ~/.config/kocao/settings.json."
+}
+
 api_base_url() {
-  local url="${KOCAO_API_URL:-http://127.0.0.1:8080}"
+  local url="${KOCAO_API_URL:-}"
+  if [[ -z "$url" ]]; then
+    url="$(_config_value api_url)"
+  fi
+  url="${url:-http://127.0.0.1:8080}"
   printf '%s\n' "${url%/}"
 }
 
@@ -119,7 +138,9 @@ api_request() {
   body_file="$(mktemp)"
   config_file="$(mktemp)"
   payload_file=""
-  trap 'rm -f "$config_file" "$payload_file"' RETURN
+  # Use both RETURN (for normal returns) and a cleanup helper for fail/exit paths.
+  _api_request_cleanup() { rm -f "$config_file" "$payload_file"; }
+  trap '_api_request_cleanup' RETURN
 
   {
     printf 'url = "%s"\n' "$url"
@@ -139,6 +160,7 @@ api_request() {
 
   status_code="$(curl -sS -o "$body_file" -w '%{http_code}' --connect-timeout "${KOCAO_CURL_CONNECT_TIMEOUT:-10}" --max-time "${KOCAO_CURL_MAX_TIMEOUT:-30}" --config "$config_file")" || {
     rm -f "$body_file"
+    _api_request_cleanup  # RETURN trap won't fire when fail calls exit
     fail "failed to reach $(api_base_url). Check KOCAO_API_URL and your network connection."
   }
 

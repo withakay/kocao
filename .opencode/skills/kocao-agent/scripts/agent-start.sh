@@ -39,7 +39,12 @@ quiet=false
 wait_for_running=true
 wait_timeout=120
 api_response_file=""
-trap '[[ -n "$api_response_file" ]] && rm -f "$api_response_file"' EXIT
+_start_temp_files=()
+_start_cleanup() {
+  rm -f "${_start_temp_files[@]}" 2>/dev/null || true
+  [[ -n "$api_response_file" ]] && rm -f "$api_response_file"
+}
+trap '_start_cleanup' EXIT
 
 while (($#)); do
   case "$1" in
@@ -128,6 +133,8 @@ if [[ "$wait_for_running" == true ]]; then
         status_file="$(mktemp)"
         printf '%s' "$status_json" > "$status_file"
         final_output="$status_file"
+        # Track original file for cleanup before reassigning
+        _start_temp_files+=("$api_response_file")
         api_response_file="$status_file"
         break
         ;;

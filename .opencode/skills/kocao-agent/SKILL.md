@@ -44,6 +44,8 @@ All scripts now follow the same shape:
 
 ## Workflows
 
+> **Note:** All script paths below are relative to `.opencode/skills/kocao-agent/`.
+
 ### 1. List running agents
 
 List all workspace sessions to see what is active.
