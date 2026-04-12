@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -257,9 +258,12 @@ func TestAgentList_EmptyWorkspaces(t *testing.T) {
 func TestAgentList_WorkspaceFilter(t *testing.T) {
 	t.Setenv(EnvToken, "")
 
+	var mu sync.Mutex
 	var requestedPaths []string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
 		requestedPaths = append(requestedPaths, r.URL.Path)
+		mu.Unlock()
 		switch {
 		case r.URL.Path == "/api/v1/workspace-sessions/ws-42/agent-sessions" && r.Method == http.MethodGet:
 			_ = json.NewEncoder(w).Encode(map[string]any{
@@ -288,7 +292,10 @@ func TestAgentList_WorkspaceFilter(t *testing.T) {
 	}
 
 	// Should NOT have called ListWorkspaceSessions
-	for _, p := range requestedPaths {
+	mu.Lock()
+	paths := append([]string{}, requestedPaths...)
+	mu.Unlock()
+	for _, p := range paths {
 		if p == "/api/v1/workspace-sessions" {
 			t.Error("should not list all workspace sessions when --workspace is provided")
 		}

@@ -43,7 +43,11 @@ type PromptResponse struct {
 
 // ListAgentSessions returns all agent sessions for the given workspace session.
 func (c *Client) ListAgentSessions(ctx context.Context, workspaceID string) ([]AgentSession, error) {
-	route := "/api/v1/workspace-sessions/" + url.PathEscape(strings.TrimSpace(workspaceID)) + "/agent-sessions"
+	wsID := strings.TrimSpace(workspaceID)
+	if wsID == "" {
+		return nil, fmt.Errorf("workspaceID is required")
+	}
+	route := "/api/v1/workspace-sessions/" + url.PathEscape(wsID) + "/agent-sessions"
 	var payload struct {
 		AgentSessions []AgentSession `json:"agentSessions"`
 	}
@@ -55,7 +59,11 @@ func (c *Client) ListAgentSessions(ctx context.Context, workspaceID string) ([]A
 
 // GetAgentSession returns the agent session for the given harness run.
 func (c *Client) GetAgentSession(ctx context.Context, runID string) (*AgentSession, error) {
-	route := "/api/v1/harness-runs/" + url.PathEscape(strings.TrimSpace(runID)) + "/agent-session"
+	id := strings.TrimSpace(runID)
+	if id == "" {
+		return nil, fmt.Errorf("runID is required")
+	}
+	route := "/api/v1/harness-runs/" + url.PathEscape(id) + "/agent-session"
 	var out AgentSession
 	if err := c.doJSON(ctx, http.MethodGet, route, nil, nil, &out); err != nil {
 		return nil, err
@@ -65,7 +73,11 @@ func (c *Client) GetAgentSession(ctx context.Context, runID string) (*AgentSessi
 
 // CreateAgentSession creates a new agent session for the given harness run.
 func (c *Client) CreateAgentSession(ctx context.Context, runID string) (*AgentSession, error) {
-	route := "/api/v1/harness-runs/" + url.PathEscape(strings.TrimSpace(runID)) + "/agent-session"
+	id := strings.TrimSpace(runID)
+	if id == "" {
+		return nil, fmt.Errorf("runID is required")
+	}
+	route := "/api/v1/harness-runs/" + url.PathEscape(id) + "/agent-session"
 	var out AgentSession
 	if err := c.doJSON(ctx, http.MethodPost, route, nil, nil, &out); err != nil {
 		return nil, err
@@ -75,13 +87,21 @@ func (c *Client) CreateAgentSession(ctx context.Context, runID string) (*AgentSe
 
 // StopAgentSession stops the agent session for the given harness run.
 func (c *Client) StopAgentSession(ctx context.Context, runID string) error {
-	route := "/api/v1/harness-runs/" + url.PathEscape(strings.TrimSpace(runID)) + "/agent-session/stop"
+	id := strings.TrimSpace(runID)
+	if id == "" {
+		return fmt.Errorf("runID is required")
+	}
+	route := "/api/v1/harness-runs/" + url.PathEscape(id) + "/agent-session/stop"
 	return c.doJSON(ctx, http.MethodPost, route, nil, nil, nil)
 }
 
 // SendPrompt sends a prompt to the agent session and returns the response events.
 func (c *Client) SendPrompt(ctx context.Context, runID string, prompt string) (*PromptResponse, error) {
-	route := "/api/v1/harness-runs/" + url.PathEscape(strings.TrimSpace(runID)) + "/agent-session/prompt"
+	id := strings.TrimSpace(runID)
+	if id == "" {
+		return nil, fmt.Errorf("runID is required")
+	}
+	route := "/api/v1/harness-runs/" + url.PathEscape(id) + "/agent-session/prompt"
 	req := PromptRequest{Prompt: prompt}
 	var out PromptResponse
 	if err := c.doJSON(ctx, http.MethodPost, route, nil, req, &out); err != nil {
@@ -93,7 +113,11 @@ func (c *Client) SendPrompt(ctx context.Context, runID string, prompt string) (*
 // StreamEvents opens an SSE stream for agent session events and returns the
 // raw response body. The caller is responsible for closing the returned reader.
 func (c *Client) StreamEvents(ctx context.Context, runID string) (io.ReadCloser, error) {
-	route := "/api/v1/harness-runs/" + url.PathEscape(strings.TrimSpace(runID)) + "/agent-session/events/stream"
+	id := strings.TrimSpace(runID)
+	if id == "" {
+		return nil, fmt.Errorf("runID is required")
+	}
+	route := "/api/v1/harness-runs/" + url.PathEscape(id) + "/agent-session/events/stream"
 	requestURL := c.apiURL(route, nil)
 	c.debugf("-> GET %s (stream)", requestURL)
 
@@ -137,7 +161,11 @@ func (c *Client) StreamEvents(ctx context.Context, runID string) (io.ReadCloser,
 
 // GetEvents returns all events for the given agent session.
 func (c *Client) GetEvents(ctx context.Context, runID string) ([]AgentSessionEvent, error) {
-	route := "/api/v1/harness-runs/" + url.PathEscape(strings.TrimSpace(runID)) + "/agent-session/events"
+	id := strings.TrimSpace(runID)
+	if id == "" {
+		return nil, fmt.Errorf("runID is required")
+	}
+	route := "/api/v1/harness-runs/" + url.PathEscape(id) + "/agent-session/events"
 	var payload struct {
 		Events []AgentSessionEvent `json:"events"`
 	}
@@ -158,6 +186,7 @@ type createHarnessRunRequest struct {
 	RepoURL      string `json:"repoURL"`
 	RepoRevision string `json:"repoRevision,omitempty"`
 	Image        string `json:"image"`
+	Agent        string `json:"agent,omitempty"`
 }
 
 // CreateWorkspaceSession creates a new workspace session.
@@ -174,12 +203,17 @@ func (c *Client) CreateWorkspaceSession(ctx context.Context, displayName string,
 }
 
 // CreateHarnessRun creates a new harness run under the given workspace session.
-func (c *Client) CreateHarnessRun(ctx context.Context, workspaceSessionID string, repoURL string, repoRevision string, image string) (*HarnessRun, error) {
-	route := "/api/v1/workspace-sessions/" + url.PathEscape(strings.TrimSpace(workspaceSessionID)) + "/harness-runs"
+func (c *Client) CreateHarnessRun(ctx context.Context, workspaceSessionID string, repoURL string, repoRevision string, agent string, image string) (*HarnessRun, error) {
+	wsID := strings.TrimSpace(workspaceSessionID)
+	if wsID == "" {
+		return nil, fmt.Errorf("workspaceSessionID is required")
+	}
+	route := "/api/v1/workspace-sessions/" + url.PathEscape(wsID) + "/harness-runs"
 	req := createHarnessRunRequest{
 		RepoURL:      repoURL,
 		RepoRevision: repoRevision,
 		Image:        image,
+		Agent:        agent,
 	}
 	var out HarnessRun
 	if err := c.doJSON(ctx, http.MethodPost, route, nil, req, &out); err != nil {
@@ -201,7 +235,7 @@ func (c *Client) StartAgent(ctx context.Context, workspaceID, repoURL, repoRevis
 		wsID = ws.ID
 	}
 
-	run, err := c.CreateHarnessRun(ctx, wsID, repoURL, repoRevision, image)
+	run, err := c.CreateHarnessRun(ctx, wsID, repoURL, repoRevision, agent, image)
 	if err != nil {
 		return "", fmt.Errorf("create harness run: %w", err)
 	}
