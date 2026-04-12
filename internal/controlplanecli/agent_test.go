@@ -89,10 +89,25 @@ func TestAgentCommand_SharedFlags(t *testing.T) {
 	}
 }
 
-func TestAgentCommand_SubcommandStubs(t *testing.T) {
-	// All agent subcommands are now implemented — no stubs remain.
-	// This test is kept as a placeholder; add new stubs here if needed.
-	t.Skip("all agent subcommands are implemented")
+func TestAgentCommand_SubcommandsRequireArgs(t *testing.T) {
+	t.Setenv(EnvToken, "")
+
+	// All agent subcommands are now implemented. Those that require positional
+	// args should exit with code 2 (usage error) when invoked without arguments.
+	subcommands := []string{"start", "stop", "logs", "exec", "status"}
+	for _, sub := range subcommands {
+		t.Run(sub, func(t *testing.T) {
+			var stdout bytes.Buffer
+			var stderr bytes.Buffer
+			code := Main([]string{"--api-url", "http://127.0.0.1:9999", "--token", "test-token", "agent", sub}, &stdout, &stderr)
+			if code != 2 {
+				t.Fatalf("exit code = %d, want 2; stderr=%s stdout=%s", code, stderr.String(), stdout.String())
+			}
+			if !strings.Contains(stderr.String(), "usage:") {
+				t.Errorf("expected usage error for %q, got stderr:\n%s", sub, stderr.String())
+			}
+		})
+	}
 }
 
 func TestAgentCommand_RootUsageIncludesAgent(t *testing.T) {
