@@ -17,6 +17,11 @@ if ! command -v curl &>/dev/null; then
   exit 2
 fi
 
+if ! command -v jq &>/dev/null; then
+  echo "error: jq is required but not found in PATH" >&2
+  exit 2
+fi
+
 # --- Defaults ---
 SESSION_ID=""
 PROMPT=""
@@ -120,5 +125,5 @@ fi
 if [[ -n "$BODY" ]]; then
   echo "$BODY" | jq . 2>/dev/null || echo "$BODY"
 else
-  echo "{\"status\":\"sent\",\"sessionId\":\"${SESSION_ID}\"}"
+  jq -n --arg sid "$SESSION_ID" '{status:"sent",sessionId:$sid}'
 fi

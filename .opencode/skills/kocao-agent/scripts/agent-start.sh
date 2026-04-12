@@ -17,6 +17,11 @@ if ! command -v curl &>/dev/null; then
   exit 2
 fi
 
+if ! command -v jq &>/dev/null; then
+  echo "error: jq is required but not found in PATH" >&2
+  exit 2
+fi
+
 # --- Defaults ---
 REPO_URL=""
 AGENT="opencode"
@@ -101,14 +106,11 @@ if [[ -z "$DISPLAY_NAME" ]]; then
   DISPLAY_NAME="${AGENT}-$(date +%s)"
 fi
 
-PAYLOAD=$(cat <<EOF
-{
-  "displayName": "${DISPLAY_NAME}",
-  "repoURL": "${REPO_URL}",
-  "agent": "${AGENT}"
-}
-EOF
-)
+PAYLOAD=$(jq -n \
+  --arg displayName "$DISPLAY_NAME" \
+  --arg repoURL "$REPO_URL" \
+  --arg agent "$AGENT" \
+  '{displayName: $displayName, repoURL: $repoURL, agent: $agent}')
 
 # --- Create session ---
 API_URL="${API_URL%/}"

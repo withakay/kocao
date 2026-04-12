@@ -15,6 +15,11 @@ if ! command -v curl &>/dev/null; then
   exit 2
 fi
 
+if ! command -v jq &>/dev/null; then
+  echo "error: jq is required but not found in PATH" >&2
+  exit 2
+fi
+
 # --- Defaults ---
 SESSION_ID=""
 API_URL="${KOCAO_API_URL:-http://127.0.0.1:8080}"
@@ -92,9 +97,9 @@ fi
 # --- Output ---
 if [[ "$OUTPUT_JSON" == true ]]; then
   if [[ -n "$BODY" ]]; then
-    echo "$BODY" | jq . 2>/dev/null || echo "{\"status\":\"stopped\",\"sessionId\":\"${SESSION_ID}\"}"
+    echo "$BODY" | jq . 2>/dev/null || jq -n --arg sid "$SESSION_ID" '{status:"stopped",sessionId:$sid}'
   else
-    echo "{\"status\":\"stopped\",\"sessionId\":\"${SESSION_ID}\"}"
+    jq -n --arg sid "$SESSION_ID" '{status:"stopped",sessionId:$sid}'
   fi
 else
   echo "Stopped session: ${SESSION_ID}"
