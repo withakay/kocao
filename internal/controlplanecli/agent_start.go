@@ -29,6 +29,8 @@ func runAgentStartCommand(args []string, cfg Config, stdout io.Writer, stderr io
 	workspace := fs.String("workspace", "", "reuse existing workspace session ID")
 	revision := fs.String("revision", "main", "repository revision")
 	image := fs.String("image", "kocao/harness-runtime:dev", "harness runtime image")
+	imagePullSecret := fs.String("image-pull-secret", "", "Kubernetes secret name for pulling the harness image")
+	egressMode := fs.String("egress-mode", "", "egress mode for the harness pod: restricted (default), full")
 	timeout := fs.Duration("timeout", 5*time.Minute, "timeout waiting for agent to become ready")
 	output := fs.String("output", "table", "output format: table or json")
 
@@ -60,8 +62,13 @@ func runAgentStartCommand(args []string, cfg Config, stdout io.Writer, stderr io
 	ctx, cancel := context.WithTimeout(sigCtx, *timeout)
 	defer cancel()
 
+	var pullSecrets []string
+	if s := strings.TrimSpace(*imagePullSecret); s != "" {
+		pullSecrets = []string{s}
+	}
+
 	_, _ = fmt.Fprintf(stderr, "Creating workspace session... ")
-	runID, err := client.StartAgent(ctx, *workspace, *repo, *revision, *agent, *image)
+	runID, err := client.StartAgent(ctx, *workspace, *repo, *revision, *agent, *image, pullSecrets, strings.TrimSpace(*egressMode))
 	if err != nil {
 		_, _ = fmt.Fprintln(stderr, "failed")
 		return fmt.Errorf("start agent: %w", err)
@@ -104,20 +111,32 @@ func printLastKnownAgentState(stderr io.Writer, client *Client, runID string) {
 	_, _ = fmt.Fprintf(stderr, "Last known state: phase=%s sessionId=%s\n", lastSession.Phase, lastSession.SessionID)
 }
 
-// pollAgentSession polls GetAgentSession until the session reaches "Ready"
-// phase or the context is cancelled. It uses the provided interval between
-// poll attempts. Non-retryable errors (e.g. auth, not-found) are returned
-// immediately rather than being masked as timeouts.
+// pollAgentSession polls until the agent session reaches "Ready" phase or the
+// context is cancelled. On each iteration it first tries to initialize the
+// session (CreateAgentSession) which is idempotent — the API will return the
+// existing session if one is already active. If initialization fails because
+// the harness pod is not ready (502) or the session spec hasn't propagated
+// yet (404), it retries after the given interval.
 func pollAgentSession(ctx context.Context, client *Client, runID string, interval time.Duration) (*AgentSession, error) {
 	for {
-		session, err := client.GetAgentSession(ctx, runID)
+		// Try to ensure the session is initialized. This is safe to call
+		// repeatedly — the API returns the existing session if already created.
+		session, err := client.CreateAgentSession(ctx, runID)
 		if err == nil && strings.EqualFold(strings.TrimSpace(session.Phase), "ready") {
 			return session, nil
+		}
+		// If create succeeded but phase isn't ready yet, try GET for fresh status.
+		if err == nil {
+			session, err = client.GetAgentSession(ctx, runID)
+			if err == nil && strings.EqualFold(strings.TrimSpace(session.Phase), "ready") {
+				return session, nil
+			}
 		}
 		if ctx.Err() != nil {
 			return nil, fmt.Errorf("timed out waiting for agent session to become ready")
 		}
-		if err != nil && isNonRetryableError(err) {
+		// 502 (pod not ready) and 404 (session not configured yet) are retryable.
+		if err != nil && isNonRetryableError(err) && !isRetryableAgentSessionError(err) {
 			return nil, fmt.Errorf("agent session lookup failed: %w", err)
 		}
 
@@ -129,6 +148,16 @@ func pollAgentSession(ctx context.Context, client *Client, runID string, interva
 		case <-timer.C:
 		}
 	}
+}
+
+// isRetryableAgentSessionError returns true for errors that indicate the
+// agent session is not ready yet but may become ready (pod starting, etc).
+func isRetryableAgentSessionError(err error) bool {
+	var apiErr *APIError
+	if errors.As(err, &apiErr) {
+		return apiErr.StatusCode == http.StatusBadGateway || apiErr.StatusCode == http.StatusNotFound
+	}
+	return false
 }
 
 // isNonRetryableError returns true for HTTP errors that should not be retried

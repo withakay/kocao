@@ -183,10 +183,19 @@ type createWorkspaceSessionRequest struct {
 
 // createHarnessRunRequest is the request body for creating a harness run.
 type createHarnessRunRequest struct {
-	RepoURL      string `json:"repoURL"`
-	RepoRevision string `json:"repoRevision,omitempty"`
-	Image        string `json:"image"`
-	Agent        string `json:"agent,omitempty"`
+	RepoURL          string                      `json:"repoURL"`
+	RepoRevision     string                      `json:"repoRevision,omitempty"`
+	Image            string                      `json:"image"`
+	EgressMode       string                      `json:"egressMode,omitempty"`
+	AgentSession     *createAgentSessionSpecJSON `json:"agentSession,omitempty"`
+	ImagePullSecrets []string                    `json:"imagePullSecrets,omitempty"`
+}
+
+// createAgentSessionSpecJSON mirrors operator/api/v1alpha1.AgentSessionSpec
+// for the CLI client without importing the operator package.
+type createAgentSessionSpecJSON struct {
+	Runtime string `json:"runtime,omitempty"`
+	Agent   string `json:"agent,omitempty"`
 }
 
 // CreateWorkspaceSession creates a new workspace session.
@@ -203,17 +212,24 @@ func (c *Client) CreateWorkspaceSession(ctx context.Context, displayName string,
 }
 
 // CreateHarnessRun creates a new harness run under the given workspace session.
-func (c *Client) CreateHarnessRun(ctx context.Context, workspaceSessionID string, repoURL string, repoRevision string, agent string, image string) (*HarnessRun, error) {
+func (c *Client) CreateHarnessRun(ctx context.Context, workspaceSessionID string, repoURL string, repoRevision string, agent string, image string, imagePullSecrets []string, egressMode string) (*HarnessRun, error) {
 	wsID := strings.TrimSpace(workspaceSessionID)
 	if wsID == "" {
 		return nil, fmt.Errorf("workspaceSessionID is required")
 	}
 	route := "/api/v1/workspace-sessions/" + url.PathEscape(wsID) + "/harness-runs"
 	req := createHarnessRunRequest{
-		RepoURL:      repoURL,
-		RepoRevision: repoRevision,
-		Image:        image,
-		Agent:        agent,
+		RepoURL:          repoURL,
+		RepoRevision:     repoRevision,
+		Image:            image,
+		EgressMode:       egressMode,
+		ImagePullSecrets: imagePullSecrets,
+	}
+	if strings.TrimSpace(agent) != "" {
+		req.AgentSession = &createAgentSessionSpecJSON{
+			Runtime: "sandbox-agent",
+			Agent:   agent,
+		}
 	}
 	var out HarnessRun
 	if err := c.doJSON(ctx, http.MethodPost, route, nil, req, &out); err != nil {
@@ -224,8 +240,12 @@ func (c *Client) CreateHarnessRun(ctx context.Context, workspaceSessionID string
 
 // StartAgent orchestrates the full resource chain for starting an agent:
 // creates a workspace session (if workspaceID is empty), creates a harness run
-// with an agent session, and returns the run ID.
-func (c *Client) StartAgent(ctx context.Context, workspaceID, repoURL, repoRevision, agent, image string) (runID string, err error) {
+// with an agent session spec, and returns the run ID.
+//
+// The agent session is NOT initialized here because the harness pod may not
+// be ready yet (e.g. pulling a large image). Instead, pollAgentSession in
+// agent_start.go handles the initialization attempt during the poll loop.
+func (c *Client) StartAgent(ctx context.Context, workspaceID, repoURL, repoRevision, agent, image string, imagePullSecrets []string, egressMode string) (runID string, err error) {
 	wsID := strings.TrimSpace(workspaceID)
 	if wsID == "" {
 		ws, err := c.CreateWorkspaceSession(ctx, "", repoURL)
@@ -235,13 +255,9 @@ func (c *Client) StartAgent(ctx context.Context, workspaceID, repoURL, repoRevis
 		wsID = ws.ID
 	}
 
-	run, err := c.CreateHarnessRun(ctx, wsID, repoURL, repoRevision, agent, image)
+	run, err := c.CreateHarnessRun(ctx, wsID, repoURL, repoRevision, agent, image, imagePullSecrets, egressMode)
 	if err != nil {
 		return "", fmt.Errorf("create harness run: %w", err)
-	}
-
-	if _, err := c.CreateAgentSession(ctx, run.ID); err != nil {
-		return "", fmt.Errorf("create agent session: %w", err)
 	}
 
 	return run.ID, nil

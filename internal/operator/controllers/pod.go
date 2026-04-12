@@ -263,6 +263,28 @@ func buildHarnessPod(run *operatorv1alpha1.HarnessRun, workspacePVCName string, 
 		container.Ports = append(container.Ports, corev1.ContainerPort{Name: "sandbox-agent", ContainerPort: 2468})
 	}
 
+	// When the workspace is backed by a PVC, some provisioners (e.g. hostpath)
+	// create the underlying directory owned by root and do not honour fsGroup.
+	// Add an init container that ensures the workspace directory is writable by
+	// the harness user (uid/gid 10001).
+	if strings.TrimSpace(workspacePVCName) != "" {
+		rootUID := int64(0)
+		nonRootFalse := false
+		initContainers = append([]corev1.Container{{
+			Name:    "workspace-perms",
+			Image:   imgs.InitContainer,
+			Command: []string{"sh", "-c", fmt.Sprintf("chown %d:%d %s", uid, gid, workspaceMountPath)},
+			VolumeMounts: []corev1.VolumeMount{
+				{Name: workspaceVolumeName, MountPath: workspaceMountPath},
+			},
+			SecurityContext: &corev1.SecurityContext{
+				RunAsNonRoot: &nonRootFalse,
+				RunAsUser:    &rootUID,
+				RunAsGroup:   &rootUID,
+			},
+		}}, initContainers...)
+	}
+
 	containers := []corev1.Container{container}
 	containers = append(containers, sidecarContainers...)
 

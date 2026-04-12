@@ -281,7 +281,6 @@ func TestStartAgent(t *testing.T) {
 	var (
 		createdWorkspaceSession bool
 		createdHarnessRun       bool
-		createdAgentSession     bool
 	)
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -301,7 +300,7 @@ func TestStartAgent(t *testing.T) {
 				"phase":   "Active",
 			})
 
-		// Create harness run
+		// Create harness run — verify agentSession is included
 		case r.URL.Path == "/api/v1/workspace-sessions/ws-new/harness-runs" && r.Method == http.MethodPost:
 			createdHarnessRun = true
 			var req map[string]any
@@ -315,6 +314,16 @@ func TestStartAgent(t *testing.T) {
 			if req["repoRevision"] != "main" {
 				t.Fatalf("run repoRevision = %v", req["repoRevision"])
 			}
+			agentSession, ok := req["agentSession"].(map[string]any)
+			if !ok {
+				t.Fatal("expected agentSession in harness run request")
+			}
+			if agentSession["agent"] != "claude" {
+				t.Fatalf("agentSession.agent = %v, want claude", agentSession["agent"])
+			}
+			if agentSession["runtime"] != "sandbox-agent" {
+				t.Fatalf("agentSession.runtime = %v, want sandbox-agent", agentSession["runtime"])
+			}
 			w.WriteHeader(http.StatusCreated)
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"id":                 "run-new",
@@ -322,19 +331,6 @@ func TestStartAgent(t *testing.T) {
 				"repoURL":            "https://github.com/example/repo",
 				"image":              "ghcr.io/example/harness:latest",
 				"phase":              "Starting",
-			})
-
-		// Create agent session
-		case r.URL.Path == "/api/v1/harness-runs/run-new/agent-session" && r.Method == http.MethodPost:
-			createdAgentSession = true
-			w.WriteHeader(http.StatusCreated)
-			_ = json.NewEncoder(w).Encode(map[string]any{
-				"sessionId":          "as-new",
-				"runId":              "run-new",
-				"runtime":            "opencode",
-				"agent":              "claude",
-				"phase":              "Starting",
-				"workspaceSessionId": "ws-new",
 			})
 
 		default:
@@ -345,7 +341,7 @@ func TestStartAgent(t *testing.T) {
 	defer srv.Close()
 
 	client := newTestClient(t, srv.URL)
-	runID, err := client.StartAgent(context.Background(), "", "https://github.com/example/repo", "main", "claude", "ghcr.io/example/harness:latest")
+	runID, err := client.StartAgent(context.Background(), "", "https://github.com/example/repo", "main", "claude", "ghcr.io/example/harness:latest", nil, "")
 	if err != nil {
 		t.Fatalf("StartAgent: %v", err)
 	}
@@ -357,9 +353,6 @@ func TestStartAgent(t *testing.T) {
 	}
 	if !createdHarnessRun {
 		t.Fatal("expected harness run creation")
-	}
-	if !createdAgentSession {
-		t.Fatal("expected agent session creation")
 	}
 }
 
@@ -380,14 +373,6 @@ func TestStartAgentWithExistingWorkspace(t *testing.T) {
 				"phase":              "Starting",
 			})
 
-		case r.URL.Path == "/api/v1/harness-runs/run-existing/agent-session" && r.Method == http.MethodPost:
-			w.WriteHeader(http.StatusCreated)
-			_ = json.NewEncoder(w).Encode(map[string]any{
-				"sessionId": "as-existing",
-				"runId":     "run-existing",
-				"phase":     "Starting",
-			})
-
 		default:
 			http.NotFound(w, r)
 		}
@@ -395,7 +380,7 @@ func TestStartAgentWithExistingWorkspace(t *testing.T) {
 	defer srv.Close()
 
 	client := newTestClient(t, srv.URL)
-	runID, err := client.StartAgent(context.Background(), "ws-existing", "https://github.com/example/repo", "main", "claude", "ghcr.io/example/harness:latest")
+	runID, err := client.StartAgent(context.Background(), "ws-existing", "https://github.com/example/repo", "main", "claude", "ghcr.io/example/harness:latest", nil, "")
 	if err != nil {
 		t.Fatalf("StartAgent: %v", err)
 	}
