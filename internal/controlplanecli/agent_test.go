@@ -90,22 +90,9 @@ func TestAgentCommand_SharedFlags(t *testing.T) {
 }
 
 func TestAgentCommand_SubcommandStubs(t *testing.T) {
-	t.Setenv(EnvToken, "")
-
-	subcommands := []string{"list", "ls", "start", "stop", "logs", "exec", "status"}
-	for _, sub := range subcommands {
-		t.Run(sub, func(t *testing.T) {
-			var stdout bytes.Buffer
-			var stderr bytes.Buffer
-			code := Main([]string{"--api-url", "http://127.0.0.1:9999", "--token", "test-token", "agent", sub}, &stdout, &stderr)
-			if code != 0 {
-				t.Fatalf("exit code = %d stderr=%s", code, stderr.String())
-			}
-			if !strings.Contains(stdout.String(), "not implemented yet") {
-				t.Errorf("expected stub output for %q, got:\n%s", sub, stdout.String())
-			}
-		})
-	}
+	// All agent subcommands are now implemented — no stubs remain.
+	// This test is kept as a placeholder; add new stubs here if needed.
+	t.Skip("all agent subcommands are implemented")
 }
 
 func TestAgentCommand_RootUsageIncludesAgent(t *testing.T) {
