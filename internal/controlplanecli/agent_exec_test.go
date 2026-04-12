@@ -14,17 +14,25 @@ func TestAgentExec_Success(t *testing.T) {
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
-			t.Fatalf("method = %q, want POST", r.Method)
+			t.Errorf("method = %q, want POST", r.Method)
+			http.Error(w, "bad method", http.StatusBadRequest)
+			return
 		}
 		if r.URL.Path != "/api/v1/harness-runs/run-42/agent-session/prompt" {
-			t.Fatalf("path = %q", r.URL.Path)
+			t.Errorf("path = %q", r.URL.Path)
+			http.Error(w, "bad path", http.StatusBadRequest)
+			return
 		}
 		var req PromptRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			t.Fatalf("decode request: %v", err)
+			t.Errorf("decode request: %v", err)
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
 		}
 		if req.Prompt != "hello agent" {
-			t.Fatalf("prompt = %q, want hello agent", req.Prompt)
+			t.Errorf("prompt = %q, want hello agent", req.Prompt)
+			http.Error(w, "bad prompt", http.StatusBadRequest)
+			return
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"events": []map[string]any{
@@ -62,10 +70,14 @@ func TestAgentExec_PositionalPrompt(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req PromptRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			t.Fatalf("decode request: %v", err)
+			t.Errorf("decode request: %v", err)
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
 		}
 		if req.Prompt != "do something" {
-			t.Fatalf("prompt = %q, want do something", req.Prompt)
+			t.Errorf("prompt = %q, want do something", req.Prompt)
+			http.Error(w, "bad prompt", http.StatusBadRequest)
+			return
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"events": []map[string]any{

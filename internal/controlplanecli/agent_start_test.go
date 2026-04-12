@@ -216,11 +216,15 @@ func TestAgentStart_Timeout(t *testing.T) {
 func TestAgentStart_ReuseWorkspace(t *testing.T) {
 	t.Setenv(EnvToken, "")
 
+	var workspaceCreated atomic.Bool
+
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		// Should NOT create workspace session
 		case r.URL.Path == "/api/v1/workspace-sessions" && r.Method == http.MethodPost:
-			t.Fatal("should not create workspace session when --workspace is provided")
+			workspaceCreated.Store(true)
+			http.Error(w, "unexpected workspace creation", http.StatusInternalServerError)
+			return
 
 		// Create harness run under existing workspace
 		case r.URL.Path == "/api/v1/workspace-sessions/ws-existing/harness-runs" && r.Method == http.MethodPost:
@@ -269,6 +273,9 @@ func TestAgentStart_ReuseWorkspace(t *testing.T) {
 
 	if code != 0 {
 		t.Fatalf("exit code = %d, stderr=%s", code, stderr.String())
+	}
+	if workspaceCreated.Load() {
+		t.Fatal("should not create workspace session when --workspace is provided")
 	}
 
 	out := stdout.String()
