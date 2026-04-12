@@ -3,6 +3,7 @@ package controlplanecli
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -124,8 +125,9 @@ func TestCreateAgentSession(t *testing.T) {
 		if r.URL.Path != "/api/v1/harness-runs/run-10/agent-session" {
 			t.Fatalf("path = %q", r.URL.Path)
 		}
+		// CreateAgentSession sends no body, so Content-Type should be absent
 		if ct := r.Header.Get("Content-Type"); ct != "" {
-			// POST with no body should not set content-type
+			t.Fatalf("expected no Content-Type header for bodyless POST, got %q", ct)
 		}
 		w.WriteHeader(http.StatusCreated)
 		_ = json.NewEncoder(w).Encode(map[string]any{
@@ -425,9 +427,5 @@ func TestStreamEventsReturnsErrorOnNon2xx(t *testing.T) {
 
 // isAPIError is a test helper that checks if err is an *APIError.
 func isAPIError(err error, target **APIError) bool {
-	if e, ok := err.(*APIError); ok {
-		*target = e
-		return true
-	}
-	return false
+	return errors.As(err, target)
 }

@@ -5,7 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 )
 
 // runAgentExecCommand sends a prompt to a running agent session and displays
@@ -16,6 +19,11 @@ import (
 //	kocao agent exec <run-id> --prompt "your prompt"
 //	kocao agent exec <run-id> "your prompt"
 func runAgentExecCommand(args []string, cfg Config, stdout io.Writer, stderr io.Writer) error {
+	runID, flagArgs, err := parseRequiredAgentRunID("exec", args)
+	if err != nil {
+		return fmt.Errorf("usage: kocao agent exec <run-id> [--prompt <text> | <text>]")
+	}
+
 	fs := newFlagSet("kocao agent exec", stderr)
 
 	var prompt string
@@ -24,23 +32,6 @@ func runAgentExecCommand(args []string, cfg Config, stdout io.Writer, stderr io.
 	fs.StringVar(&prompt, "p", "", "prompt text to send to the agent (shorthand)")
 	fs.StringVar(&output, "output", "table", "output format: table or json")
 
-	if len(args) == 0 {
-		return fmt.Errorf("usage: kocao agent exec <run-id> [--prompt <text> | <text>]")
-	}
-
-	runID := ""
-	var flagArgs []string
-	for i, arg := range args {
-		if !strings.HasPrefix(arg, "-") && runID == "" {
-			runID = strings.TrimSpace(arg)
-			flagArgs = append(flagArgs, args[i+1:]...)
-			break
-		}
-		flagArgs = append(flagArgs, arg)
-	}
-	if runID == "" {
-		return fmt.Errorf("usage: kocao agent exec <run-id> [--prompt <text> | <text>]")
-	}
 	if err := fs.Parse(flagArgs); err != nil {
 		return err
 	}
@@ -63,7 +54,10 @@ func runAgentExecCommand(args []string, cfg Config, stdout io.Writer, stderr io.
 		return err
 	}
 
-	resp, err := client.SendPrompt(context.Background(), runID, prompt)
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+
+	resp, err := client.SendPrompt(ctx, runID, prompt)
 	if err != nil {
 		return fmt.Errorf("send prompt: %w", err)
 	}

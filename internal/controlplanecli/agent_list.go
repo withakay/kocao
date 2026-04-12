@@ -4,7 +4,10 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 	"text/tabwriter"
 
 	"sigs.k8s.io/yaml"
@@ -31,13 +34,23 @@ func runAgentListCommand(args []string, cfg Config, stdout io.Writer, stderr io.
 		return err
 	}
 
-	sessions, err := collectAgentSessions(context.Background(), client, strings.TrimSpace(*workspace))
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+
+	sessions, err := collectAgentSessions(ctx, client, strings.TrimSpace(*workspace))
 	if err != nil {
 		return err
 	}
 	if len(sessions) == 0 {
-		_, _ = fmt.Fprintln(stdout, "no agent sessions found")
-		return nil
+		switch format {
+		case "json":
+			return writeJSON(stdout, []AgentSession{})
+		case "yaml":
+			return writeYAML(stdout, []AgentSession{})
+		default:
+			_, _ = fmt.Fprintln(stdout, "no agent sessions found")
+			return nil
+		}
 	}
 
 	switch format {

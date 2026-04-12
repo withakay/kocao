@@ -76,6 +76,9 @@ func streamAgentLogs(ctx context.Context, client *Client, runID string, format s
 	defer func() { _ = rc.Close() }()
 
 	scanner := bufio.NewScanner(rc)
+	// Agent session events can include large tool outputs or LLM responses
+	// that exceed the default 64KB bufio.Scanner limit.
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	for scanner.Scan() {
 		if ctx.Err() != nil {
 			return nil

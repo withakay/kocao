@@ -2,9 +2,14 @@ package controlplanecli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"net/http"
+	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -30,6 +35,9 @@ func runAgentStartCommand(args []string, cfg Config, stdout io.Writer, stderr io
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
+	if fs.NArg() > 0 {
+		return fmt.Errorf("unexpected positional argument: %s", fs.Arg(0))
+	}
 	if strings.TrimSpace(*repo) == "" {
 		return fmt.Errorf("usage: kocao agent start --repo <url> --agent <name>: missing required flag --repo")
 	}
@@ -47,7 +55,9 @@ func runAgentStartCommand(args []string, cfg Config, stdout io.Writer, stderr io
 		return err
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), *timeout)
+	sigCtx, sigCancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer sigCancel()
+	ctx, cancel := context.WithTimeout(sigCtx, *timeout)
 	defer cancel()
 
 	_, _ = fmt.Fprintf(stderr, "Creating workspace session... ")
@@ -96,7 +106,8 @@ func printLastKnownAgentState(stderr io.Writer, client *Client, runID string) {
 
 // pollAgentSession polls GetAgentSession until the session reaches "Ready"
 // phase or the context is cancelled. It uses the provided interval between
-// poll attempts.
+// poll attempts. Non-retryable errors (e.g. auth, not-found) are returned
+// immediately rather than being masked as timeouts.
 func pollAgentSession(ctx context.Context, client *Client, runID string, interval time.Duration) (*AgentSession, error) {
 	for {
 		session, err := client.GetAgentSession(ctx, runID)
@@ -105,6 +116,9 @@ func pollAgentSession(ctx context.Context, client *Client, runID string, interva
 		}
 		if ctx.Err() != nil {
 			return nil, fmt.Errorf("timed out waiting for agent session to become ready")
+		}
+		if err != nil && isNonRetryableError(err) {
+			return nil, fmt.Errorf("agent session lookup failed: %w", err)
 		}
 
 		timer := time.NewTimer(interval)
@@ -115,4 +129,20 @@ func pollAgentSession(ctx context.Context, client *Client, runID string, interva
 		case <-timer.C:
 		}
 	}
+}
+
+// isNonRetryableError returns true for HTTP errors that should not be retried
+// (authentication, authorization, not-found, and server errors).
+func isNonRetryableError(err error) bool {
+	var apiErr *APIError
+	if errors.As(err, &apiErr) {
+		switch {
+		case apiErr.StatusCode == http.StatusUnauthorized,
+			apiErr.StatusCode == http.StatusForbidden,
+			apiErr.StatusCode == http.StatusNotFound,
+			apiErr.StatusCode >= http.StatusInternalServerError:
+			return true
+		}
+	}
+	return false
 }

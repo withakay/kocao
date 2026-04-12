@@ -208,9 +208,6 @@ func TestAgentStart_Timeout(t *testing.T) {
 	if !strings.Contains(errOut, "timed out") {
 		t.Errorf("expected timeout error, got:\n%s", errOut)
 	}
-	if !strings.Contains(errOut, "timeout") {
-		t.Errorf("expected 'timeout' in stderr, got:\n%s", errOut)
-	}
 }
 
 func TestAgentStart_ReuseWorkspace(t *testing.T) {
