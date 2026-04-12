@@ -77,6 +77,8 @@ func Main(args []string, stdout io.Writer, stderr io.Writer) int {
 		cmdErr = runSessionsCommand(rest[1:], cfg, stdout, stderr)
 	case "symphony":
 		cmdErr = runSymphonyCommand(rest[1:], cfg, stdout, stderr)
+	case "agent":
+		cmdErr = runAgentCommand(rest[1:], cfg, stdout, stderr)
 	default:
 		cmdErr = fmt.Errorf("unknown command %q", cmd)
 	}
