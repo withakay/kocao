@@ -79,7 +79,13 @@ func collectAgentSessions(ctx context.Context, client *Client, workspaceID strin
 		sessions, err := client.ListAgentSessions(ctx, ws.ID)
 		if err != nil {
 			var apiErr *APIError
-			if errors.As(err, &apiErr) && apiErr.StatusCode == 404 {
+			// Only tolerate 404 when the error message indicates the
+			// workspace itself was not found (race: deleted between the
+			// list call and this per-workspace call). Any other 404
+			// (e.g. a missing agent-sessions endpoint) is a regression
+			// and must surface.
+			if errors.As(err, &apiErr) && apiErr.StatusCode == 404 &&
+				strings.Contains(strings.ToLower(apiErr.Message), "workspace session not found") {
 				continue
 			}
 			return nil, fmt.Errorf("list agent sessions for workspace %s: %w", ws.ID, err)

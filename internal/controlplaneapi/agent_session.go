@@ -569,12 +569,37 @@ func (s *AgentSessionService) GetState(run *operatorv1alpha1.HarnessRun) agentSe
 	return state
 }
 
+// isStalePodProxyError returns true when the error looks like a stale K8s pod
+// proxy / HTTP/2 timeout that commonly occurs after closing a long-lived SSE
+// stream. These are soft failures — the stream is already closed and the
+// operator will clean up the pod.
+func isStalePodProxyError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "context deadline exceeded") ||
+		strings.Contains(msg, "connection reset") ||
+		strings.Contains(msg, "broken pipe") ||
+		strings.Contains(msg, "use of closed network connection") ||
+		strings.Contains(msg, "stream error") ||
+		strings.Contains(msg, "http2:")
+}
+
 func (s *AgentSessionService) Stop(ctx context.Context, run *operatorv1alpha1.HarnessRun) (agentSessionState, error) {
 	s.mu.Lock()
 	bridge, ok := s.bridges[run.Name]
 	s.mu.Unlock()
 	if !ok {
-		return s.GetState(run), nil
+		// No in-memory bridge. Check persisted state to decide whether the
+		// session is genuinely already completed/stopped.
+		state := s.GetState(run)
+		switch state.Phase {
+		case operatorv1alpha1.AgentSessionPhaseCompleted, operatorv1alpha1.AgentSessionPhaseFailed:
+			return state, nil
+		default:
+			return state, fmt.Errorf("no active session bridge for run %s (phase %s); cannot confirm stop", run.Name, state.Phase)
+		}
 	}
 	bridge.mu.Lock()
 	bridge.phase = operatorv1alpha1.AgentSessionPhaseStopping
@@ -605,15 +630,25 @@ func (s *AgentSessionService) Stop(ctx context.Context, run *operatorv1alpha1.Ha
 
 	// Send DELETE to the sandbox-agent. If the K8s pod proxy connection is
 	// stale (common with HTTP/2 after closing a long-lived SSE stream), the
-	// DELETE may time out. In that case we still mark the session as
-	// completed since the stream is already closed and the pod will be
-	// cleaned up by the operator.
+	// DELETE may time out. We tolerate that specific class of failure since
+	// the stream is already closed and the operator will clean up the pod.
+	// Other failures are returned to the caller.
 	deleteCtx, deleteCancel := context.WithTimeout(ctx, 10*time.Second)
 	defer deleteCancel()
 	deleteErr := s.transport.DeleteACP(deleteCtx, run.Status.PodName, bridge.serverID)
 
 	if deleteErr != nil {
-		slog.Warn("agent session stop: DELETE failed (session still marked completed)", "run", run.Name, "error", deleteErr)
+		if isStalePodProxyError(deleteErr) {
+			slog.Warn("agent session stop: DELETE failed with stale proxy error (session marked completed)", "run", run.Name, "error", deleteErr)
+		} else {
+			slog.Error("agent session stop: DELETE failed with unexpected error", "run", run.Name, "error", deleteErr)
+			bridge.mu.Lock()
+			bridge.phase = operatorv1alpha1.AgentSessionPhaseFailed
+			bridge.mu.Unlock()
+			state := bridge.snapshot()
+			s.store.SaveState(state)
+			return state, fmt.Errorf("agent session stop: delete failed: %w", deleteErr)
+		}
 	}
 	bridge.mu.Lock()
 	bridge.phase = operatorv1alpha1.AgentSessionPhaseCompleted
@@ -646,6 +681,51 @@ func (a *API) updateHarnessRunAgentSessionStatus(ctx context.Context, run *opera
 	run.Status.AgentSession = updated.Status.AgentSession
 }
 
+// agentSessionDTO is the response shape returned by the status and stop
+// endpoints. It includes the fields the CLI/docs promise: workspaceSessionId,
+// createdAt, and displayName, in addition to the core session state.
+type agentSessionDTO struct {
+	HarnessRunID       string                             `json:"harnessRunID"`
+	PodName            string                             `json:"podName,omitempty"`
+	ServerID           string                             `json:"serverID,omitempty"`
+	Runtime            operatorv1alpha1.AgentRuntime      `json:"runtime,omitempty"`
+	Agent              operatorv1alpha1.AgentKind         `json:"agent,omitempty"`
+	SessionID          string                             `json:"sessionId,omitempty"`
+	Phase              operatorv1alpha1.AgentSessionPhase `json:"phase,omitempty"`
+	LastSequence       int64                              `json:"lastSequence,omitempty"`
+	WorkspaceSessionID string                             `json:"workspaceSessionId,omitempty"`
+	DisplayName        string                             `json:"displayName,omitempty"`
+	CreatedAt          string                             `json:"createdAt,omitempty"`
+}
+
+func (a *API) agentSessionToDTO(ctx context.Context, run *operatorv1alpha1.HarnessRun, state agentSessionState) agentSessionDTO {
+	dto := agentSessionDTO{
+		HarnessRunID:       state.HarnessRunID,
+		PodName:            state.PodName,
+		ServerID:           state.ServerID,
+		Runtime:            state.Runtime,
+		Agent:              state.Agent,
+		SessionID:          state.SessionID,
+		Phase:              state.Phase,
+		LastSequence:       state.LastSequence,
+		WorkspaceSessionID: run.Spec.WorkspaceSessionName,
+	}
+	if !run.CreationTimestamp.IsZero() {
+		dto.CreatedAt = run.CreationTimestamp.Time.UTC().Format(time.RFC3339)
+	}
+	if run.Spec.WorkspaceSessionName != "" {
+		displayName := a.sessionDisplayNameFor(ctx, run)
+		if displayName != "" {
+			suffix := run.Name
+			if len(suffix) > 5 {
+				suffix = suffix[len(suffix)-5:]
+			}
+			dto.DisplayName = displayName + "-" + suffix
+		}
+	}
+	return dto
+}
+
 type agentSessionPromptRequest struct {
 	Prompt string `json:"prompt"`
 }
@@ -669,7 +749,7 @@ func (a *API) handleRunAgentSessionGet(w http.ResponseWriter, r *http.Request, i
 		writeError(w, http.StatusNotFound, "agent session not configured for harness run")
 		return
 	}
-	writeJSON(w, http.StatusOK, state)
+	writeJSON(w, http.StatusOK, a.agentSessionToDTO(r.Context(), run, state))
 }
 
 func (a *API) handleRunAgentSessionCreate(w http.ResponseWriter, r *http.Request, id string) {
@@ -843,5 +923,5 @@ func (a *API) handleRunAgentSessionStop(w http.ResponseWriter, r *http.Request, 
 	}
 	a.updateHarnessRunAgentSessionStatus(r.Context(), run, state)
 	a.Audit.Append(r.Context(), principal(r.Context()), "agent-session.stop", "harness-run", id, "allowed", map[string]any{"sessionId": state.SessionID})
-	writeJSON(w, http.StatusOK, state)
+	writeJSON(w, http.StatusOK, a.agentSessionToDTO(r.Context(), run, state))
 }

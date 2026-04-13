@@ -402,6 +402,79 @@ func TestAgentList_WorkspaceFilterAPIError(t *testing.T) {
 	}
 }
 
+// TestAgentList_404WorkspaceNotFound_Skipped verifies that a 404 with the
+// specific "workspace session not found" message is still tolerated during
+// multi-workspace iteration (race: workspace deleted between list and fetch).
+func TestAgentList_404WorkspaceNotFound_Skipped(t *testing.T) {
+	t.Setenv(EnvToken, "")
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/api/v1/workspace-sessions" && r.Method == http.MethodGet:
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"workspaceSessions": []map[string]any{
+					{"id": "ws-deleted", "phase": "Active"},
+					{"id": "ws-ok", "phase": "Active"},
+				},
+			})
+		case r.URL.Path == "/api/v1/workspace-sessions/ws-deleted/agent-sessions" && r.Method == http.MethodGet:
+			w.WriteHeader(http.StatusNotFound)
+			_ = json.NewEncoder(w).Encode(map[string]any{"error": "workspace session not found"})
+		case r.URL.Path == "/api/v1/workspace-sessions/ws-ok/agent-sessions" && r.Method == http.MethodGet:
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"agentSessions": []map[string]any{
+					{"sessionId": "as-ok", "runId": "run-ok", "agent": "claude", "phase": "Running", "workspaceSessionId": "ws-ok"},
+				},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code := Main([]string{"--api-url", srv.URL, "--token", "test-token", "agent", "list"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("exit code = %d stderr=%s", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "as-ok") {
+		t.Errorf("expected session as-ok in output, got:\n%s", stdout.String())
+	}
+}
+
+// TestAgentList_404Generic_NotSkipped verifies that a 404 with a generic
+// message (not "workspace session not found") is NOT silently skipped,
+// surfacing regressions where the endpoint itself is missing.
+func TestAgentList_404Generic_NotSkipped(t *testing.T) {
+	t.Setenv(EnvToken, "")
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/api/v1/workspace-sessions" && r.Method == http.MethodGet:
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"workspaceSessions": []map[string]any{
+					{"id": "ws-1", "phase": "Active"},
+				},
+			})
+		case r.URL.Path == "/api/v1/workspace-sessions/ws-1/agent-sessions" && r.Method == http.MethodGet:
+			// Generic 404 — not the workspace-specific message
+			w.WriteHeader(http.StatusNotFound)
+			_ = json.NewEncoder(w).Encode(map[string]any{"error": "not found"})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code := Main([]string{"--api-url", srv.URL, "--token", "test-token", "agent", "list"}, &stdout, &stderr)
+	if code != 1 {
+		t.Fatalf("exit code = %d, want 1 (generic 404 should not be silently skipped); stderr=%s", code, stderr.String())
+	}
+}
+
 func TestAgentList_LsAlias(t *testing.T) {
 	t.Setenv(EnvToken, "")
 
