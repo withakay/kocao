@@ -219,9 +219,9 @@ if [[ -n "${KOCAO_REPO_URL:-}" ]]; then
   if [[ -n "${KOCAO_REPO_REVISION:-}" ]]; then
     fetch_with_retry "${repo_dir}"
 
-    resolved_commit=$(git -C "${repo_dir}" rev-parse --verify --quiet -- "${KOCAO_REPO_REVISION}^{commit}" || true)
+    resolved_commit=$(git -C "${repo_dir}" rev-parse --verify --quiet "${KOCAO_REPO_REVISION}^{commit}" || true)
     if [[ -z "${resolved_commit}" ]]; then
-      resolved_commit=$(git -C "${repo_dir}" rev-parse --verify --quiet -- "origin/${KOCAO_REPO_REVISION}^{commit}" || true)
+      resolved_commit=$(git -C "${repo_dir}" rev-parse --verify --quiet "origin/${KOCAO_REPO_REVISION}^{commit}" || true)
     fi
     [[ -n "${resolved_commit}" ]] || die "failed to resolve KOCAO_REPO_REVISION=${KOCAO_REPO_REVISION}"
 

@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# agent-status.sh — Get detailed status of a workspace session.
-# Wraps: kocao sessions status <id> --json
+# agent-status.sh — Get detailed status of an agent session.
 # Exit codes: 0=success, 1=runtime error, 2=usage error
 set -euo pipefail
 
@@ -10,22 +9,22 @@ source "${SCRIPT_DIR}/common.sh"
 
 usage() {
   cat <<'EOF'
-Usage: agent-status.sh <session-id> [--no-json]
+Usage: agent-status.sh <run-id> [--no-json]
 
-Get detailed status for a workspace session.
+Get detailed status for an agent session.
 
 Arguments:
-  session-id    Workspace session ID
+  run-id      Harness run ID
 
 Options:
-  --no-json     Output the default kocao text format instead of JSON
-  --help        Show this help
+  --no-json   Output the default kocao text format instead of JSON
+  --help      Show this help
 EOF
 }
 
 require_commands kocao
 
-session_id=""
+run_id=""
 json_out=true
 while (($#)); do
   case "$1" in
@@ -37,24 +36,24 @@ while (($#)); do
       usage
       exit 0
       ;;
-    -*)
+    -* )
       usage_error "unknown flag: $1"
       ;;
     *)
-      if [[ -n "$session_id" ]]; then
+      if [[ -n "$run_id" ]]; then
         usage_error "unexpected argument: $1"
       fi
-      session_id="$1"
+      run_id="$1"
       shift
       ;;
   esac
 done
 
-require_nonempty "$session_id" "session-id"
+require_nonempty "$run_id" "run-id"
 
-cmd=(kocao sessions status "$session_id")
+cmd=(kocao agent status "$run_id")
 if [[ "$json_out" == true ]]; then
-  cmd+=(--json)
+  cmd+=(--output json)
 fi
 
 exec "${cmd[@]}"

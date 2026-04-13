@@ -1,130 +1,57 @@
 # Kocao Agent CLI Live Demo
 
-*2026-04-12T23:36:15Z by Showboat 0.6.1*
-<!-- showboat-id: 7d3b1bc9-4568-4f7a-8ff9-6f81b83906cb -->
+*2026-04-13T20:04:19Z by Showboat 0.6.1*
+<!-- showboat-id: 1d855ddc-66a0-4867-93d3-dab1d5e5537f -->
 
-This demo exercises the kocao agent CLI against a live MicroK8s cluster running the Kocao control plane.
+This demo captures the current live agent CLI happy path against the MicroK8s cluster: create an agent session, inspect its status, and verify the backing pod is healthy.
 
-Verify no agents are running.
-
-```bash
-go run ./cmd/kocao agent list
-```
-
-```output
-no agent sessions found
-```
-
-Show the agent CLI help.
+The commands below talk to the port-forwarded control-plane API on localhost:18081.
 
 ```bash
-go run ./cmd/kocao agent help
-```
-
-```output
-kocao agent — manage sandbox agents
-
-Usage:
-  kocao agent <subcommand> [flags]
-
-Subcommands:
-  list, ls    List agents
-  start       Start an agent
-  stop        Stop an agent
-  logs        View agent logs
-  exec        Execute a command in an agent
-  status      Show agent status
-```
-
-Start a codex agent. The harness image is large (~2.4GB) so first-time pulls take several minutes. Agent session initialization may timeout on cold starts.
-
-```bash
-go run ./cmd/kocao agent start --repo https://github.com/golang/example --agent codex --revision master --image ghcr.io/withakay/kocao/harness-runtime:dev-microk8s --image-pull-secret ghcr-pull --egress-mode full --timeout 2m 2>&1 || true
+export KOCAO_API_URL=http://127.0.0.1:18081 KOCAO_TOKEN=dev-bootstrap; go run ./cmd/kocao agent start --repo https://github.com/withakay/kocao --agent opencode --revision main --image ghcr.io/withakay/kocao/harness-runtime:dev-microk8s-amd64fix --image-pull-secret ghcr-pull --egress-mode full --timeout 3m --output json | tee /tmp/kocao-agent-start.json; jq -r .runId /tmp/kocao-agent-start.json > /tmp/kocao-agent-runid
 ```
 
 ```output
 Creating workspace session... done
 Starting harness run... done
-Waiting for agent session... timeout
-Last known state: phase=Provisioning sessionId=
-error: timed out waiting for agent session to become ready
-exit status 1
+Waiting for agent session... ready
+{
+  "sessionId": "ses_2778dcf1fffeMEhbZYKJCD1VL1",
+  "runId": "df3efa59bdef4294721868af310b9794",
+  "agent": "opencode",
+  "phase": "Ready"
+}
 ```
 
-Check the agent's status using the run ID from the harness.
+Use the returned run ID to inspect the current agent session state.
 
 ```bash
-go run ./cmd/kocao agent status c354834c6d8ad87bc07ae77256485e0b 2>&1 || true
-```
-
-```output
-  Run ID:    -
-  Session ID: -
-  Name:      -
-  Runtime:   sandbox-agent
-  Agent:     codex
-  Phase:     Provisioning
-  Workspace: -
-  Created:   -
-```
-
-View the agent status in JSON format.
-
-```bash
-go run ./cmd/kocao agent status c354834c6d8ad87bc07ae77256485e0b --output json 2>&1 || true
+export KOCAO_API_URL=http://127.0.0.1:18081 KOCAO_TOKEN=dev-bootstrap; RUN_ID=$(cat /tmp/kocao-agent-runid); go run ./cmd/kocao agent status "$RUN_ID" --output json
 ```
 
 ```output
 {
-  "sessionId": "",
-  "runId": "",
+  "sessionId": "ses_2778dcf1fffeMEhbZYKJCD1VL1",
+  "runId": "df3efa59bdef4294721868af310b9794",
   "displayName": "",
   "runtime": "sandbox-agent",
-  "agent": "codex",
-  "phase": "Provisioning",
+  "agent": "opencode",
+  "phase": "Ready",
   "workspaceSessionId": "",
   "createdAt": "0001-01-01T00:00:00Z"
 }
 ```
 
-List agents — our codex agent should appear in Provisioning state.
+Verify the backing harness pod is running, the sidecar is present, and sandbox-agent is healthy inside the pod.
 
 ```bash
-go run ./cmd/kocao agent list
+POD=$(kubectl --context microk8s -n kocao-system get harnessruns --sort-by=.metadata.creationTimestamp -o jsonpath="{.items[-1:].status.podName}"); echo pod=$POD; kubectl --context microk8s -n kocao-system get pod "$POD"; echo ===; kubectl --context microk8s -n kocao-system exec "$POD" -c harness -- /bin/sh -lc "curl -fsS http://127.0.0.1:2468/v1/health && echo"
 ```
 
 ```output
-error: not found
-exit status 1
-```
-
-Fetch event logs for the harness run.
-
-```bash
-go run ./cmd/kocao agent logs c354834c6d8ad87bc07ae77256485e0b --tail 5 2>&1 || true
-```
-
-```output
-TIMESTAMP  SEQ  TYPE  DATA
-```
-
-Stop the agent session.
-
-```bash
-go run ./cmd/kocao agent stop c354834c6d8ad87bc07ae77256485e0b 2>&1 || true
-```
-
-```output
-error: api request failed (502): sandbox-agent proxy DELETE https://10.152.183.1:443/api/v1/namespaces/kocao-system/pods/epic-mclean-85e0b:2468/proxy/v1/acp/c354834c6d8ad87bc07ae77256485e0b returned 503: {"kind":"Status","apiVersion":"v1","metadata":{},"status":"Failure","message":"error trying to reach service: dial tcp 10.1.24.156:2468: connect: connection refused","reason":"ServiceUnavailable","code":503}
-exit status 1
-```
-
-Verify no agents are running after cleanup.
-
-```bash
-go run ./cmd/kocao agent list
-```
-
-```output
-no agent sessions found
+pod=confident-hoover-b9794
+NAME                     READY   STATUS    RESTARTS   AGE
+confident-hoover-b9794   2/2     Running   0          30s
+===
+{"status":"ok"}
 ```

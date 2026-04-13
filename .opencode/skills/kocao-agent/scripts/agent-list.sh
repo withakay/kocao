@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# agent-list.sh — List all workspace sessions via kocao CLI.
-# Wraps: kocao sessions ls --json
+# agent-list.sh — List agent sessions via kocao CLI.
 # Exit codes: 0=success, 1=runtime error, 2=usage error
 set -euo pipefail
 
@@ -10,24 +9,28 @@ source "${SCRIPT_DIR}/common.sh"
 
 usage() {
   cat <<'EOF'
-Usage: agent-list.sh [--no-json] [extra kocao flags]
+Usage: agent-list.sh [--workspace <id>] [--no-json]
 
-List all workspace sessions.
+List remote agent sessions.
 
 Options:
-  --no-json   Output the default kocao table instead of JSON
-  --help      Show this help
-
-Any additional arguments are passed through to `kocao sessions ls`.
+  --workspace ID  Filter by workspace session ID
+  --no-json       Output the default kocao table instead of JSON
+  --help          Show this help
 EOF
 }
 
 require_commands kocao
 
+workspace_id=""
 json_out=true
-extra_args=()
 while (($#)); do
   case "$1" in
+    --workspace)
+      require_flag_value "$1" "$#"
+      workspace_id="$2"
+      shift 2
+      ;;
     --no-json)
       json_out=false
       shift
@@ -36,17 +39,21 @@ while (($#)); do
       usage
       exit 0
       ;;
+    -* )
+      usage_error "unknown flag: $1"
+      ;;
     *)
-      extra_args+=("$1")
-      shift
+      usage_error "unexpected argument: $1"
       ;;
   esac
 done
 
-cmd=(kocao sessions ls)
-if [[ "$json_out" == true ]]; then
-  cmd+=(--json)
+cmd=(kocao agent list)
+if [[ -n "$workspace_id" ]]; then
+  cmd+=(--workspace "$workspace_id")
 fi
-cmd+=("${extra_args[@]}")
+if [[ "$json_out" == true ]]; then
+  cmd+=(--output json)
+fi
 
 exec "${cmd[@]}"

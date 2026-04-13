@@ -2,39 +2,35 @@
 
 ## What This Skill Manages
 
-The `kocao-agent` skill manages **workspace sessions** in the Kocao control
-plane. A workspace session is the lifecycle wrapper around a harness pod.
+The `kocao-agent` skill manages **agent sessions** in the Kocao control plane.
+Each agent session is attached to a harness run and is addressed by the harness
+run ID in the CLI.
 
-Important limitation: the current session-creation API is generic. It does not
-choose between different runtime images or agent implementations. The
-`agent-start.sh --agent ...` flag is a **labeling convention** that keeps
-session names readable for humans.
+## Supported Agents
 
-## Common Session Labels
-
-| Label | Typical intended workflow |
+| Agent | Typical workflow |
 |---|---|
 | `opencode` | OpenCode-led coding or review work |
 | `codex` | Codex CLI work inside the session |
 | `claude` | Claude Code work inside the session |
 | `pi` | Pi-Agent orchestration work inside the session |
 
-Use the label to communicate intent. Whether a given CLI is actually usable in
-the pod still depends on the deployed harness image and injected credentials.
+Whether a given CLI is actually usable inside the pod still depends on the
+deployed harness image and injected credentials.
 
 ## Architecture
 
-```
+```text
 User / AI assistant
     |
     v
-Skill scripts / kocao CLI
+Skill scripts / kocao agent CLI
     |
     v
 Control-plane API
     |
     v
-Workspace session
+Harness run + agent session
     |
     v
 Harness pod
@@ -45,24 +41,14 @@ Harness pod
 
 ## Environment Variables
 
-### Required for API-backed scripts
-
 | Variable | Description | Example |
 |---|---|---|
 | `KOCAO_API_URL` | Control-plane API base URL | `https://kocao.example.com` |
 | `KOCAO_TOKEN` | Bearer token for API authentication | `kocao_tok_...` |
 
-### Optional
+### Optional configuration file
 
-| Variable | Description | Default |
-|---|---|---|
-| `KOCAO_TIMEOUT` | CLI HTTP timeout | `15s` |
-| `KOCAO_VERBOSE` | Enable CLI debug output | `false` |
-
-### Configuration File
-
-Instead of environment variables, the CLI can read a JSON config file from
-`~/.config/kocao/settings.json`:
+Instead of environment variables, the CLI can read `~/.config/kocao/settings.json`:
 
 ```json
 {
@@ -72,8 +58,6 @@ Instead of environment variables, the CLI can read a JSON config file from
   "verbose": false
 }
 ```
-
-Priority order: env vars > explicit `--config` flag > default config files.
 
 ## Prerequisites
 
@@ -86,52 +70,46 @@ Priority order: env vars > explicit `--config` flag > default config files.
    The Kocao control-plane and operator must be reachable.
 
 3. **Agent secrets seeded**
-   Run `seed-agent-secrets` so the harness pods get the credentials they need.
+   Run `seed-agent-secrets` so harness pods get the credentials they need.
 
 4. **Network access**
-   If you are running locally, you may need port-forwarding:
+   If running locally, you may need port-forwarding:
    ```bash
-   kubectl port-forward svc/control-plane-api 8080:8080
+   kubectl port-forward -n kocao-system pod/<control-plane-api-pod> 18080:8080
+   export KOCAO_API_URL=http://127.0.0.1:18080
    ```
 
-## Commands Used by This Skill
-
-### CLI-backed wrappers
+## Wrapped CLI Commands
 
 ```bash
-kocao sessions ls [--json]
-kocao sessions status <session-id> [--json]
-kocao sessions logs <session-id> [--tail N] [--container NAME] [--follow] [--json]
-kocao sessions attach <session-id> [--driver] [--collab]
-```
-
-### API-backed wrappers
-
-```text
-POST   /api/v1/workspace-sessions
-DELETE /api/v1/workspace-sessions/<session-id>
-POST   /api/v1/workspace-sessions/<session-id>/exec   # optional / experimental
+kocao agent list [--workspace ID] [--output table|json|yaml]
+kocao agent start --repo URL --agent NAME [--workspace ID] [--revision REF] [--image IMAGE] [--image-pull-secret NAME] [--egress-mode MODE] [--timeout DURATION] [--output table|json]
+kocao agent status <run-id> [--output table|json]
+kocao agent logs <run-id> [--tail N] [--follow] [--output table|json]
+kocao agent exec <run-id> --prompt TEXT [--output json]
+kocao agent stop <run-id> [--json]
 ```
 
 ## Behavior Notes
 
 ### `agent-start.sh`
 
-- requires `--repo`
-- accepts `--agent`, but only to help generate a readable display name
-- waits for `Running` by default
-- `--quiet` prints only the session ID
+- requires `--repo` and `--agent`
+- waits for the agent session to become ready unless the command times out
+- `--quiet` prints only the run ID
+- supports remote-cluster flags like `--image-pull-secret` and `--egress-mode`
 
 ### `agent-exec.sh`
 
-- depends on a control-plane that implements `/exec`
-- if that endpoint is missing, the script exits with guidance to use
-  `kocao sessions attach <id> --driver`
+- wraps `kocao agent exec`
+- defaults to JSON output for machine consumption
+- accepts `--no-json` to preserve the CLI's formatted event output
 
 ### `agent-logs.sh`
 
 - defaults to JSON for one-shot fetches
-- requires `--no-json` when you use `--follow`
+- accepts `--follow` and `--tail`
+- `--no-json` switches back to the CLI's human-readable event table
 
 ## Troubleshooting
 
@@ -142,41 +120,23 @@ Install the CLI:
 go install github.com/withakay/kocao/cmd/kocao@latest
 ```
 
-### `KOCAO_TOKEN is not set`
+### `KOCAO_TOKEN` or `KOCAO_API_URL` is missing
 
-Export the token or create the config file:
+Export the variables or create `~/.config/kocao/settings.json`.
+
+### `harness run not found`
+
+The run ID is wrong, expired, or belongs to another cluster/environment.
+
+### Session stuck in `Provisioning`
+
+Check whether Kubernetes can schedule and start the harness pod:
+
 ```bash
-export KOCAO_TOKEN="your-token-here"
+kubectl -n kocao-system get pods
+kubectl -n kocao-system describe pod <pod-name>
+kubectl -n kocao-system logs <pod-name> -c harness
 ```
 
-### `API returned HTTP 400`
-
-The most common causes are:
-- invalid JSON sent to the API
-- `repoURL` missing on session creation
-- `repoURL` not using `https://`
-
-### `API returned HTTP 401`
-
-The bearer token is missing, invalid, or expired.
-
-### `API returned HTTP 404`
-
-Usually one of these:
-- the session ID is wrong
-- the session has already been deleted
-- you tried `agent-exec.sh` against a control-plane that does not implement the optional `/exec` endpoint
-
-### `attach requires an interactive terminal (TTY)`
-
-`kocao sessions attach` needs a real terminal. Use it from an interactive shell.
-
-### Session stuck in `Pending`
-
-Check whether Kubernetes can schedule the harness pod:
-```bash
-kubectl get pods -l workspace-session-id=<session-id>
-kubectl describe pod <pod-name>
-```
-
-Look for scheduling failures, image pull errors, or missing secrets.
+Look for scheduling failures, image pull errors, revision checkout failures, or
+missing secrets.

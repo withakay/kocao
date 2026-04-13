@@ -1,83 +1,50 @@
-# Kocao Agent CLI Error Handling Demo
+# Kocao Agent CLI Current Gaps Demo
 
-*2026-04-12T21:08:48Z by Showboat 0.6.1*
-<!-- showboat-id: 967d0896-2463-4bbe-8f1f-ec655101a6b4 -->
+*2026-04-13T20:05:09Z by Showboat 0.6.1*
+<!-- showboat-id: 1e96f0a4-8a8a-4abb-8f82-b4ad4ed1f53b -->
 
-This demo exercises error handling in the kocao agent CLI against a live MicroK8s cluster.
+This document captures the current known gaps in the live MicroK8s agent workflow so they are documented with real output instead of implied happy paths.
 
-Try to get status for a non-existent run ID.
+The run ID comes from the successful live demo and the control-plane API is the refreshed build on localhost:18081.
 
 ```bash
-go run ./cmd/kocao agent status nonexistent-run-id || true
+export KOCAO_API_URL=http://127.0.0.1:18081 KOCAO_TOKEN=dev-bootstrap; go run ./cmd/kocao agent list --output json || true
 ```
 
 ```output
-error: harness run not found
+[]
+```
+
+Even with a ready agent session, list currently comes back empty. That is an API/aggregation gap, not a demo fabrication.
+
+```bash
+export KOCAO_API_URL=http://127.0.0.1:18081 KOCAO_TOKEN=dev-bootstrap KOCAO_TIMEOUT=2m; RUN_ID=$(cat /tmp/kocao-agent-runid); go run ./cmd/kocao agent exec "$RUN_ID" --prompt "List the top-level files in the repo" --output json || true
+```
+
+```output
+error: send prompt: execute request: Post "http://127.0.0.1:18081/api/v1/harness-runs/df3efa59bdef4294721868af310b9794/agent-session/prompt": EOF
 exit status 1
 ```
 
-Try to exec without providing a prompt.
+Prompt submission still fails against the live control-plane even though the pod and sandbox-agent are healthy.
 
 ```bash
-go run ./cmd/kocao agent exec some-run-id || true
+export KOCAO_API_URL=http://127.0.0.1:18081 KOCAO_TOKEN=dev-bootstrap; RUN_ID=$(cat /tmp/kocao-agent-runid); go run ./cmd/kocao agent logs "$RUN_ID" --tail 3 --output json || true
 ```
 
 ```output
-error: usage: kocao agent exec <run-id> [--prompt <text> | <text>]
-exit status 2
+{"seq":0,"timestamp":"0001-01-01T00:00:00Z","data":null}
+{"seq":0,"timestamp":"0001-01-01T00:00:00Z","data":null}
+{"seq":0,"timestamp":"0001-01-01T00:00:00Z","data":null}
 ```
 
-Try to start an agent without required flags.
+The logs endpoint currently returns zero-value events instead of meaningful payloads.
 
 ```bash
-go run ./cmd/kocao agent start || true
+export KOCAO_API_URL=http://127.0.0.1:18081 KOCAO_TOKEN=dev-bootstrap; RUN_ID=$(cat /tmp/kocao-agent-runid); go run ./cmd/kocao agent stop "$RUN_ID" --json || true
 ```
 
 ```output
-error: usage: kocao agent start --repo <url> --agent <name>: missing required flag --repo
-exit status 2
-```
-
-Try to stop a non-existent run.
-
-```bash
-go run ./cmd/kocao agent stop nonexistent-run-id || true
-```
-
-```output
-error: harness run not found
+error: execute request: Post "http://127.0.0.1:18081/api/v1/harness-runs/df3efa59bdef4294721868af310b9794/agent-session/stop": context deadline exceeded (Client.Timeout exceeded while awaiting headers)
 exit status 1
-```
-
-Try agent logs for a non-existent run.
-
-```bash
-go run ./cmd/kocao agent logs nonexistent-run-id --tail 5 || true
-```
-
-```output
-error: harness run not found
-exit status 1
-```
-
-Try start with only --repo (missing --agent).
-
-```bash
-go run ./cmd/kocao agent start --repo https://github.com/withakay/kocao || true
-```
-
-```output
-error: usage: kocao agent start --repo <url> --agent <name>: missing required flag --agent
-exit status 2
-```
-
-Try an unknown subcommand.
-
-```bash
-go run ./cmd/kocao agent bogus || true
-```
-
-```output
-error: unknown agent subcommand "bogus"
-exit status 2
 ```

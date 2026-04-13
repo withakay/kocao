@@ -1,7 +1,5 @@
 #!/usr/bin/env bash
-# agent-start.sh — Create a new workspace session via the kocao control-plane API.
-# The API currently creates a generic workspace session; the --agent flag is kept
-# as a naming hint so older examples keep working.
+# agent-start.sh — Start a remote agent session.
 # Exit codes: 0=success, 1=runtime error, 2=usage error
 set -euo pipefail
 
@@ -11,40 +9,37 @@ source "${SCRIPT_DIR}/common.sh"
 
 usage() {
   cat <<'EOF'
-Usage: agent-start.sh --repo <url> [--agent <name>] [--name <display-name>] [--quiet] [--no-wait] [--wait-timeout SEC]
+Usage: agent-start.sh --repo <url> --agent <name> [--workspace <id>] [--revision <ref>] [--image <image>] [--image-pull-secret <name>] [--egress-mode <mode>] [--timeout <duration>] [--quiet] [--no-json]
 
-Create a new workspace session.
+Start a remote agent session.
 
 Options:
-  --repo URL          Repository URL to clone into the session (required)
-  --agent NAME        Session label for the intended agent workflow: opencode, codex, claude, pi
-  --name NAME         Explicit display name for the session
-  --quiet, -q         Output only the session ID
-  --no-wait           Return immediately after creation
-  --wait-timeout SEC  Max seconds to wait for the session to become Running
-  --help              Show this help
-
-Notes:
-  --agent is currently a display-name hint only. The control-plane API creates a
-  generic workspace session and does not switch runtime images based on this flag.
+  --repo URL               Repository URL to clone (required)
+  --agent NAME             Agent name: opencode, codex, claude, pi (required)
+  --workspace ID           Reuse an existing workspace session
+  --revision REF           Repository revision (default: main)
+  --image IMAGE            Harness runtime image override
+  --image-pull-secret NAME Image pull secret for private registries
+  --egress-mode MODE       Harness pod egress mode: restricted or full
+  --timeout DURATION       Max wait time for readiness
+  --quiet, -q              Output only the run ID
+  --no-json                Use the CLI's default formatted output instead of JSON
+  --help                   Show this help
 EOF
 }
 
-require_commands curl jq
+require_commands kocao jq
 
 repo_url=""
-agent_label="opencode"
-display_name=""
+agent_name=""
+workspace_id=""
+revision="main"
+image=""
+image_pull_secret=""
+egress_mode=""
+timeout_duration=""
 quiet=false
-wait_for_running=true
-wait_timeout=120
-api_response_file=""
-_start_temp_files=()
-_start_cleanup() {
-  rm -f "${_start_temp_files[@]}" 2>/dev/null || true
-  [[ -n "$api_response_file" ]] && rm -f "$api_response_file"
-}
-trap '_start_cleanup' EXIT
+json_out=true
 
 while (($#)); do
   case "$1" in
@@ -55,33 +50,52 @@ while (($#)); do
       ;;
     --agent)
       require_flag_value "$1" "$#"
-      agent_label="$2"
+      agent_name="$2"
       shift 2
       ;;
-    --name)
+    --workspace)
       require_flag_value "$1" "$#"
-      display_name="$2"
+      workspace_id="$2"
+      shift 2
+      ;;
+    --revision)
+      require_flag_value "$1" "$#"
+      revision="$2"
+      shift 2
+      ;;
+    --image)
+      require_flag_value "$1" "$#"
+      image="$2"
+      shift 2
+      ;;
+    --image-pull-secret)
+      require_flag_value "$1" "$#"
+      image_pull_secret="$2"
+      shift 2
+      ;;
+    --egress-mode)
+      require_flag_value "$1" "$#"
+      egress_mode="$2"
+      shift 2
+      ;;
+    --timeout)
+      require_flag_value "$1" "$#"
+      timeout_duration="$2"
       shift 2
       ;;
     --quiet|-q)
       quiet=true
       shift
       ;;
-    --no-wait)
-      wait_for_running=false
+    --no-json)
+      json_out=false
       shift
-      ;;
-    --wait-timeout)
-      require_flag_value "$1" "$#"
-      wait_timeout="$2"
-      require_positive_integer "$wait_timeout" "--wait-timeout"
-      shift 2
       ;;
     --help|-h)
       usage
       exit 0
       ;;
-    -*)
+    -* )
       usage_error "unknown flag: $1"
       ;;
     *)
@@ -90,73 +104,37 @@ while (($#)); do
   esac
 done
 
-if [[ "$wait_for_running" == true ]]; then
-  require_command kocao
-fi
-
 require_nonempty "$repo_url" "--repo"
-case "$agent_label" in
-  opencode|codex|claude|pi) ;;
-  *)
-    usage_error "unsupported --agent value: ${agent_label} (expected: opencode, codex, claude, pi)"
-    ;;
-esac
+require_nonempty "$agent_name" "--agent"
 
-if [[ -z "$display_name" ]]; then
-  display_name="${agent_label}-$(date +%s)"
+cmd=(kocao agent start --repo "$repo_url" --agent "$agent_name")
+if [[ -n "$workspace_id" ]]; then
+  cmd+=(--workspace "$workspace_id")
 fi
-
-payload="$(jq -n --arg displayName "$display_name" --arg repoURL "$repo_url" '{displayName: $displayName, repoURL: $repoURL}')"
-api_request POST '/api/v1/workspace-sessions' "$payload"
-api_response_file="$API_RESPONSE_FILE"
-if ! api_request_ok; then
-  print_api_error "$API_RESPONSE_CODE" "$API_RESPONSE_FILE"
-  exit 1
+if [[ -n "$revision" ]]; then
+  cmd+=(--revision "$revision")
 fi
-
-session_id="$(jq -r '.id // empty' "$API_RESPONSE_FILE" 2>/dev/null)"
-if [[ -z "$session_id" ]]; then
-  echo 'error: create response did not include a session id' >&2
-  print_json_or_raw "$API_RESPONSE_FILE" >&2 || true
-  exit 1
+if [[ -n "$image" ]]; then
+  cmd+=(--image "$image")
 fi
-
-final_output="$API_RESPONSE_FILE"
-if [[ "$wait_for_running" == true ]]; then
-  elapsed=0
-  current_phase=""
-  while (( elapsed < wait_timeout )); do
-    status_json="$(kocao sessions status "$session_id" --json 2>/dev/null || true)"
-    current_phase="$(jq -r '.session.phase // empty' <<<"$status_json" 2>/dev/null || true)"
-    case "$current_phase" in
-      Running)
-        status_file="$(mktemp)"
-        printf '%s' "$status_json" > "$status_file"
-        final_output="$status_file"
-        # Track original file for cleanup before reassigning
-        _start_temp_files+=("$api_response_file")
-        api_response_file="$status_file"
-        break
-        ;;
-      Failed)
-        echo "error: session ${session_id} entered Failed phase" >&2
-        if [[ -n "$status_json" ]]; then
-          jq . <<<"$status_json" >&2 2>/dev/null || echo "$status_json" >&2
-        fi
-        exit 1
-        ;;
-    esac
-    sleep 3
-    elapsed=$((elapsed + 3))
-  done
-
-  if (( elapsed >= wait_timeout )) && [[ "$current_phase" != "Running" ]]; then
-    echo "warning: timed out waiting for session ${session_id} to reach Running (current: ${current_phase:-unknown})" >&2
-  fi
+if [[ -n "$image_pull_secret" ]]; then
+  cmd+=(--image-pull-secret "$image_pull_secret")
+fi
+if [[ -n "$egress_mode" ]]; then
+  cmd+=(--egress-mode "$egress_mode")
+fi
+if [[ -n "$timeout_duration" ]]; then
+  cmd+=(--timeout "$timeout_duration")
 fi
 
 if [[ "$quiet" == true ]]; then
-  echo "$session_id"
-else
-  print_json_or_raw "$final_output"
+  output="$("${cmd[@]}" --output json)" || exit $?
+  jq -r '.runId // .sessionId // empty' <<<"$output"
+  exit 0
 fi
+
+if [[ "$json_out" == true ]]; then
+  cmd+=(--output json)
+fi
+
+exec "${cmd[@]}"

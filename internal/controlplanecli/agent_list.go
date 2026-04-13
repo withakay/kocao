@@ -2,6 +2,7 @@ package controlplanecli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -77,6 +78,10 @@ func collectAgentSessions(ctx context.Context, client *Client, workspaceID strin
 	for _, ws := range workspaces {
 		sessions, err := client.ListAgentSessions(ctx, ws.ID)
 		if err != nil {
+			var apiErr *APIError
+			if errors.As(err, &apiErr) && apiErr.StatusCode == 404 {
+				continue
+			}
 			return nil, fmt.Errorf("list agent sessions for workspace %s: %w", ws.ID, err)
 		}
 		all = append(all, sessions...)

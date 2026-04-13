@@ -68,6 +68,9 @@ func (c *Client) GetAgentSession(ctx context.Context, runID string) (*AgentSessi
 	if err := c.doJSON(ctx, http.MethodGet, route, nil, nil, &out); err != nil {
 		return nil, err
 	}
+	if strings.TrimSpace(out.RunID) == "" {
+		out.RunID = id
+	}
 	return &out, nil
 }
 
@@ -81,6 +84,9 @@ func (c *Client) CreateAgentSession(ctx context.Context, runID string) (*AgentSe
 	var out AgentSession
 	if err := c.doJSON(ctx, http.MethodPost, route, nil, nil, &out); err != nil {
 		return nil, err
+	}
+	if strings.TrimSpace(out.RunID) == "" {
+		out.RunID = id
 	}
 	return &out, nil
 }

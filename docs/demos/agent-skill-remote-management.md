@@ -1,184 +1,83 @@
-# Demo: AI Assistant Managing Remote Sessions
+# Demo: AI Assistant Managing Remote Agents
 
-This demo shows an AI assistant using the `kocao-agent` skill to manage remote
-Kocao workspace sessions.
+This document shows how an AI assistant uses the `kocao-agent` skill to manage
+remote Kocao agent sessions. For real captured output, see the showboat demos in
+`demos/agent-cli-live-demo.md` and `demos/agent-cli-errors-demo.md`.
 
-## Prerequisites
+## Scene 1: Start a remote agent
 
-- Kocao cluster deployed and reachable
-- `kocao` CLI installed and configured (`KOCAO_API_URL`, `KOCAO_TOKEN`)
-- OpenCode with the `kocao-agent` skill loaded
+**User:** Start a remote codex agent for the kocao repo.
 
----
-
-## Scene 1: Start a remote session
-
-**User:** Start a remote session for the kocao repo and label it for codex work.
-
-**Assistant:** Creating a workspace session for the kocao repository.
+**Assistant:** Starting a remote agent using the `kocao agent start` wrapper.
 
 ```bash
 .opencode/skills/kocao-agent/scripts/agent-start.sh \
-    --repo https://github.com/withakay/kocao \
-    --agent codex
+  --repo https://github.com/withakay/kocao \
+  --agent codex \
+  --timeout 5m
 ```
 
-```json
-{
-  "session": {
-    "id": "ws-a1b2c3d4",
-    "displayName": "codex-1712937600",
-    "phase": "Running",
-    "repoURL": "https://github.com/withakay/kocao",
-    "createdAt": "2026-04-12T10:00:00Z"
-  },
-  "run": {
-    "id": "hr-e5f6g7h8",
-    "phase": "Running",
-    "podName": "harness-ws-a1b2c3d4-xk9m2"
-  }
-}
-```
+The wrapper returns JSON by default so the assistant can capture the `runId` for
+follow-up actions.
 
-**Assistant:** Session `ws-a1b2c3d4` is running. The `codex` label makes the
-session easy to identify, and the harness pod is ready.
-
----
-
-## Scene 2: Send a task to the session
+## Scene 2: Send a task to the agent
 
 **User:** Ask it to review the README and suggest improvements.
 
-**Assistant:** Sending the task through the exec endpoint.
+**Assistant:** Sending the task through `kocao agent exec`.
 
 ```bash
-.opencode/skills/kocao-agent/scripts/agent-exec.sh ws-a1b2c3d4 \
-    --prompt "Review the README.md file and suggest improvements for clarity, completeness, and developer experience."
+.opencode/skills/kocao-agent/scripts/agent-exec.sh <run-id> \
+  --prompt "Review README.md and suggest improvements for clarity and onboarding."
 ```
 
-```json
-{
-  "status": "sent",
-  "sessionId": "ws-a1b2c3d4"
-}
-```
-
-**Assistant:** Task sent to session `ws-a1b2c3d4`. If the control-plane did not
-support `/exec`, I would fall back to `kocao sessions attach ... --driver`.
-
----
-
-## Scene 3: Check session status
+## Scene 3: Check agent status
 
 **User:** How is it doing?
 
-**Assistant:** Checking the session status.
+**Assistant:** Checking the current agent session state.
 
 ```bash
-.opencode/skills/kocao-agent/scripts/agent-status.sh ws-a1b2c3d4
+.opencode/skills/kocao-agent/scripts/agent-status.sh <run-id>
 ```
-
-```json
-{
-  "session": {
-    "id": "ws-a1b2c3d4",
-    "displayName": "codex-1712937600",
-    "phase": "Running",
-    "repoURL": "https://github.com/withakay/kocao",
-    "createdAt": "2026-04-12T10:00:00Z"
-  },
-  "run": {
-    "id": "hr-e5f6g7h8",
-    "phase": "Running",
-    "podName": "harness-ws-a1b2c3d4-xk9m2"
-  }
-}
-```
-
-**Assistant:** The session is still active and the harness run is healthy.
-
----
 
 ## Scene 4: View logs
 
-**User:** Show me what it's been doing.
+**User:** Show me what it has been doing.
 
-**Assistant:** Fetching the last 50 log lines.
+**Assistant:** Fetching recent agent session events.
 
 ```bash
-.opencode/skills/kocao-agent/scripts/agent-logs.sh ws-a1b2c3d4 --tail 50 --no-json
+.opencode/skills/kocao-agent/scripts/agent-logs.sh <run-id> --tail 50 --no-json
 ```
 
-```text
-[agent] Cloned https://github.com/withakay/kocao (branch: main)
-[agent] Analyzing README.md...
-[agent] Found 3 areas for improvement:
-[agent]   1. Missing quickstart section
-[agent]   2. Installation instructions reference deprecated flag
-[agent]   3. API reference section is incomplete
-[agent] Generating suggestions...
-[agent] Task complete.
-```
+## Scene 5: List active agents
 
----
+**User:** What other remote agents are running?
 
-## Scene 5: List active sessions
-
-**User:** What other sessions are running?
-
-**Assistant:** Listing active sessions.
+**Assistant:** Listing active agent sessions.
 
 ```bash
 .opencode/skills/kocao-agent/scripts/agent-list.sh
 ```
 
-```json
-{
-  "workspaceSessions": [
-    {
-      "id": "ws-a1b2c3d4",
-      "displayName": "codex-1712937600",
-      "phase": "Running",
-      "createdAt": "2026-04-12T10:00:00Z"
-    },
-    {
-      "id": "ws-z9y8x7w6",
-      "displayName": "opencode-api-tests",
-      "phase": "Running",
-      "createdAt": "2026-04-12T09:30:00Z"
-    }
-  ]
-}
-```
+## Scene 6: Stop the agent
 
----
+**User:** That agent is done. Stop it.
 
-## Scene 6: Stop the session
-
-**User:** That session is done. Stop it.
-
-**Assistant:** Stopping the workspace session.
+**Assistant:** Stopping the agent session.
 
 ```bash
-.opencode/skills/kocao-agent/scripts/agent-stop.sh ws-a1b2c3d4
+.opencode/skills/kocao-agent/scripts/agent-stop.sh <run-id>
 ```
-
-```json
-{
-  "status": "stopped",
-  "sessionId": "ws-a1b2c3d4"
-}
-```
-
----
 
 ## Summary
 
-This demo covered the full lifecycle:
+This skill wraps the actual `kocao agent` commands so assistants can:
 
-1. create a remote workspace session
-2. send a task through the optional exec endpoint
-3. inspect session status
-4. review logs
-5. list active sessions
-6. stop the finished session
+1. start a remote agent run
+2. send a task through `kocao agent exec`
+3. inspect agent status
+4. review event logs
+5. list active agent sessions
+6. stop the finished agent run
