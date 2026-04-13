@@ -140,11 +140,17 @@ func (f *fakeAgentSessionTransport) PostACP(_ context.Context, _ string, _ strin
 	}
 }
 
-func (f *fakeAgentSessionTransport) StreamACP(_ context.Context, _ string, _ string) (io.ReadCloser, error) {
+func (f *fakeAgentSessionTransport) StreamACP(ctx context.Context, _ string, _ string) (io.ReadCloser, error) {
 	reader, writer := io.Pipe()
 	f.mu.Lock()
 	f.writer = writer
 	f.mu.Unlock()
+	// Close the writer when the context is cancelled so the reader unblocks,
+	// matching the behavior of a real HTTP response body.
+	go func() {
+		<-ctx.Done()
+		_ = writer.CloseWithError(ctx.Err())
+	}()
 	return reader, nil
 }
 
@@ -1429,10 +1435,11 @@ func keysOf[V any](m map[string]V) []string {
 	return keys
 }
 
-// TestAgentSessionWireFormat_StopDeleteBeforeStreamCancel verifies that the
-// Stop method sends the DELETE to the sandbox-agent before cancelling the SSE
-// stream, preventing the timeout that occurs when the stream is torn down first.
-func TestAgentSessionWireFormat_StopDeleteBeforeStreamCancel(t *testing.T) {
+// TestAgentSessionWireFormat_StopCancelsStreamThenDeletes verifies that the
+// Stop method cancels the SSE stream before sending DELETE to the sandbox-agent,
+// preventing the K8s pod proxy serialization timeout that occurs when DELETE is
+// sent while the SSE GET connection is still open.
+func TestAgentSessionWireFormat_StopCancelsStreamThenDeletes(t *testing.T) {
 	api, cleanup := newTestAPI(t)
 	defer cleanup()
 	transport := newFakeAgentSessionTransport()

@@ -159,6 +159,8 @@ type agentSessionBridge struct {
 	subscribers  map[chan agentSessionEvent]struct{}
 	streaming    bool
 	streamCancel context.CancelFunc
+	streamBody   io.Closer
+	streamDone   chan struct{}
 	promptSeq    atomic.Int64
 }
 
@@ -429,8 +431,11 @@ func (s *AgentSessionService) ensureStreaming(ctx context.Context, bridge *agent
 	serverID := bridge.serverID
 	streamCtx, cancel := context.WithCancel(s.serviceCtx)
 	bridge.streamCancel = cancel
+	done := make(chan struct{})
+	bridge.streamDone = done
 	bridge.mu.Unlock()
 	go func() {
+		defer close(done)
 		defer cancel()
 		stream, err := s.transport.StreamACP(streamCtx, podName, serverID)
 		if err != nil {
@@ -440,6 +445,9 @@ func (s *AgentSessionService) ensureStreaming(ctx context.Context, bridge *agent
 			bridge.mu.Unlock()
 			return
 		}
+		bridge.mu.Lock()
+		bridge.streamBody = stream
+		bridge.mu.Unlock()
 		defer func() { _ = stream.Close() }()
 		s.consumeSSE(stream, bridge)
 	}()
@@ -570,29 +578,42 @@ func (s *AgentSessionService) Stop(ctx context.Context, run *operatorv1alpha1.Ha
 	}
 	bridge.mu.Lock()
 	bridge.phase = operatorv1alpha1.AgentSessionPhaseStopping
+	cancelFn := bridge.streamCancel
+	doneCh := bridge.streamDone
 	bridge.mu.Unlock()
 	s.store.SaveState(bridge.snapshot())
 
-	// Send the DELETE to the sandbox-agent *before* tearing down the SSE
-	// stream. Cancelling the stream first can leave the pod proxy in a
-	// half-closed state that causes the DELETE to hang.
+	// Close the SSE stream body and cancel the context, then wait for the
+	// goroutine to finish. The sandbox-agent serializes requests per server
+	// ID, so DELETE blocks while the SSE GET connection is still open. We
+	// must fully close the TCP connection before sending DELETE.
+	bridge.mu.Lock()
+	streamBody := bridge.streamBody
+	bridge.mu.Unlock()
+	if streamBody != nil {
+		_ = streamBody.Close()
+	}
+	if cancelFn != nil {
+		cancelFn()
+	}
+	if doneCh != nil {
+		select {
+		case <-doneCh:
+		case <-time.After(5 * time.Second):
+		}
+	}
+
+	// Send DELETE to the sandbox-agent. If the K8s pod proxy connection is
+	// stale (common with HTTP/2 after closing a long-lived SSE stream), the
+	// DELETE may time out. In that case we still mark the session as
+	// completed since the stream is already closed and the pod will be
+	// cleaned up by the operator.
 	deleteCtx, deleteCancel := context.WithTimeout(ctx, 10*time.Second)
 	defer deleteCancel()
 	deleteErr := s.transport.DeleteACP(deleteCtx, run.Status.PodName, bridge.serverID)
 
-	// Now cancel the SSE stream regardless of whether the DELETE succeeded.
-	bridge.mu.Lock()
-	if bridge.streamCancel != nil {
-		bridge.streamCancel()
-	}
-	bridge.mu.Unlock()
-
 	if deleteErr != nil {
-		bridge.mu.Lock()
-		bridge.phase = operatorv1alpha1.AgentSessionPhaseFailed
-		bridge.mu.Unlock()
-		s.store.SaveState(bridge.snapshot())
-		return bridge.snapshot(), deleteErr
+		slog.Warn("agent session stop: DELETE failed (session still marked completed)", "run", run.Name, "error", deleteErr)
 	}
 	bridge.mu.Lock()
 	bridge.phase = operatorv1alpha1.AgentSessionPhaseCompleted
