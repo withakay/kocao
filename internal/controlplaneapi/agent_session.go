@@ -573,6 +573,12 @@ func (s *AgentSessionService) GetState(run *operatorv1alpha1.HarnessRun) agentSe
 // proxy / HTTP/2 timeout that commonly occurs after closing a long-lived SSE
 // stream. These are soft failures — the stream is already closed and the
 // operator will clean up the pod.
+//
+// The matcher is intentionally narrow: only errors that are clearly caused by
+// the TCP connection being torn down after the SSE stream close are tolerated.
+// Generic "stream error" or bare "http2:" prefixes are NOT matched because
+// they can indicate real transport failures (e.g. REFUSED_STREAM, GOAWAY with
+// an error code, or protocol violations) that should surface to the caller.
 func isStalePodProxyError(err error) bool {
 	if err == nil {
 		return false
@@ -581,9 +587,7 @@ func isStalePodProxyError(err error) bool {
 	return strings.Contains(msg, "context deadline exceeded") ||
 		strings.Contains(msg, "connection reset") ||
 		strings.Contains(msg, "broken pipe") ||
-		strings.Contains(msg, "use of closed network connection") ||
-		strings.Contains(msg, "stream error") ||
-		strings.Contains(msg, "http2:")
+		strings.Contains(msg, "use of closed network connection")
 }
 
 func (s *AgentSessionService) Stop(ctx context.Context, run *operatorv1alpha1.HarnessRun) (agentSessionState, error) {
@@ -684,8 +688,12 @@ func (a *API) updateHarnessRunAgentSessionStatus(ctx context.Context, run *opera
 // agentSessionDTO is the response shape returned by the status and stop
 // endpoints. It includes the fields the CLI/docs promise: workspaceSessionId,
 // createdAt, and displayName, in addition to the core session state.
+//
+// IMPORTANT: The primary identifier field is "runId" (not "harnessRunID") to
+// match the CLI AgentSession contract. The CLI must be able to unmarshal this
+// payload without client-side backfill.
 type agentSessionDTO struct {
-	HarnessRunID       string                             `json:"harnessRunID"`
+	RunID              string                             `json:"runId"`
 	PodName            string                             `json:"podName,omitempty"`
 	ServerID           string                             `json:"serverID,omitempty"`
 	Runtime            operatorv1alpha1.AgentRuntime      `json:"runtime,omitempty"`
@@ -700,7 +708,7 @@ type agentSessionDTO struct {
 
 func (a *API) agentSessionToDTO(ctx context.Context, run *operatorv1alpha1.HarnessRun, state agentSessionState) agentSessionDTO {
 	dto := agentSessionDTO{
-		HarnessRunID:       state.HarnessRunID,
+		RunID:              state.HarnessRunID,
 		PodName:            state.PodName,
 		ServerID:           state.ServerID,
 		Runtime:            state.Runtime,
@@ -918,6 +926,10 @@ func (a *API) handleRunAgentSessionStop(w http.ResponseWriter, r *http.Request, 
 	}
 	state, err := a.AgentSessions.Stop(r.Context(), run)
 	if err != nil {
+		// Best-effort: persist the failed state to the HarnessRun CRD so
+		// the operator and subsequent status queries reflect the failure,
+		// even though we are about to return a 502 to the caller.
+		a.updateHarnessRunAgentSessionStatus(r.Context(), run, state)
 		writeError(w, http.StatusBadGateway, err.Error())
 		return
 	}

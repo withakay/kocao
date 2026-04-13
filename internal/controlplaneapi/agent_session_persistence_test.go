@@ -103,12 +103,12 @@ func TestAgentSessionPersistenceAndResumeHistory_API_StoreBacked(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("get resumed agent session status = %d, want 200 (body=%s)", resp.StatusCode, string(b))
 	}
-	var resumedState agentSessionState
-	if err := json.Unmarshal(b, &resumedState); err != nil {
+	var resumedDTO agentSessionDTO
+	if err := json.Unmarshal(b, &resumedDTO); err != nil {
 		t.Fatalf("unmarshal resumed state: %v", err)
 	}
-	if resumedState.HarnessRunID != resumed.Name || resumedState.SessionID != "sas-123" {
-		t.Fatalf("unexpected resumed state: %+v", resumedState)
+	if resumedDTO.RunID != resumed.Name || resumedDTO.SessionID != "sas-123" {
+		t.Fatalf("unexpected resumed state: %+v", resumedDTO)
 	}
 
 	resp, b = doJSON(t, srv.Client(), http.MethodGet, srv.URL+"/api/v1/harness-runs/"+resumed.Name+"/agent-session/events?offset=0&limit=10", "full", nil)
