@@ -28,7 +28,7 @@ ______________________________________________________________________
 - **Done When**: Both `.git/zoekt/` and `.agents/skills/zoekt-search/bin/` patterns are present in `.gitignore`.
 - **Requirements**: zoekt-agent-skill:default-index-location, zoekt-agent-skill:install-script
 - **Updated At**: 2026-04-13
-- **Status**: [ ] pending
+- **Status**: [x] complete
 
 ### Task 1.2: Create `scripts/install-zoekt.sh` install script
 
@@ -39,7 +39,7 @@ ______________________________________________________________________
 - **Done When**: `scripts/install-zoekt.sh` downloads or builds zoekt binaries into the skill-local `bin/` directory, is idempotent, and handles all error cases (unsupported platform, network failure, missing Go toolchain).
 - **Requirements**: zoekt-agent-skill:install-script
 - **Updated At**: 2026-04-13
-- **Status**: [ ] pending
+- **Status**: [>] in-progress
 
 ______________________________________________________________________
 
