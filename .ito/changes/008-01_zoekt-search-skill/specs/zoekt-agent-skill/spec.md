@@ -33,9 +33,40 @@ The skill SHALL provide a structured workflow for when and how to use zoekt sear
 - **WHEN** the agent receives JSONL search results
 - **THEN** the skill provides guidance on interpreting fields (file path, line number, matched content, score) and how to use results for next steps
 
+### Requirement: Install Script
+
+The skill SHALL bundle a `scripts/install-zoekt.sh` script that manages zoekt binary installation. The script MUST detect the current platform (darwin/linux) and architecture (arm64/amd64). It MUST first attempt to download pre-built binaries from `github.com/sourcegraph/zoekt/releases`. If the download fails (no release for the platform, network error, checksum mismatch, etc.), the script MUST fall back to building from source via `go install github.com/sourcegraph/zoekt/cmd/zoekt-index@latest` and `go install github.com/sourcegraph/zoekt/cmd/zoekt@latest`. Binaries MUST be installed to the skill-local `bin/` directory (`.agents/skills/zoekt-search/bin/`), not to any system-wide location. The script MUST support darwin-arm64, darwin-amd64, linux-arm64, and linux-amd64. The script SHOULD be idempotent — skipping download if binaries already exist and are the correct version.
+
+- **Requirement ID**: zoekt-agent-skill:install-script
+
+#### Scenario: Download pre-built binaries on supported platform
+
+- **WHEN** `scripts/install-zoekt.sh` is run on darwin-arm64 and a matching release exists
+- **THEN** pre-built `zoekt-index` and `zoekt` binaries are downloaded and placed in `.agents/skills/zoekt-search/bin/`
+
+#### Scenario: Fall back to go install when download fails
+
+- **WHEN** `scripts/install-zoekt.sh` is run and the binary download fails (network error, no release for platform, etc.)
+- **THEN** the script runs `go install github.com/sourcegraph/zoekt/cmd/zoekt-index@latest` and `go install github.com/sourcegraph/zoekt/cmd/zoekt@latest`, then copies the resulting binaries to `.agents/skills/zoekt-search/bin/`
+
+#### Scenario: Skip install when correct version already exists
+
+- **WHEN** `scripts/install-zoekt.sh` is run and the correct version of both binaries already exists in `bin/`
+- **THEN** the script exits successfully without downloading or building
+
+#### Scenario: Unsupported platform
+
+- **WHEN** `scripts/install-zoekt.sh` is run on an unsupported platform (e.g., Windows, freebsd)
+- **THEN** the script exits with a non-zero status and prints an error listing supported platforms
+
+#### Scenario: No Go toolchain for fallback
+
+- **WHEN** binary download fails and `go` is not on PATH
+- **THEN** the script exits with a non-zero status and prints an error indicating that Go is required for building from source
+
 ### Requirement: Index Script
 
-The skill SHALL bundle a `scripts/zoekt-index.sh` wrapper script that invokes `zoekt-index` against the current working directory, storing the index at `.git/zoekt` by default. The script SHALL use filesystem-based indexing (not git-based) so that uncommitted edits are searchable. The script hides the zoekt `-index` flag behind a consistent `--index-dir` option.
+The skill SHALL bundle a `scripts/zoekt-index.sh` wrapper script that invokes `zoekt-index` against the current working directory, storing the index at `.git/zoekt` by default. The script SHALL use filesystem-based indexing (not git-based) so that uncommitted edits are searchable. The script hides the zoekt `-index` flag behind a consistent `--index-dir` option. The script MUST check the skill-local `bin/` directory first for the `zoekt-index` binary, then fall back to PATH, and if neither is found, MUST auto-trigger `scripts/install-zoekt.sh` before retrying.
 
 - **Requirement ID**: zoekt-agent-skill:index-script
 
@@ -54,14 +85,19 @@ The skill SHALL bundle a `scripts/zoekt-index.sh` wrapper script that invokes `z
 - **WHEN** `scripts/zoekt-index.sh --dir /some/path` is run
 - **THEN** `zoekt-index -index .git/zoekt /some/path` is executed, indexing the specified directory
 
-#### Scenario: zoekt-index binary not found
+#### Scenario: zoekt-index binary not found — auto-install
 
-- **WHEN** `scripts/zoekt-index.sh` is run and `zoekt-index` is not on PATH
-- **THEN** the script exits with a non-zero status and prints an error message indicating `zoekt-index` is not installed, with installation instructions
+- **WHEN** `scripts/zoekt-index.sh` is run and `zoekt-index` is not in the skill-local `bin/` directory or on PATH
+- **THEN** the script runs `scripts/install-zoekt.sh` automatically, then retries the index operation
+
+#### Scenario: Auto-install fails
+
+- **WHEN** `scripts/zoekt-index.sh` triggers `scripts/install-zoekt.sh` and the install fails
+- **THEN** the script exits with a non-zero status and prints the install error
 
 ### Requirement: Search Script
 
-The skill SHALL bundle a `scripts/zoekt-search.sh` wrapper script that invokes `zoekt` against the index at `.git/zoekt` by default, passing the query and outputting results in JSONL format. The script hides the zoekt `-index_dir` flag behind a consistent `--index-dir` option.
+The skill SHALL bundle a `scripts/zoekt-search.sh` wrapper script that invokes `zoekt` against the index at `.git/zoekt` by default, passing the query and outputting results in JSONL format. The script hides the zoekt `-index_dir` flag behind a consistent `--index-dir` option. The script MUST check the skill-local `bin/` directory first for the `zoekt` binary, then fall back to PATH, and if neither is found, MUST auto-trigger `scripts/install-zoekt.sh` before retrying.
 
 - **Requirement ID**: zoekt-agent-skill:search-script
 
@@ -85,10 +121,15 @@ The skill SHALL bundle a `scripts/zoekt-search.sh` wrapper script that invokes `
 - **WHEN** `scripts/zoekt-search.sh "query"` is run but `.git/zoekt` does not exist
 - **THEN** the script exits with a non-zero status and prints an error message suggesting the user run `scripts/zoekt-index.sh` first
 
-#### Scenario: zoekt binary not found
+#### Scenario: zoekt binary not found — auto-install
 
-- **WHEN** `scripts/zoekt-search.sh "query"` is run and `zoekt` is not on PATH
-- **THEN** the script exits with a non-zero status and prints an error message indicating `zoekt` is not installed, with installation instructions
+- **WHEN** `scripts/zoekt-search.sh "query"` is run and `zoekt` is not in the skill-local `bin/` directory or on PATH
+- **THEN** the script runs `scripts/install-zoekt.sh` automatically, then retries the search operation
+
+#### Scenario: Auto-install fails
+
+- **WHEN** `scripts/zoekt-search.sh` triggers `scripts/install-zoekt.sh` and the install fails
+- **THEN** the script exits with a non-zero status and prints the install error
 
 ### Requirement: Default Index Location
 

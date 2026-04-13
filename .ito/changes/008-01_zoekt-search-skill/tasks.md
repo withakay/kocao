@@ -19,25 +19,25 @@ ______________________________________________________________________
 
 - **Depends On**: None
 
-### Task 1.1: Install zoekt binaries and verify they work
-
-- **Files**: (none — external tooling install)
-- **Dependencies**: None
-- **Action**: Run `go install github.com/sourcegraph/zoekt/cmd/zoekt-index@latest` and `go install github.com/sourcegraph/zoekt/cmd/zoekt@latest`. Verify both binaries are on PATH and functional by indexing a small directory and running a test query.
-- **Verify**: `which zoekt-index && which zoekt && zoekt-index --help && zoekt --help`
-- **Done When**: `zoekt-index` and `zoekt` are installed, on PATH, and respond to `--help` without error.
-- **Requirements**: zoekt-agent-skill:index-script, zoekt-agent-skill:search-script
-- **Updated At**: 2026-04-13
-- **Status**: [ ] pending
-
-### Task 1.2: Add `.git/zoekt` to `.gitignore`
+### Task 1.1: Add `.git/zoekt` and skill `bin/` to `.gitignore`
 
 - **Files**: `.gitignore`
 - **Dependencies**: None
-- **Action**: Append `.git/zoekt/` to the project `.gitignore` so the zoekt index is never committed.
-- **Verify**: `grep -q '.git/zoekt' .gitignore`
-- **Done When**: `.git/zoekt/` pattern is present in `.gitignore`.
-- **Requirements**: zoekt-agent-skill:default-index-location
+- **Action**: Append `.git/zoekt/` and `.agents/skills/zoekt-search/bin/` to the project `.gitignore` so the zoekt index and skill-local binaries are never committed.
+- **Verify**: `grep -q '.git/zoekt' .gitignore && grep -q 'zoekt-search/bin' .gitignore`
+- **Done When**: Both `.git/zoekt/` and `.agents/skills/zoekt-search/bin/` patterns are present in `.gitignore`.
+- **Requirements**: zoekt-agent-skill:default-index-location, zoekt-agent-skill:install-script
+- **Updated At**: 2026-04-13
+- **Status**: [ ] pending
+
+### Task 1.2: Create `scripts/install-zoekt.sh` install script
+
+- **Files**: `.agents/skills/zoekt-search/scripts/install-zoekt.sh`
+- **Dependencies**: None
+- **Action**: Create the skill directory structure at `.agents/skills/zoekt-search/scripts/` and `.agents/skills/zoekt-search/bin/`. Write `install-zoekt.sh` that: (1) detects platform (darwin/linux) and architecture (arm64/amd64), (2) attempts to download pre-built `zoekt-index` and `zoekt` binaries from `github.com/sourcegraph/zoekt/releases` for the detected platform, (3) if download fails, falls back to `go install github.com/sourcegraph/zoekt/cmd/zoekt-index@latest` and `go install github.com/sourcegraph/zoekt/cmd/zoekt@latest` then copies binaries to `bin/`, (4) installs binaries to `.agents/skills/zoekt-search/bin/`, (5) is idempotent — skips if correct version already present, (6) supports darwin-arm64, darwin-amd64, linux-arm64, linux-amd64. Mark executable.
+- **Verify**: `bash .agents/skills/zoekt-search/scripts/install-zoekt.sh && ls .agents/skills/zoekt-search/bin/zoekt-index .agents/skills/zoekt-search/bin/zoekt`
+- **Done When**: `scripts/install-zoekt.sh` downloads or builds zoekt binaries into the skill-local `bin/` directory, is idempotent, and handles all error cases (unsupported platform, network failure, missing Go toolchain).
+- **Requirements**: zoekt-agent-skill:install-script
 - **Updated At**: 2026-04-13
 - **Status**: [ ] pending
 
@@ -47,14 +47,14 @@ ______________________________________________________________________
 
 - **Depends On**: Wave 1
 
-### Task 2.1: Create skill scaffold and `scripts/zoekt-index.sh` wrapper script
+### Task 2.1: Create `scripts/zoekt-index.sh` wrapper script
 
 - **Files**: `.agents/skills/zoekt-search/scripts/zoekt-index.sh`
 - **Dependencies**: None
-- **Action**: Create the skill directory structure at `.agents/skills/zoekt-search/scripts/`. Write `zoekt-index.sh` that shells out to `zoekt-index -index <index-dir> <target-dir>`, defaulting index-dir to `.git/zoekt` and target-dir to `.`. Support `--index-dir` and `--dir` flags. Handle missing binary and non-git-repo errors. Mark executable.
+- **Action**: Write `zoekt-index.sh` that: (1) checks `.agents/skills/zoekt-search/bin/zoekt-index` first, then falls back to `zoekt-index` on PATH, (2) if neither found, auto-triggers `scripts/install-zoekt.sh` then retries, (3) shells out to `zoekt-index -index <index-dir> <target-dir>`, defaulting index-dir to `.git/zoekt` and target-dir to `.`, (4) supports `--index-dir` and `--dir` flags, (5) handles non-git-repo and install-failure errors. Mark executable.
 - **Verify**: `bash .agents/skills/zoekt-search/scripts/zoekt-index.sh --help` (or run against a temp dir)
-- **Done When**: `scripts/zoekt-index.sh` invokes `zoekt-index` with correct flags, defaults to `.git/zoekt`, handles errors gracefully.
-- **Requirements**: zoekt-agent-skill:index-script, zoekt-agent-skill:default-index-location, zoekt-agent-skill:stable-agent-contract
+- **Done When**: `scripts/zoekt-index.sh` resolves the binary from skill-local `bin/` or PATH, auto-installs if needed, invokes `zoekt-index` with correct flags, defaults to `.git/zoekt`, handles errors gracefully.
+- **Requirements**: zoekt-agent-skill:index-script, zoekt-agent-skill:default-index-location, zoekt-agent-skill:stable-agent-contract, zoekt-agent-skill:install-script
 - **Updated At**: 2026-04-13
 - **Status**: [ ] pending
 
@@ -62,10 +62,10 @@ ______________________________________________________________________
 
 - **Files**: `.agents/skills/zoekt-search/scripts/zoekt-search.sh`
 - **Dependencies**: Task 2.1
-- **Action**: Write `zoekt-search.sh` that shells out to `zoekt -index_dir <index-dir> -jsonl <query>`, defaulting index-dir to `.git/zoekt`. Support `--index-dir` and `-n` (result limit) flags. Handle missing binary, missing index, and non-git-repo errors. Mark executable.
+- **Action**: Write `zoekt-search.sh` that: (1) checks `.agents/skills/zoekt-search/bin/zoekt` first, then falls back to `zoekt` on PATH, (2) if neither found, auto-triggers `scripts/install-zoekt.sh` then retries, (3) shells out to `zoekt -index_dir <index-dir> -jsonl <query>`, defaulting index-dir to `.git/zoekt`, (4) supports `--index-dir` and `-n` (result limit) flags, (5) handles missing index, non-git-repo, and install-failure errors. Mark executable.
 - **Verify**: `bash .agents/skills/zoekt-search/scripts/zoekt-search.sh "func main"` (after indexing)
-- **Done When**: `scripts/zoekt-search.sh <query>` invokes `zoekt` with correct flags, outputs JSONL, handles errors gracefully.
-- **Requirements**: zoekt-agent-skill:search-script, zoekt-agent-skill:default-index-location, zoekt-agent-skill:stable-agent-contract
+- **Done When**: `scripts/zoekt-search.sh <query>` resolves the binary from skill-local `bin/` or PATH, auto-installs if needed, invokes `zoekt` with correct flags, outputs JSONL, handles errors gracefully.
+- **Requirements**: zoekt-agent-skill:search-script, zoekt-agent-skill:default-index-location, zoekt-agent-skill:stable-agent-contract, zoekt-agent-skill:install-script
 - **Updated At**: 2026-04-13
 - **Status**: [ ] pending
 
