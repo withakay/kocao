@@ -1054,4 +1054,236 @@ func TestPodLogs_NoClientset_Returns503(t *testing.T) {
 	}
 }
 
+func TestWorkspaceAgentSessionsList_ReturnsSessionsFromHarnessRuns(t *testing.T) {
+	api, cleanup := newTestAPI(t)
+	defer cleanup()
+
+	transport := newFakeAgentSessionTransport()
+	api.AgentSessions = newAgentSessionService(transport, newAgentSessionStore(""))
+
+	if err := api.Tokens.Create(context.Background(), "t-full", "full", []string{
+		"workspace-session:write", "workspace-session:read",
+		"harness-run:write", "harness-run:read",
+	}); err != nil {
+		t.Fatalf("create token: %v", err)
+	}
+
+	srv := httptest.NewServer(api.Handler())
+	defer srv.Close()
+
+	// Create a workspace session.
+	resp, b := doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/workspace-sessions", "full", map[string]any{
+		"displayName": "test-ws",
+		"repoURL":     "https://example.com/repo",
+	})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create session status = %d (body=%s)", resp.StatusCode, string(b))
+	}
+	var sess sessionResponse
+	_ = json.Unmarshal(b, &sess)
+
+	// Create a harness run with an agent session.
+	resp, b = doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/workspace-sessions/"+sess.ID+"/harness-runs", "full", map[string]any{
+		"repoURL": "https://example.com/repo",
+		"image":   "alpine:3",
+		"agentSession": map[string]any{
+			"agent": "codex",
+		},
+	})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create run status = %d (body=%s)", resp.StatusCode, string(b))
+	}
+	var run runResponse
+	_ = json.Unmarshal(b, &run)
+
+	// Create a second harness run WITHOUT an agent session.
+	resp, b = doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/workspace-sessions/"+sess.ID+"/harness-runs", "full", map[string]any{
+		"repoURL": "https://example.com/repo",
+		"image":   "alpine:3",
+	})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create non-agent run status = %d (body=%s)", resp.StatusCode, string(b))
+	}
+
+	// GET /workspace-sessions/{id}/agent-sessions should return exactly one session.
+	resp, b = doJSON(t, srv.Client(), http.MethodGet, srv.URL+"/api/v1/workspace-sessions/"+sess.ID+"/agent-sessions", "full", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("list agent sessions status = %d (body=%s)", resp.StatusCode, string(b))
+	}
+
+	var payload struct {
+		AgentSessions []agentSessionListItem `json:"agentSessions"`
+	}
+	if err := json.Unmarshal(b, &payload); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(payload.AgentSessions) != 1 {
+		t.Fatalf("expected 1 agent session, got %d: %s", len(payload.AgentSessions), string(b))
+	}
+	as := payload.AgentSessions[0]
+	if as.RunID != run.ID {
+		t.Fatalf("runId = %q, want %q", as.RunID, run.ID)
+	}
+	if as.Agent != "codex" {
+		t.Fatalf("agent = %q, want codex", as.Agent)
+	}
+	if as.Runtime != "sandbox-agent" {
+		t.Fatalf("runtime = %q, want sandbox-agent", as.Runtime)
+	}
+	if as.WorkspaceID != sess.ID {
+		t.Fatalf("workspaceSessionId = %q, want %q", as.WorkspaceID, sess.ID)
+	}
+	if as.Phase != "Provisioning" {
+		t.Fatalf("phase = %q, want Provisioning", as.Phase)
+	}
+	if !strings.Contains(as.DisplayName, "test-ws") {
+		t.Fatalf("displayName = %q, expected to contain test-ws", as.DisplayName)
+	}
+}
+
+func TestWorkspaceAgentSessionsList_NotFound(t *testing.T) {
+	api, cleanup := newTestAPI(t)
+	defer cleanup()
+
+	if err := api.Tokens.Create(context.Background(), "t-full", "full", []string{"harness-run:read"}); err != nil {
+		t.Fatalf("create token: %v", err)
+	}
+
+	srv := httptest.NewServer(api.Handler())
+	defer srv.Close()
+
+	resp, _ := doJSON(t, srv.Client(), http.MethodGet, srv.URL+"/api/v1/workspace-sessions/nonexistent/agent-sessions", "full", nil)
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", resp.StatusCode)
+	}
+}
+
+func TestWorkspaceAgentSessionsList_EmptyWhenNoAgentRuns(t *testing.T) {
+	api, cleanup := newTestAPI(t)
+	defer cleanup()
+
+	if err := api.Tokens.Create(context.Background(), "t-full", "full", []string{
+		"workspace-session:write", "workspace-session:read",
+		"harness-run:write", "harness-run:read",
+	}); err != nil {
+		t.Fatalf("create token: %v", err)
+	}
+
+	srv := httptest.NewServer(api.Handler())
+	defer srv.Close()
+
+	// Create a workspace session.
+	resp, b := doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/workspace-sessions", "full", map[string]any{
+		"repoURL": "https://example.com/repo",
+	})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create session status = %d (body=%s)", resp.StatusCode, string(b))
+	}
+	var sess sessionResponse
+	_ = json.Unmarshal(b, &sess)
+
+	// Create a harness run WITHOUT an agent session.
+	resp, b = doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/workspace-sessions/"+sess.ID+"/harness-runs", "full", map[string]any{
+		"repoURL": "https://example.com/repo",
+		"image":   "alpine:3",
+	})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create run status = %d (body=%s)", resp.StatusCode, string(b))
+	}
+
+	// GET /workspace-sessions/{id}/agent-sessions should return empty list.
+	resp, b = doJSON(t, srv.Client(), http.MethodGet, srv.URL+"/api/v1/workspace-sessions/"+sess.ID+"/agent-sessions", "full", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("list agent sessions status = %d (body=%s)", resp.StatusCode, string(b))
+	}
+
+	var payload struct {
+		AgentSessions []agentSessionListItem `json:"agentSessions"`
+	}
+	if err := json.Unmarshal(b, &payload); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(payload.AgentSessions) != 0 {
+		t.Fatalf("expected 0 agent sessions, got %d", len(payload.AgentSessions))
+	}
+}
+
+func TestWorkspaceAgentSessionsList_WithLiveBridgeState(t *testing.T) {
+	api, cleanup := newTestAPI(t)
+	defer cleanup()
+
+	transport := newFakeAgentSessionTransport()
+	api.AgentSessions = newAgentSessionService(transport, newAgentSessionStore(""))
+
+	if err := api.Tokens.Create(context.Background(), "t-full", "full", []string{
+		"workspace-session:write", "workspace-session:read",
+		"harness-run:write", "harness-run:read",
+	}); err != nil {
+		t.Fatalf("create token: %v", err)
+	}
+
+	srv := httptest.NewServer(api.Handler())
+	defer srv.Close()
+
+	// Create workspace + run with agent session.
+	resp, b := doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/workspace-sessions", "full", map[string]any{
+		"repoURL": "https://example.com/repo",
+	})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create session status = %d (body=%s)", resp.StatusCode, string(b))
+	}
+	var sess sessionResponse
+	_ = json.Unmarshal(b, &sess)
+
+	resp, b = doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/workspace-sessions/"+sess.ID+"/harness-runs", "full", map[string]any{
+		"repoURL":      "https://example.com/repo",
+		"image":        "alpine:3",
+		"agentSession": map[string]any{"agent": "codex"},
+	})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create run status = %d (body=%s)", resp.StatusCode, string(b))
+	}
+	var run runResponse
+	_ = json.Unmarshal(b, &run)
+
+	// Simulate the pod being ready and create an agent session via the API.
+	var stored operatorv1alpha1.HarnessRun
+	if err := api.K8s.Get(context.Background(), client.ObjectKey{Namespace: api.Namespace, Name: run.ID}, &stored); err != nil {
+		t.Fatalf("get run: %v", err)
+	}
+	stored.Status.PodName = "pod-test"
+	stored.Status.Phase = operatorv1alpha1.HarnessRunPhaseRunning
+	if err := api.K8s.Status().Update(context.Background(), &stored); err != nil {
+		t.Fatalf("update run status: %v", err)
+	}
+
+	resp, b = doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/harness-runs/"+run.ID+"/agent-session", "full", nil)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create agent session status = %d (body=%s)", resp.StatusCode, string(b))
+	}
+
+	// Now list agent sessions — should show the live bridge state with sessionId.
+	resp, b = doJSON(t, srv.Client(), http.MethodGet, srv.URL+"/api/v1/workspace-sessions/"+sess.ID+"/agent-sessions", "full", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("list agent sessions status = %d (body=%s)", resp.StatusCode, string(b))
+	}
+
+	var payload struct {
+		AgentSessions []agentSessionListItem `json:"agentSessions"`
+	}
+	if err := json.Unmarshal(b, &payload); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(payload.AgentSessions) != 1 {
+		t.Fatalf("expected 1 agent session, got %d", len(payload.AgentSessions))
+	}
+	as := payload.AgentSessions[0]
+	if as.SessionID != "sas-123" {
+		t.Fatalf("sessionId = %q, want sas-123", as.SessionID)
+	}
+	if as.Phase != "Ready" {
+		t.Fatalf("phase = %q, want Ready", as.Phase)
+	}
+}
+
 func int32Ptr(v int32) *int32 { return &v }

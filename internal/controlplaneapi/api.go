@@ -113,6 +113,17 @@ func (a *API) serveAPI(w http.ResponseWriter, r *http.Request) {
 	case len(segs) == 2 && segs[0] == "workspace-sessions":
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
+	case len(segs) == 3 && segs[0] == "workspace-sessions" && segs[2] == "agent-sessions" && r.Method == http.MethodGet:
+		workspaceSessionID := segs[1]
+		a.serveAuthz(w, r, []string{"harness-run:read"}, func(_ *http.Request) (string, string, string) {
+			return "agent-session.list", "workspace-session", workspaceSessionID
+		}, func(w http.ResponseWriter, r *http.Request) {
+			a.handleWorkspaceAgentSessionsList(w, r, workspaceSessionID)
+		})
+		return
+	case len(segs) == 3 && segs[0] == "workspace-sessions" && segs[2] == "agent-sessions":
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
 	case len(segs) == 3 && segs[0] == "workspace-sessions" && segs[2] == "harness-runs" && r.Method == http.MethodPost:
 		workspaceSessionID := segs[1]
 		a.serveAuthz(w, r, []string{"harness-run:write"}, func(_ *http.Request) (string, string, string) {
@@ -440,6 +451,95 @@ func (a *API) handleSessionDelete(w http.ResponseWriter, r *http.Request, id str
 	writeJSON(w, http.StatusOK, map[string]any{"deleted": true})
 }
 
+// agentSessionListItem is the per-session JSON shape returned by the
+// workspace-level agent-sessions list endpoint.
+type agentSessionListItem struct {
+	SessionID   string `json:"sessionId"`
+	RunID       string `json:"runId"`
+	DisplayName string `json:"displayName,omitempty"`
+	Runtime     string `json:"runtime,omitempty"`
+	Agent       string `json:"agent,omitempty"`
+	Phase       string `json:"phase,omitempty"`
+	WorkspaceID string `json:"workspaceSessionId,omitempty"`
+	CreatedAt   string `json:"createdAt,omitempty"`
+}
+
+// handleWorkspaceAgentSessionsList returns all agent sessions associated with
+// harness runs that belong to the given workspace session. This is the endpoint
+// that `kocao agent list` calls for each workspace.
+func (a *API) handleWorkspaceAgentSessionsList(w http.ResponseWriter, r *http.Request, workspaceSessionID string) {
+	// Verify the workspace session exists.
+	var sess operatorv1alpha1.Session
+	if err := a.K8s.Get(r.Context(), client.ObjectKey{Namespace: a.Namespace, Name: workspaceSessionID}, &sess); err != nil {
+		if apierrors.IsNotFound(err) {
+			writeError(w, http.StatusNotFound, "workspace session not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "get workspace session failed")
+		return
+	}
+
+	// List harness runs belonging to this workspace session.
+	var runs operatorv1alpha1.HarnessRunList
+	if err := a.K8s.List(r.Context(), &runs, client.InNamespace(a.Namespace), client.MatchingLabels{controllers.LabelWorkspaceSessionName: workspaceSessionID}); err != nil {
+		writeError(w, http.StatusInternalServerError, "list harness runs failed")
+		return
+	}
+
+	out := make([]agentSessionListItem, 0, len(runs.Items))
+	for i := range runs.Items {
+		run := &runs.Items[i]
+		if run.Spec.AgentSession == nil || !run.Spec.AgentSession.Enabled() {
+			continue
+		}
+
+		item := agentSessionListItem{
+			RunID:       run.Name,
+			WorkspaceID: workspaceSessionID,
+		}
+
+		// Prefer live bridge state from AgentSessionService when available.
+		if a.AgentSessions != nil {
+			state := a.AgentSessions.GetState(run)
+			if state.SessionID != "" || state.Phase != "" {
+				item.SessionID = state.SessionID
+				item.Runtime = string(state.Runtime)
+				item.Agent = string(state.Agent)
+				item.Phase = string(state.Phase)
+			}
+		}
+
+		// Fall back to CRD status if the service didn't provide data.
+		if item.SessionID == "" && run.Status.AgentSession != nil {
+			item.SessionID = run.Status.AgentSession.SessionID
+			item.Phase = string(run.Status.AgentSession.Phase)
+		}
+		if item.Runtime == "" && run.Spec.AgentSession != nil {
+			item.Runtime = string(run.Spec.AgentSession.Runtime)
+		}
+		if item.Agent == "" && run.Spec.AgentSession != nil {
+			item.Agent = string(run.Spec.AgentSession.Agent)
+		}
+
+		// Build a display name from the session display name + run suffix.
+		suffix := run.Name
+		if len(suffix) > 5 {
+			suffix = suffix[len(suffix)-5:]
+		}
+		if sess.Spec.DisplayName != "" {
+			item.DisplayName = sess.Spec.DisplayName + "-" + suffix
+		}
+
+		if !run.CreationTimestamp.IsZero() {
+			item.CreatedAt = run.CreationTimestamp.Time.UTC().Format(time.RFC3339)
+		}
+
+		out = append(out, item)
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{"agentSessions": out})
+}
+
 type runCreateRequest struct {
 	RepoURL                 string                             `json:"repoURL"`
 	RepoRevision            string                             `json:"repoRevision,omitempty"`
@@ -621,8 +721,12 @@ func (a *API) handleSessionRunsCreate(w http.ResponseWriter, r *http.Request, wo
 		}
 	}
 	run := &operatorv1alpha1.HarnessRun{
-		TypeMeta:   metav1.TypeMeta{APIVersion: operatorv1alpha1.GroupVersion.String(), Kind: "HarnessRun"},
-		ObjectMeta: metav1.ObjectMeta{Name: id, Namespace: a.Namespace},
+		TypeMeta: metav1.TypeMeta{APIVersion: operatorv1alpha1.GroupVersion.String(), Kind: "HarnessRun"},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      id,
+			Namespace: a.Namespace,
+			Labels:    map[string]string{controllers.LabelWorkspaceSessionName: workspaceSessionID},
+		},
 		Spec: operatorv1alpha1.HarnessRunSpec{
 			WorkspaceSessionName: workspaceSessionID,
 			RepoURL:              req.RepoURL,
