@@ -48,3 +48,4 @@ web/naming-check.yaml
 !.ito/.state/audit/
 .ito/config.local.json
 .local/ito/config.json
+kocao
