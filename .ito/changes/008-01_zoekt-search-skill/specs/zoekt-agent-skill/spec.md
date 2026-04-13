@@ -10,7 +10,7 @@ The zoekt search skill SHALL be loaded when an agent needs to find code patterns
 #### Scenario: Agent needs structural code search
 
 - **WHEN** an agent is asked to find all implementations of an interface, usages of a function, or files matching a code pattern
-- **THEN** the skill is loaded and the agent uses `agent-zoekt search` instead of sequential grep/glob
+- **THEN** the skill is loaded and the agent uses `scripts/zoekt-search.sh` instead of sequential grep/glob
 
 #### Scenario: Agent explores unfamiliar codebase area
 
@@ -33,6 +33,90 @@ The skill SHALL provide a structured workflow for when and how to use zoekt sear
 - **WHEN** the agent receives JSONL search results
 - **THEN** the skill provides guidance on interpreting fields (file path, line number, matched content, score) and how to use results for next steps
 
+### Requirement: Index Script
+
+The skill SHALL bundle a `scripts/zoekt-index.sh` wrapper script that invokes `zoekt-index` against the current working directory, storing the index at `.git/zoekt` by default. The script SHALL use filesystem-based indexing (not git-based) so that uncommitted edits are searchable. The script hides the zoekt `-index` flag behind a consistent `--index-dir` option.
+
+- **Requirement ID**: zoekt-agent-skill:index-script
+
+#### Scenario: Index the current repository
+
+- **WHEN** `scripts/zoekt-index.sh` is run in a git repository without arguments
+- **THEN** `zoekt-index -index .git/zoekt .` is executed and the index is written to `.git/zoekt/`
+
+#### Scenario: Index with custom path
+
+- **WHEN** `scripts/zoekt-index.sh --index-dir /tmp/myindex` is run
+- **THEN** `zoekt-index -index /tmp/myindex .` is executed and the index is written to the specified directory
+
+#### Scenario: Index target directory
+
+- **WHEN** `scripts/zoekt-index.sh --dir /some/path` is run
+- **THEN** `zoekt-index -index .git/zoekt /some/path` is executed, indexing the specified directory
+
+#### Scenario: zoekt-index binary not found
+
+- **WHEN** `scripts/zoekt-index.sh` is run and `zoekt-index` is not on PATH
+- **THEN** the script exits with a non-zero status and prints an error message indicating `zoekt-index` is not installed, with installation instructions
+
+### Requirement: Search Script
+
+The skill SHALL bundle a `scripts/zoekt-search.sh` wrapper script that invokes `zoekt` against the index at `.git/zoekt` by default, passing the query and outputting results in JSONL format. The script hides the zoekt `-index_dir` flag behind a consistent `--index-dir` option.
+
+- **Requirement ID**: zoekt-agent-skill:search-script
+
+#### Scenario: Search with default index
+
+- **WHEN** `scripts/zoekt-search.sh "func main"` is run in a git repository
+- **THEN** `zoekt -index_dir .git/zoekt -jsonl "func main"` is executed and JSONL results are printed to stdout
+
+#### Scenario: Search with custom index directory
+
+- **WHEN** `scripts/zoekt-search.sh --index-dir /tmp/myindex "func main"` is run
+- **THEN** `zoekt -index_dir /tmp/myindex -jsonl "func main"` is executed
+
+#### Scenario: Search with result limit
+
+- **WHEN** `scripts/zoekt-search.sh -n 20 "pattern"` is run
+- **THEN** the search returns at most 20 results
+
+#### Scenario: No index exists
+
+- **WHEN** `scripts/zoekt-search.sh "query"` is run but `.git/zoekt` does not exist
+- **THEN** the script exits with a non-zero status and prints an error message suggesting the user run `scripts/zoekt-index.sh` first
+
+#### Scenario: zoekt binary not found
+
+- **WHEN** `scripts/zoekt-search.sh "query"` is run and `zoekt` is not on PATH
+- **THEN** the script exits with a non-zero status and prints an error message indicating `zoekt` is not installed, with installation instructions
+
+### Requirement: Default Index Location
+
+The default index location SHALL be `.git/zoekt` relative to the repository root. This location is inside `.git/` so `zoekt-index` automatically ignores it (avoiding recursive indexing) and it is not tracked by git.
+
+- **Requirement ID**: zoekt-agent-skill:default-index-location
+
+#### Scenario: Default index resolves to .git/zoekt
+
+- **WHEN** `scripts/zoekt-index.sh` or `scripts/zoekt-search.sh` is run without `--index-dir`
+- **THEN** the script uses `.git/zoekt` relative to the nearest git root as the index directory
+
+#### Scenario: Not in a git repository
+
+- **WHEN** a script is run outside a git repository without `--index-dir`
+- **THEN** the script exits with a non-zero status and prints an error indicating it must be run inside a git repository or with an explicit `--index-dir`
+
+### Requirement: Stable Agent Contract
+
+The bundled scripts SHALL provide a stable contract that abstracts over zoekt flag naming inconsistencies. Agents SHALL only need to know `scripts/zoekt-index.sh` and `scripts/zoekt-search.sh <query>` without understanding zoekt's internal flag conventions.
+
+- **Requirement ID**: zoekt-agent-skill:stable-agent-contract
+
+#### Scenario: Flag names are consistent
+
+- **WHEN** an agent uses `--index-dir` with either the index or search script
+- **THEN** the flag is accepted by both scripts and maps to the correct underlying zoekt flag (`-index` for `zoekt-index`, `-index_dir` for `zoekt`)
+
 ### Requirement: Index Freshness Awareness
 
 The skill SHALL inform agents that the index may be stale if files have been edited since the last indexing run, and SHALL provide guidance on when to re-index.
@@ -42,7 +126,7 @@ The skill SHALL inform agents that the index may be stale if files have been edi
 #### Scenario: Agent is warned about potential staleness
 
 - **WHEN** the skill is loaded and the agent is about to search
-- **THEN** the skill notes that results reflect the last index time and suggests running `agent-zoekt index` if recent edits may not be captured
+- **THEN** the skill notes that results reflect the last index time and suggests running `scripts/zoekt-index.sh` if recent edits may not be captured
 
 ### Requirement: Cross-Tool Portability
 
