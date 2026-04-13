@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestAgentStop_Success(t *testing.T) {
@@ -148,5 +149,47 @@ func TestAgentStop_AlreadyStopped(t *testing.T) {
 	errOut := stderr.String()
 	if !strings.Contains(errOut, "already stopped") {
 		t.Errorf("expected 'already stopped' in stderr, got:\n%s", errOut)
+	}
+}
+
+// TestAgentStop_SlowServer verifies that the stop command does not hang
+// indefinitely when the server is slow to respond. The CLI should use a
+// bounded context timeout.
+func TestAgentStop_SlowServer(t *testing.T) {
+	t.Setenv(EnvToken, "")
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Simulate a slow server that takes longer than the client timeout.
+		// The test uses a 1s timeout, so sleeping 5s should trigger it.
+		select {
+		case <-r.Context().Done():
+			return
+		case <-time.After(5 * time.Second):
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	done := make(chan int, 1)
+	go func() {
+		var stdout bytes.Buffer
+		var stderr bytes.Buffer
+		code := Main([]string{
+			"--api-url", srv.URL,
+			"--token", "test-token",
+			"--timeout", "1s",
+			"agent", "stop", "run-slow",
+		}, &stdout, &stderr)
+		done <- code
+	}()
+
+	select {
+	case code := <-done:
+		// The stop command should fail (non-zero) due to timeout, not hang.
+		if code == 0 {
+			t.Fatal("expected non-zero exit code for timed-out stop")
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("stop command hung despite timeout - context timeout not applied")
 	}
 }

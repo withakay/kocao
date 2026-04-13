@@ -128,9 +128,9 @@ func (t *podProxyAgentSessionTransport) DeleteACP(ctx context.Context, podName, 
 }
 
 type agentSessionEvent struct {
-	Sequence int64           `json:"sequence"`
-	At       time.Time       `json:"at"`
-	Envelope json.RawMessage `json:"envelope"`
+	Sequence int64           `json:"seq"`
+	At       time.Time       `json:"timestamp"`
+	Envelope json.RawMessage `json:"data"`
 }
 
 type agentSessionState struct {
@@ -570,17 +570,29 @@ func (s *AgentSessionService) Stop(ctx context.Context, run *operatorv1alpha1.Ha
 	}
 	bridge.mu.Lock()
 	bridge.phase = operatorv1alpha1.AgentSessionPhaseStopping
+	bridge.mu.Unlock()
+	s.store.SaveState(bridge.snapshot())
+
+	// Send the DELETE to the sandbox-agent *before* tearing down the SSE
+	// stream. Cancelling the stream first can leave the pod proxy in a
+	// half-closed state that causes the DELETE to hang.
+	deleteCtx, deleteCancel := context.WithTimeout(ctx, 10*time.Second)
+	defer deleteCancel()
+	deleteErr := s.transport.DeleteACP(deleteCtx, run.Status.PodName, bridge.serverID)
+
+	// Now cancel the SSE stream regardless of whether the DELETE succeeded.
+	bridge.mu.Lock()
 	if bridge.streamCancel != nil {
 		bridge.streamCancel()
 	}
 	bridge.mu.Unlock()
-	s.store.SaveState(bridge.snapshot())
-	if err := s.transport.DeleteACP(ctx, run.Status.PodName, bridge.serverID); err != nil {
+
+	if deleteErr != nil {
 		bridge.mu.Lock()
 		bridge.phase = operatorv1alpha1.AgentSessionPhaseFailed
 		bridge.mu.Unlock()
 		s.store.SaveState(bridge.snapshot())
-		return bridge.snapshot(), err
+		return bridge.snapshot(), deleteErr
 	}
 	bridge.mu.Lock()
 	bridge.phase = operatorv1alpha1.AgentSessionPhaseCompleted
@@ -691,7 +703,19 @@ func (a *API) handleRunAgentSessionPrompt(w http.ResponseWriter, r *http.Request
 	}
 	a.updateHarnessRunAgentSessionStatus(r.Context(), run, state)
 	a.Audit.Append(r.Context(), principal(r.Context()), "agent-session.prompt", "harness-run", id, "allowed", map[string]any{"sessionId": state.SessionID})
-	writeJSON(w, http.StatusOK, map[string]any{"session": state, "result": json.RawMessage(result)})
+
+	// Build an event from the prompt result so the CLI receives a uniform
+	// {events: [...]} envelope it can display immediately.
+	promptEvent := agentSessionEvent{
+		Sequence: state.LastSequence + 1,
+		At:       time.Now().UTC(),
+		Envelope: json.RawMessage(result),
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"session": state,
+		"result":  json.RawMessage(result),
+		"events":  []agentSessionEvent{promptEvent},
+	})
 }
 
 func (a *API) handleRunAgentSessionEvents(w http.ResponseWriter, r *http.Request, id string) {

@@ -1287,3 +1287,222 @@ func TestWorkspaceAgentSessionsList_WithLiveBridgeState(t *testing.T) {
 }
 
 func int32Ptr(v int32) *int32 { return &v }
+
+// TestAgentSessionWireFormat_EventFieldNames verifies that the events endpoint
+// returns JSON with field names that match the CLI's AgentSessionEvent struct
+// (seq, timestamp, data) rather than the old internal names (sequence, at, envelope).
+func TestAgentSessionWireFormat_EventFieldNames(t *testing.T) {
+	api, cleanup := newTestAPI(t)
+	defer cleanup()
+	transport := newFakeAgentSessionTransport()
+	api.AgentSessions = newAgentSessionService(transport, newAgentSessionStore(""))
+
+	if err := api.Tokens.Create(context.Background(), "t-full", "full", []string{"harness-run:write", "harness-run:read"}); err != nil {
+		t.Fatalf("create token: %v", err)
+	}
+
+	run := &operatorv1alpha1.HarnessRun{
+		TypeMeta:   metav1.TypeMeta{APIVersion: operatorv1alpha1.GroupVersion.String(), Kind: "HarnessRun"},
+		ObjectMeta: metav1.ObjectMeta{Name: "run-wire", Namespace: api.Namespace},
+		Spec: operatorv1alpha1.HarnessRunSpec{
+			RepoURL:    "https://example.com/repo",
+			Image:      "kocao/harness-runtime:dev",
+			WorkingDir: "/workspace/repo",
+			AgentSession: &operatorv1alpha1.AgentSessionSpec{
+				Runtime: operatorv1alpha1.AgentRuntimeSandboxAgent,
+				Agent:   operatorv1alpha1.AgentKindClaude,
+			},
+		},
+	}
+	if err := api.K8s.Create(context.Background(), run); err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	var stored operatorv1alpha1.HarnessRun
+	if err := api.K8s.Get(context.Background(), client.ObjectKeyFromObject(run), &stored); err != nil {
+		t.Fatalf("get run: %v", err)
+	}
+	stored.Status.PodName = "pod-wire"
+	stored.Status.Phase = operatorv1alpha1.HarnessRunPhaseRunning
+	if err := api.K8s.Status().Update(context.Background(), &stored); err != nil {
+		t.Fatalf("update run status: %v", err)
+	}
+
+	srv := httptest.NewServer(api.Handler())
+	defer srv.Close()
+
+	// Create agent session
+	resp, b := doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/harness-runs/"+run.Name+"/agent-session", "full", nil)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create session status = %d (body=%s)", resp.StatusCode, string(b))
+	}
+
+	// Wait for stream writer to be established
+	transport.waitWriter(t, 5*time.Second)
+
+	// Send prompt
+	resp, b = doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/harness-runs/"+run.Name+"/agent-session/prompt", "full", map[string]any{"prompt": "wire format test"})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("prompt status = %d (body=%s)", resp.StatusCode, string(b))
+	}
+
+	// Verify prompt response contains events array with CLI-compatible field names
+	var promptPayload map[string]json.RawMessage
+	if err := json.Unmarshal(b, &promptPayload); err != nil {
+		t.Fatalf("unmarshal prompt response: %v", err)
+	}
+	if _, ok := promptPayload["events"]; !ok {
+		t.Fatalf("prompt response missing 'events' key; keys: %v", keysOf(promptPayload))
+	}
+
+	// Verify the events use CLI-compatible field names (seq, timestamp, data)
+	var events []map[string]json.RawMessage
+	if err := json.Unmarshal(promptPayload["events"], &events); err != nil {
+		t.Fatalf("unmarshal events: %v", err)
+	}
+	if len(events) == 0 {
+		t.Fatal("expected at least one event in prompt response")
+	}
+	for _, ev := range events {
+		if _, ok := ev["seq"]; !ok {
+			t.Fatalf("event missing 'seq' field; keys: %v", keysOf(ev))
+		}
+		if _, ok := ev["timestamp"]; !ok {
+			t.Fatalf("event missing 'timestamp' field; keys: %v", keysOf(ev))
+		}
+		if _, ok := ev["data"]; !ok {
+			t.Fatalf("event missing 'data' field; keys: %v", keysOf(ev))
+		}
+		// Verify old field names are NOT present
+		if _, ok := ev["sequence"]; ok {
+			t.Fatal("event should not have old 'sequence' field")
+		}
+		if _, ok := ev["at"]; ok {
+			t.Fatal("event should not have old 'at' field")
+		}
+		if _, ok := ev["envelope"]; ok {
+			t.Fatal("event should not have old 'envelope' field")
+		}
+	}
+
+	// Wait for SSE events to propagate to the store
+	var eventsPayload struct {
+		Events []json.RawMessage `json:"events"`
+	}
+	for i := 0; i < 20; i++ {
+		resp, b = doJSON(t, srv.Client(), http.MethodGet, srv.URL+"/api/v1/harness-runs/"+run.Name+"/agent-session/events?offset=0&limit=10", "full", nil)
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("events status = %d (body=%s)", resp.StatusCode, string(b))
+		}
+		_ = json.Unmarshal(b, &eventsPayload)
+		if len(eventsPayload.Events) >= 1 {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if len(eventsPayload.Events) == 0 {
+		t.Fatal("expected at least one event from events endpoint")
+	}
+
+	// Verify events endpoint also uses CLI-compatible field names
+	for _, raw := range eventsPayload.Events {
+		var ev map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &ev); err != nil {
+			t.Fatalf("unmarshal event: %v", err)
+		}
+		if _, ok := ev["seq"]; !ok {
+			t.Fatalf("events endpoint: event missing 'seq' field; keys: %v", keysOf(ev))
+		}
+		if _, ok := ev["timestamp"]; !ok {
+			t.Fatalf("events endpoint: event missing 'timestamp' field; keys: %v", keysOf(ev))
+		}
+		if _, ok := ev["data"]; !ok {
+			t.Fatalf("events endpoint: event missing 'data' field; keys: %v", keysOf(ev))
+		}
+	}
+}
+
+func keysOf[V any](m map[string]V) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	return keys
+}
+
+// TestAgentSessionWireFormat_StopDeleteBeforeStreamCancel verifies that the
+// Stop method sends the DELETE to the sandbox-agent before cancelling the SSE
+// stream, preventing the timeout that occurs when the stream is torn down first.
+func TestAgentSessionWireFormat_StopDeleteBeforeStreamCancel(t *testing.T) {
+	api, cleanup := newTestAPI(t)
+	defer cleanup()
+	transport := newFakeAgentSessionTransport()
+	api.AgentSessions = newAgentSessionService(transport, newAgentSessionStore(""))
+
+	if err := api.Tokens.Create(context.Background(), "t-full", "full", []string{"harness-run:write", "harness-run:read"}); err != nil {
+		t.Fatalf("create token: %v", err)
+	}
+
+	run := &operatorv1alpha1.HarnessRun{
+		TypeMeta:   metav1.TypeMeta{APIVersion: operatorv1alpha1.GroupVersion.String(), Kind: "HarnessRun"},
+		ObjectMeta: metav1.ObjectMeta{Name: "run-stop-order", Namespace: api.Namespace},
+		Spec: operatorv1alpha1.HarnessRunSpec{
+			RepoURL:    "https://example.com/repo",
+			Image:      "kocao/harness-runtime:dev",
+			WorkingDir: "/workspace/repo",
+			AgentSession: &operatorv1alpha1.AgentSessionSpec{
+				Runtime: operatorv1alpha1.AgentRuntimeSandboxAgent,
+				Agent:   operatorv1alpha1.AgentKindClaude,
+			},
+		},
+	}
+	if err := api.K8s.Create(context.Background(), run); err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	var stored operatorv1alpha1.HarnessRun
+	if err := api.K8s.Get(context.Background(), client.ObjectKeyFromObject(run), &stored); err != nil {
+		t.Fatalf("get run: %v", err)
+	}
+	stored.Status.PodName = "pod-stop"
+	stored.Status.Phase = operatorv1alpha1.HarnessRunPhaseRunning
+	if err := api.K8s.Status().Update(context.Background(), &stored); err != nil {
+		t.Fatalf("update run status: %v", err)
+	}
+
+	srv := httptest.NewServer(api.Handler())
+	defer srv.Close()
+
+	// Create session
+	resp, b := doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/harness-runs/"+run.Name+"/agent-session", "full", nil)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create session status = %d (body=%s)", resp.StatusCode, string(b))
+	}
+
+	// Wait for stream to be established
+	transport.waitWriter(t, 5*time.Second)
+
+	// Stop should complete within a reasonable time (not hang)
+	stopDone := make(chan struct{})
+	go func() {
+		resp, b = doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/harness-runs/"+run.Name+"/agent-session/stop", "full", nil)
+		close(stopDone)
+	}()
+
+	select {
+	case <-stopDone:
+		// Good - stop completed
+	case <-time.After(5 * time.Second):
+		t.Fatal("stop timed out - DELETE may be blocked by stream cancellation")
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("stop status = %d (body=%s)", resp.StatusCode, string(b))
+	}
+
+	// Verify the transport's delete was called
+	transport.mu.Lock()
+	deleted := transport.deleted
+	transport.mu.Unlock()
+	if !deleted {
+		t.Fatal("expected DeleteACP to be called")
+	}
+}

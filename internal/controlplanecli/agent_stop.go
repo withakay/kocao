@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"time"
 )
 
 func runAgentStopCommand(args []string, cfg Config, stdout io.Writer, stderr io.Writer) error {
@@ -27,7 +28,15 @@ func runAgentStopCommand(args []string, cfg Config, stdout io.Writer, stderr io.
 		return err
 	}
 
-	ctx := context.Background()
+	// Use a bounded context so the stop call does not hang indefinitely
+	// when the sandbox-agent pod proxy is unresponsive.
+	timeout := cfg.Timeout
+	if timeout <= 0 {
+		timeout = 30 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
 	if err := client.StopAgentSession(ctx, runID); err != nil {
 		var apiErr *APIError
 		if errors.As(err, &apiErr) && apiErr.StatusCode == 409 {
