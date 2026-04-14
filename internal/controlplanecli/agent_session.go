@@ -16,16 +16,17 @@ import (
 
 // AgentSession represents an agent session associated with a harness run.
 type AgentSession struct {
-	SessionID    string                                      `json:"sessionId"`
-	RunID        string                                      `json:"runId"`
-	DisplayName  string                                      `json:"displayName"`
-	ImageProfile *operatorv1alpha1.HarnessImageProfileStatus `json:"imageProfile,omitempty"`
-	Runtime      string                                      `json:"runtime"`
-	Agent        string                                      `json:"agent"`
-	Phase        string                                      `json:"phase"`
-	WorkspaceID  string                                      `json:"workspaceSessionId"`
-	CreatedAt    time.Time                                   `json:"createdAt,omitempty"`
-	Diagnostic   *AgentSessionDiagnostic                     `json:"diagnostic,omitempty"`
+	SessionID      string                                           `json:"sessionId"`
+	RunID          string                                           `json:"runId"`
+	DisplayName    string                                           `json:"displayName"`
+	ImageProfile   *operatorv1alpha1.HarnessImageProfileStatus      `json:"imageProfile,omitempty"`
+	StartupMetrics *operatorv1alpha1.HarnessRunStartupMetricsStatus `json:"startupMetrics,omitempty"`
+	Runtime        string                                           `json:"runtime"`
+	Agent          string                                           `json:"agent"`
+	Phase          string                                           `json:"phase"`
+	WorkspaceID    string                                           `json:"workspaceSessionId"`
+	CreatedAt      time.Time                                        `json:"createdAt,omitempty"`
+	Diagnostic     *AgentSessionDiagnostic                          `json:"diagnostic,omitempty"`
 }
 
 type AgentSessionDiagnostic struct {

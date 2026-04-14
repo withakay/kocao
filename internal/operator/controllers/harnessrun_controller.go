@@ -325,6 +325,9 @@ func updateStatusFromPod(run *operatorv1alpha1.HarnessRun, pod *corev1.Pod, now 
 		run.Status.StartTime = &metav1.Time{Time: pod.Status.StartTime.Time}
 		changed = true
 	}
+	if observeStartupMetricsFromPod(run, pod) {
+		changed = true
+	}
 
 	nowMeta := metav1.NewTime(now)
 	switch pod.Status.Phase {
@@ -375,6 +378,72 @@ func updateStatusFromPod(run *operatorv1alpha1.HarnessRun, pod *corev1.Pod, now 
 		return changed, ctrl.Result{RequeueAfter: 2 * time.Second}, false
 	}
 	return changed, ctrl.Result{}, false
+}
+
+func observeStartupMetricsFromPod(run *operatorv1alpha1.HarnessRun, pod *corev1.Pod) bool {
+	var changed bool
+	metrics := run.Status.StartupMetrics
+	ensureMetrics := func() *operatorv1alpha1.HarnessRunStartupMetricsStatus {
+		if metrics == nil {
+			metrics = &operatorv1alpha1.HarnessRunStartupMetricsStatus{}
+			run.Status.StartupMetrics = metrics
+			changed = true
+		}
+		return metrics
+	}
+
+	if pod.Status.StartTime != nil {
+		m := ensureMetrics()
+		if m.ImagePullStartedAt == nil {
+			m.ImagePullStartedAt = &metav1.Time{Time: pod.Status.StartTime.Time.UTC()}
+			changed = true
+		}
+	}
+
+	if startedAt := harnessContainerStartedAt(pod); startedAt != nil {
+		m := ensureMetrics()
+		if m.ImagePullCompletedAt == nil {
+			m.ImagePullCompletedAt = &metav1.Time{Time: startedAt.UTC()}
+			changed = true
+		}
+		if m.ImagePullDurationMs == 0 && m.ImagePullStartedAt != nil {
+			duration := startedAt.Sub(m.ImagePullStartedAt.Time)
+			if duration >= 0 {
+				m.ImagePullDurationMs = duration.Milliseconds()
+				changed = true
+			}
+		}
+	}
+
+	return changed
+}
+
+func harnessContainerStartedAt(pod *corev1.Pod) *time.Time {
+	for _, status := range pod.Status.ContainerStatuses {
+		if status.Name != "harness" {
+			continue
+		}
+		if ts := containerStartedAt(status.State); ts != nil {
+			return ts
+		}
+		if ts := containerStartedAt(status.LastTerminationState); ts != nil {
+			return ts
+		}
+	}
+	return nil
+}
+
+func containerStartedAt(state corev1.ContainerState) *time.Time {
+	switch {
+	case state.Running != nil && !state.Running.StartedAt.IsZero():
+		t := state.Running.StartedAt.Time
+		return &t
+	case state.Terminated != nil && !state.Terminated.StartedAt.IsZero():
+		t := state.Terminated.StartedAt.Time
+		return &t
+	default:
+		return nil
+	}
 }
 
 func (r *HarnessRunReconciler) SetupWithManager(mgr ctrl.Manager) error {

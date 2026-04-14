@@ -47,6 +47,14 @@ The planned harness profile split keeps that contract intact across every profil
 
 Returns run-scoped session metadata including runtime, selected agent, session id, phase, and last seen sequence.
 
+The same status payload now includes `startupMetrics` for the harness run:
+
+- `imagePullDurationMs`
+- `timeToReadyMs`
+- `timeToFirstPromptMs`
+
+This gives operators a stable place to compare the `base`, `go`, `web`, and `full` profiles without scraping ad hoc logs.
+
 ### 3. Send a prompt
 
 `POST /api/v1/harness-runs/{harnessRunID}/agent-session/prompt`
@@ -151,6 +159,15 @@ pnpm -C web test
 pnpm -C web lint
 kubectl kustomize deploy/base >/dev/null
 make harness-smoke
+```
+
+For profile startup measurements during demos or dev-cluster tuning:
+
+```bash
+kocao agent start --repo https://github.com/withakay/kocao --agent codex --image-profile web --output json
+kocao agent status <run-id> --output json | jq '.startupMetrics'
+kocao agent exec <run-id> --prompt "Summarize the repo" --output json >/dev/null
+kocao agent status <run-id> --output json | jq '.startupMetrics'
 ```
 
 ## Local Kind Setup

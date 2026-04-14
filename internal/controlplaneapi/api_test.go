@@ -899,6 +899,89 @@ func TestAgentSessionGet_StoppingHasNoProvisioningDiagnostic(t *testing.T) {
 	}
 }
 
+func TestAgentSessionPrompt_RecordsStartupMetrics(t *testing.T) {
+	api, cleanup := newTestAPI(t)
+	defer cleanup()
+	api.AgentSessions = newAgentSessionService(newFakeAgentSessionTransport(), newAgentSessionStore(""))
+
+	if err := api.Tokens.Create(context.Background(), "t-full", "full", []string{"harness-run:read", "harness-run:write"}); err != nil {
+		t.Fatalf("create token: %v", err)
+	}
+
+	run := &operatorv1alpha1.HarnessRun{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "run-startup-metrics",
+			Namespace:         api.Namespace,
+			CreationTimestamp: metav1.NewTime(time.Unix(100, 0)),
+		},
+		Spec: operatorv1alpha1.HarnessRunSpec{
+			RepoURL: "https://github.com/withakay/kocao",
+			Image:   "ghcr.io/withakay/kocao/harness-runtime:dev-web",
+			AgentSession: &operatorv1alpha1.AgentSessionSpec{
+				Runtime: operatorv1alpha1.AgentRuntimeSandboxAgent,
+				Agent:   operatorv1alpha1.AgentKindCodex,
+			},
+		},
+		Status: operatorv1alpha1.HarnessRunStatus{
+			Phase:   operatorv1alpha1.HarnessRunPhaseRunning,
+			PodName: "pod-startup-metrics",
+			AgentSession: &operatorv1alpha1.AgentSessionStatus{
+				Runtime: operatorv1alpha1.AgentRuntimeSandboxAgent,
+				Agent:   operatorv1alpha1.AgentKindCodex,
+				Phase:   operatorv1alpha1.AgentSessionPhaseProvisioning,
+			},
+			StartupMetrics: &operatorv1alpha1.HarnessRunStartupMetricsStatus{
+				ImagePullStartedAt:   &metav1.Time{Time: time.Unix(101, 0)},
+				ImagePullCompletedAt: &metav1.Time{Time: time.Unix(109, 0)},
+				ImagePullDurationMs:  8000,
+			},
+		},
+	}
+	if err := api.K8s.Create(context.Background(), run); err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+
+	srv := httptest.NewServer(api.Handler())
+	defer srv.Close()
+
+	resp, b := doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/harness-runs/"+run.Name+"/agent-session", "full", nil)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create agent session status = %d (body=%s)", resp.StatusCode, string(b))
+	}
+	var created agentSessionDTO
+	if err := json.Unmarshal(b, &created); err != nil {
+		t.Fatalf("unmarshal create response: %v", err)
+	}
+	if created.StartupMetrics == nil {
+		t.Fatal("expected startup metrics in create response")
+	}
+	if created.StartupMetrics.ImagePullDurationMs != 8000 {
+		t.Fatalf("imagePullDurationMs = %d, want 8000", created.StartupMetrics.ImagePullDurationMs)
+	}
+	if created.StartupMetrics.TimeToReadyMs == 0 {
+		t.Fatal("expected timeToReadyMs to be recorded")
+	}
+
+	resp, b = doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/harness-runs/"+run.Name+"/agent-session/prompt", "full", map[string]any{"prompt": "hello sandbox"})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("prompt status = %d (body=%s)", resp.StatusCode, string(b))
+	}
+
+	var stored operatorv1alpha1.HarnessRun
+	if err := api.K8s.Get(context.Background(), client.ObjectKey{Namespace: api.Namespace, Name: run.Name}, &stored); err != nil {
+		t.Fatalf("get stored run: %v", err)
+	}
+	if stored.Status.StartupMetrics == nil || stored.Status.StartupMetrics.FirstPromptAt == nil {
+		t.Fatalf("stored startup metrics = %#v, want firstPromptAt", stored.Status.StartupMetrics)
+	}
+	if stored.Status.StartupMetrics.TimeToFirstPromptMs == 0 {
+		t.Fatal("expected timeToFirstPromptMs to be recorded")
+	}
+	if stored.Status.StartupMetrics.TimeToFirstPromptMs < stored.Status.StartupMetrics.TimeToReadyMs {
+		t.Fatalf("timeToFirstPromptMs = %d, want >= timeToReadyMs %d", stored.Status.StartupMetrics.TimeToFirstPromptMs, stored.Status.StartupMetrics.TimeToReadyMs)
+	}
+}
+
 func TestAgentSessionGet_AuthRepoAndNetworkDiagnostics(t *testing.T) {
 	tests := []struct {
 		name          string

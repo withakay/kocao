@@ -544,16 +544,17 @@ func (a *API) handleSessionDelete(w http.ResponseWriter, r *http.Request, id str
 // agentSessionListItem is the per-session JSON shape returned by the
 // workspace-level agent-sessions list endpoint.
 type agentSessionListItem struct {
-	SessionID    string                                      `json:"sessionId"`
-	RunID        string                                      `json:"runId"`
-	DisplayName  string                                      `json:"displayName,omitempty"`
-	ImageProfile *operatorv1alpha1.HarnessImageProfileStatus `json:"imageProfile,omitempty"`
-	Runtime      string                                      `json:"runtime,omitempty"`
-	Agent        string                                      `json:"agent,omitempty"`
-	Phase        string                                      `json:"phase,omitempty"`
-	WorkspaceID  string                                      `json:"workspaceSessionId,omitempty"`
-	CreatedAt    string                                      `json:"createdAt,omitempty"`
-	Diagnostic   *agentSessionDiagnosticDTO                  `json:"diagnostic,omitempty"`
+	SessionID      string                                           `json:"sessionId"`
+	RunID          string                                           `json:"runId"`
+	DisplayName    string                                           `json:"displayName,omitempty"`
+	ImageProfile   *operatorv1alpha1.HarnessImageProfileStatus      `json:"imageProfile,omitempty"`
+	StartupMetrics *operatorv1alpha1.HarnessRunStartupMetricsStatus `json:"startupMetrics,omitempty"`
+	Runtime        string                                           `json:"runtime,omitempty"`
+	Agent          string                                           `json:"agent,omitempty"`
+	Phase          string                                           `json:"phase,omitempty"`
+	WorkspaceID    string                                           `json:"workspaceSessionId,omitempty"`
+	CreatedAt      string                                           `json:"createdAt,omitempty"`
+	Diagnostic     *agentSessionDiagnosticDTO                       `json:"diagnostic,omitempty"`
 }
 
 // handleWorkspaceAgentSessionsList returns all agent sessions associated with
@@ -586,9 +587,10 @@ func (a *API) handleWorkspaceAgentSessionsList(w http.ResponseWriter, r *http.Re
 		}
 
 		item := agentSessionListItem{
-			RunID:        run.Name,
-			WorkspaceID:  workspaceSessionID,
-			ImageProfile: harnessImageProfileStatusForRun(run),
+			RunID:          run.Name,
+			WorkspaceID:    workspaceSessionID,
+			ImageProfile:   harnessImageProfileStatusForRun(run),
+			StartupMetrics: run.Status.StartupMetrics,
 		}
 		state, _ := agentSessionStateFromHarnessRun(run)
 
@@ -684,16 +686,17 @@ type agentSessionResponse struct {
 }
 
 type runResponse struct {
-	ID                 string                                      `json:"id"`
-	DisplayName        string                                      `json:"displayName,omitempty"`
-	WorkspaceSessionID string                                      `json:"workspaceSessionID,omitempty"`
-	RepoURL            string                                      `json:"repoURL"`
-	RepoRevision       string                                      `json:"repoRevision,omitempty"`
-	Image              string                                      `json:"image"`
-	ImageProfile       *operatorv1alpha1.HarnessImageProfileStatus `json:"imageProfile,omitempty"`
-	Phase              operatorv1alpha1.HarnessRunPhase            `json:"phase,omitempty"`
-	PodName            string                                      `json:"podName,omitempty"`
-	AgentSession       *agentSessionResponse                       `json:"agentSession,omitempty"`
+	ID                 string                                           `json:"id"`
+	DisplayName        string                                           `json:"displayName,omitempty"`
+	WorkspaceSessionID string                                           `json:"workspaceSessionID,omitempty"`
+	RepoURL            string                                           `json:"repoURL"`
+	RepoRevision       string                                           `json:"repoRevision,omitempty"`
+	Image              string                                           `json:"image"`
+	ImageProfile       *operatorv1alpha1.HarnessImageProfileStatus      `json:"imageProfile,omitempty"`
+	StartupMetrics     *operatorv1alpha1.HarnessRunStartupMetricsStatus `json:"startupMetrics,omitempty"`
+	Phase              operatorv1alpha1.HarnessRunPhase                 `json:"phase,omitempty"`
+	PodName            string                                           `json:"podName,omitempty"`
+	AgentSession       *agentSessionResponse                            `json:"agentSession,omitempty"`
 
 	// GitHub outcome metadata (optional)
 	GitHubBranch      string `json:"gitHubBranch,omitempty"`
@@ -740,6 +743,7 @@ func runToResponse(run *operatorv1alpha1.HarnessRun, sessionDisplayName string) 
 		RepoRevision:       run.Spec.RepoRevision,
 		Image:              run.Spec.Image,
 		ImageProfile:       harnessImageProfileStatusForRun(run),
+		StartupMetrics:     run.Status.StartupMetrics,
 		Phase:              run.Status.Phase,
 		PodName:            run.Status.PodName,
 		AgentSession:       agentSession,

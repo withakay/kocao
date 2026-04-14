@@ -58,6 +58,16 @@ type HarnessImageProfileStatus struct {
 	Reason           string                             `json:"reason,omitempty"`
 }
 
+type HarnessRunStartupMetricsStatus struct {
+	ImagePullStartedAt   *metav1.Time `json:"imagePullStartedAt,omitempty"`
+	ImagePullCompletedAt *metav1.Time `json:"imagePullCompletedAt,omitempty"`
+	ImagePullDurationMs  int64        `json:"imagePullDurationMs,omitempty"`
+	ReadyAt              *metav1.Time `json:"readyAt,omitempty"`
+	TimeToReadyMs        int64        `json:"timeToReadyMs,omitempty"`
+	FirstPromptAt        *metav1.Time `json:"firstPromptAt,omitempty"`
+	TimeToFirstPromptMs  int64        `json:"timeToFirstPromptMs,omitempty"`
+}
+
 const (
 	HarnessRunPhasePending   HarnessRunPhase = "Pending"
 	HarnessRunPhaseStarting  HarnessRunPhase = "Starting"
@@ -660,14 +670,15 @@ type HarnessRunSpec struct {
 }
 
 type HarnessRunStatus struct {
-	ObservedGeneration int64                      `json:"observedGeneration,omitempty"`
-	Phase              HarnessRunPhase            `json:"phase,omitempty"`
-	PodName            string                     `json:"podName,omitempty"`
-	ImageProfile       *HarnessImageProfileStatus `json:"imageProfile,omitempty"`
-	StartTime          *metav1.Time               `json:"startTime,omitempty"`
-	CompletionTime     *metav1.Time               `json:"completionTime,omitempty"`
-	Conditions         []metav1.Condition         `json:"conditions,omitempty"`
-	AgentSession       *AgentSessionStatus        `json:"agentSession,omitempty"`
+	ObservedGeneration int64                           `json:"observedGeneration,omitempty"`
+	Phase              HarnessRunPhase                 `json:"phase,omitempty"`
+	PodName            string                          `json:"podName,omitempty"`
+	ImageProfile       *HarnessImageProfileStatus      `json:"imageProfile,omitempty"`
+	StartupMetrics     *HarnessRunStartupMetricsStatus `json:"startupMetrics,omitempty"`
+	StartTime          *metav1.Time                    `json:"startTime,omitempty"`
+	CompletionTime     *metav1.Time                    `json:"completionTime,omitempty"`
+	Conditions         []metav1.Condition              `json:"conditions,omitempty"`
+	AgentSession       *AgentSessionStatus             `json:"agentSession,omitempty"`
 }
 
 type HarnessRunList struct {

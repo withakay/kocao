@@ -29,6 +29,11 @@ func TestAgentStatus_Success(t *testing.T) {
 			"phase":              "Ready",
 			"workspaceSessionId": "ws-789",
 			"createdAt":          now.Format(time.RFC3339),
+			"startupMetrics": map[string]any{
+				"imagePullDurationMs": 12000,
+				"timeToReadyMs":       18000,
+				"timeToFirstPromptMs": 24500,
+			},
 			"diagnostic": map[string]any{
 				"class":   "sandbox-agent-readiness",
 				"summary": "Sandbox-agent is not ready yet.",
@@ -54,6 +59,9 @@ func TestAgentStatus_Success(t *testing.T) {
 		"Phase:", "Ready",
 		"Workspace:", "ws-789",
 		"Created:", "2026-04-12T13:00:00Z",
+		"Image Pull:", "12s",
+		"Ready In:", "18s",
+		"1st Prompt:", "24.5s",
 		"Blocker:", "sandbox-agent-readiness",
 		"Summary:", "Sandbox-agent is not ready yet.",
 		"Detail:", "waiting for health endpoint",
@@ -77,6 +85,9 @@ func TestAgentStatus_JSONOutput(t *testing.T) {
 			"phase":              "Ready",
 			"workspaceSessionId": "ws-789",
 			"createdAt":          now.Format(time.RFC3339),
+			"startupMetrics": map[string]any{
+				"imagePullDurationMs": 9000,
+			},
 			"diagnostic": map[string]any{
 				"class":   "image-pull",
 				"summary": "Image pull is blocking session readiness.",
@@ -113,6 +124,9 @@ func TestAgentStatus_JSONOutput(t *testing.T) {
 	}
 	if session.WorkspaceID != "ws-789" {
 		t.Errorf("WorkspaceID = %q, want ws-789", session.WorkspaceID)
+	}
+	if session.StartupMetrics == nil || session.StartupMetrics.ImagePullDurationMs != 9000 {
+		t.Fatalf("StartupMetrics = %#v, want imagePullDurationMs 9000", session.StartupMetrics)
 	}
 	if session.Diagnostic == nil || session.Diagnostic.Class != "image-pull" {
 		t.Fatalf("Diagnostic = %#v, want image-pull", session.Diagnostic)

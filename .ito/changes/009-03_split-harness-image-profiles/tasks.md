@@ -94,6 +94,6 @@ ______________________________________________________________________
 - **Verify**: metrics test coverage and live/dev-cluster measurement workflow
 - **Done When**: Runtime profile decisions can be evaluated with real startup data.
 - **Requirements**: run-execution:startup-performance-metrics
-- **Updated At**: 2026-04-13
-- **Status**: [ ] pending
+- **Updated At**: 2026-04-14
+- **Status**: [x] complete
 <!-- ITO:END -->

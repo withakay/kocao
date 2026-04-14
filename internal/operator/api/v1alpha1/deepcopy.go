@@ -108,6 +108,25 @@ func (in *HarnessRun) DeepCopyInto(out *HarnessRun) {
 			Reason:           in.Status.ImageProfile.Reason,
 		}
 	}
+	if in.Status.StartupMetrics != nil {
+		out.Status.StartupMetrics = &HarnessRunStartupMetricsStatus{
+			ImagePullDurationMs: in.Status.StartupMetrics.ImagePullDurationMs,
+			TimeToReadyMs:       in.Status.StartupMetrics.TimeToReadyMs,
+			TimeToFirstPromptMs: in.Status.StartupMetrics.TimeToFirstPromptMs,
+		}
+		if in.Status.StartupMetrics.ImagePullStartedAt != nil {
+			out.Status.StartupMetrics.ImagePullStartedAt = &metav1.Time{Time: in.Status.StartupMetrics.ImagePullStartedAt.Time}
+		}
+		if in.Status.StartupMetrics.ImagePullCompletedAt != nil {
+			out.Status.StartupMetrics.ImagePullCompletedAt = &metav1.Time{Time: in.Status.StartupMetrics.ImagePullCompletedAt.Time}
+		}
+		if in.Status.StartupMetrics.ReadyAt != nil {
+			out.Status.StartupMetrics.ReadyAt = &metav1.Time{Time: in.Status.StartupMetrics.ReadyAt.Time}
+		}
+		if in.Status.StartupMetrics.FirstPromptAt != nil {
+			out.Status.StartupMetrics.FirstPromptAt = &metav1.Time{Time: in.Status.StartupMetrics.FirstPromptAt.Time}
+		}
+	}
 	if in.Status.StartTime != nil {
 		out.Status.StartTime = &metav1.Time{Time: in.Status.StartTime.Time}
 	}
