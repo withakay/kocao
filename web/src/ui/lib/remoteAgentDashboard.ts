@@ -32,6 +32,12 @@ export type RemoteAgentDashboardDrillDown = {
   reason: string
 }
 
+export type RemoteAgentDashboardSupportingDimension = {
+  key: 'pools'
+  treatment: 'subordinate'
+  reason: string
+}
+
 export type RemoteAgentDashboardCollection = {
   resource: RemoteAgentDashboardResource
   title: string
@@ -180,6 +186,14 @@ export const remoteAgentDashboardInformationArchitecture = {
   navLabel: 'Remote Agents',
   baseRoute: remoteAgentDashboardBaseRoute,
   landingRoute: '/remote-agents/tasks',
+  supportingDimensions: [
+    {
+      key: 'pools',
+      treatment: 'subordinate',
+      reason:
+        'Wave 3 keeps pools inside agent and task detail because operators act on named agents and durable tasks, while pool management remains a grouping/filtering concern rather than a standalone workflow.',
+    },
+  ] as const satisfies readonly RemoteAgentDashboardSupportingDimension[],
   overviewCards: [
     'active_agents',
     'active_tasks',

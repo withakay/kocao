@@ -18,6 +18,17 @@ describe('remote-agent-dashboard-information-architecture', () => {
     ])
   })
 
+  it('documents pools as a subordinate wave-3 grouping, not a standalone dashboard route', () => {
+    expect(remoteAgentDashboardInformationArchitecture.supportingDimensions).toEqual([
+      {
+        key: 'pools',
+        treatment: 'subordinate',
+        reason:
+          'Wave 3 keeps pools inside agent and task detail because operators act on named agents and durable tasks, while pool management remains a grouping/filtering concern rather than a standalone workflow.',
+      },
+    ])
+  })
+
   it('uses explicit lifecycle states without a queued bucket', () => {
     const states = Object.values(remoteAgentDashboardInformationArchitecture.taskStateGroups).flat()
     expect(states).toEqual(['assigned', 'running', 'completed', 'failed', 'timed_out', 'cancelled'])

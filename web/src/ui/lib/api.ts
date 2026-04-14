@@ -123,7 +123,7 @@ export type RemoteAgentTaskResult = {
   outputArtifactCount?: number
 }
 
-export type RemoteAgentTask = {
+export type RemoteAgentTaskBase = {
   id: string
   requestedBy?: string
   agentId?: string
@@ -144,10 +144,22 @@ export type RemoteAgentTask = {
   cancelledAt?: string
   lastTransitionAt?: string
   result?: RemoteAgentTaskResult
+}
+
+export type RemoteAgentTask = RemoteAgentTaskBase
+
+export type RemoteAgentTaskArtifactsResponse = {
+  taskId: string
   inputArtifacts?: RemoteAgentArtifactRef[]
   outputArtifacts?: RemoteAgentArtifactRef[]
+}
+
+export type RemoteAgentTaskTranscriptResponse = {
+  taskId: string
   transcript?: RemoteAgentTranscriptEntry[]
 }
+
+export type RemoteAgentTaskDetail = RemoteAgentTaskBase & RemoteAgentTaskArtifactsResponse & RemoteAgentTaskTranscriptResponse
 
 export type AuditEvent = {
   id: string
