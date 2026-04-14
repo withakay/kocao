@@ -301,6 +301,20 @@ wait_for_active_session() {
 	return 1
 }
 
+wait_for_run_pod_port() {
+	local run_id=$1
+	local port=${2:-2468}
+	for _ in $(seq 1 90); do
+		local pod_name
+		pod_name=$(kubectl -n "${K8S_NAMESPACE}" get pods -l "kocao.withakay.github.com/run=${run_id}" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
+		if [[ -n "${pod_name}" ]] && kubectl -n "${K8S_NAMESPACE}" exec "${pod_name}" -- python3 -c "import socket; s=socket.socket(); s.settimeout(1); raise SystemExit(0 if s.connect_ex(('127.0.0.1', ${port})) == 0 else 1)" >/dev/null 2>&1; then
+			return 0
+		fi
+		sleep 2
+	done
+	return 1
+}
+
 wait_for_logs_contains() {
 	local run_id=$1
 	local output_file=$2
@@ -379,6 +393,12 @@ api_request POST "/api/v1/workspace-sessions/${workspace_id}/harness-runs" "$(jq
 	--arg script "${ACP_FIXTURE_SCRIPT}" \
 	'{repoURL:$repo,repoRevision:"main",image:$image,egressMode:"full",command:["python3","-u","-c"],args:[$script],agentSession:{agent:$agent}}')" >"${run_json}"
 run_id=$(json_field "${run_json}" '.id')
+
+if ! wait_for_run_pod_port "${run_id}" 2468; then
+	kubectl -n "${K8S_NAMESPACE}" get pods -o wide >&2 || true
+	kubectl -n "${K8S_NAMESPACE}" logs "$(kubectl -n "${K8S_NAMESPACE}" get pods -l "kocao.withakay.github.com/run=${run_id}" -o jsonpath='{.items[0].metadata.name}')" --tail=200 >&2 || true
+	fail "fixture-backed run never opened ACP port 2468"
+fi
 
 if ! wait_for_active_session "${run_id}" "${status_json}"; then
 	api_request GET "/api/v1/harness-runs/${run_id}/agent-session" >"${diag_api_json}" || true
