@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -260,6 +261,8 @@ func TestAgentStop_ConflictFallbackSurvivesNearExpiredStopContext(t *testing.T) 
 		timeout   = 200 * time.Millisecond
 	)
 
+	var followupGets int32
+
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.URL.Path == "/api/v1/harness-runs/run-done/agent-session/stop" && r.Method == http.MethodPost:
@@ -268,14 +271,21 @@ func TestAgentStop_ConflictFallbackSurvivesNearExpiredStopContext(t *testing.T) 
 			_ = json.NewEncoder(w).Encode(map[string]any{"error": "agent session already stopped"})
 
 		case r.URL.Path == "/api/v1/harness-runs/run-done/agent-session" && r.Method == http.MethodGet:
+			getCount := atomic.AddInt32(&followupGets, 1)
 			time.Sleep(getDelay)
+			sessionID := "as-done-initial"
+			phase := string(operatorv1alpha1.AgentSessionPhaseCompleted)
+			if getCount == 2 {
+				sessionID = "as-done-summary"
+				phase = string(operatorv1alpha1.AgentSessionPhaseFailed)
+			}
 			_ = json.NewEncoder(w).Encode(map[string]any{
-				"sessionId":          "as-done",
+				"sessionId":          sessionID,
 				"runId":              "run-done",
 				"displayName":        "my-agent",
 				"runtime":            "opencode",
 				"agent":              "claude",
-				"phase":              string(operatorv1alpha1.AgentSessionPhaseCompleted),
+				"phase":              phase,
 				"workspaceSessionId": "ws-5",
 			})
 
@@ -296,8 +306,24 @@ func TestAgentStop_ConflictFallbackSurvivesNearExpiredStopContext(t *testing.T) 
 	if code != 0 {
 		t.Fatalf("exit code = %d, want 0; stderr=%s", code, stderr.String())
 	}
-	if !strings.Contains(stdout.String(), "Agent session stopped") {
-		t.Fatalf("stdout = %q, want stop summary", stdout.String())
+	out := stdout.String()
+	if got := atomic.LoadInt32(&followupGets); got != 2 {
+		t.Fatalf("follow-up GET count = %d, want 2", got)
+	}
+	if !strings.Contains(out, "Agent session stopped") {
+		t.Fatalf("stdout = %q, want stop summary heading", out)
+	}
+	if !strings.Contains(out, "Run ID:") || !strings.Contains(out, "run-done") {
+		t.Fatalf("stdout = %q, want Run ID summary", out)
+	}
+	if !strings.Contains(out, "Session ID:") || !strings.Contains(out, "as-done-summary") {
+		t.Fatalf("stdout = %q, want Session ID from second follow-up fetch", out)
+	}
+	if strings.Contains(out, "as-done-initial") {
+		t.Fatalf("stdout = %q, unexpectedly used first follow-up payload", out)
+	}
+	if !strings.Contains(out, "Phase:") || !strings.Contains(out, string(operatorv1alpha1.AgentSessionPhaseFailed)) {
+		t.Fatalf("stdout = %q, want Failed phase from second follow-up fetch", out)
 	}
 }
 
