@@ -243,6 +243,12 @@ func (a *API) serveAPI(w http.ResponseWriter, r *http.Request) {
 			return "remote-agent-task.cancel", "remote-agent-task", id
 		}, func(w http.ResponseWriter, r *http.Request) { a.handleRemoteAgentTaskCancel(w, r, id) })
 		return
+	case len(segs) == 3 && segs[0] == "remote-agent-tasks" && segs[2] == "retry" && r.Method == http.MethodPost:
+		id := segs[1]
+		a.serveAuthz(w, r, []string{ScopeRemoteAgentTaskWrite}, func(_ *http.Request) (string, string, string) {
+			return "remote-agent-task.retry", "remote-agent-task", id
+		}, func(w http.ResponseWriter, r *http.Request) { a.handleRemoteAgentTaskRetry(w, r, id) })
+		return
 	case len(segs) == 3 && segs[0] == "remote-agent-tasks" && segs[2] == "transcript" && r.Method == http.MethodGet:
 		id := segs[1]
 		a.serveAuthz(w, r, []string{ScopeRemoteAgentTaskRead}, func(_ *http.Request) (string, string, string) {

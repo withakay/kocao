@@ -55,8 +55,8 @@ ______________________________________________________________________
 - **Verify**: `go test ./internal/controlplaneapi/... ./internal/controlplanecli/...`
 - **Done When**: API and storage behavior satisfy orchestration and artifact requirements with passing tests.
 - **Requirements**: remote-agent-orchestration:named-remote-agents, remote-agent-orchestration:task-dispatch-lifecycle, agent-artifacts:persistent-agent-transcripts, agent-artifacts:attached-task-artifacts
-- **Updated At**: 2026-04-13
-- **Status**: [ ] pending
+- **Updated At**: 2026-04-14
+- **Status**: [x] complete
 
 ### Task 2.2: Extend CLI for orchestration workflows
 

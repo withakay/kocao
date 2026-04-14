@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	operatorv1alpha1 "github.com/withakay/kocao/internal/operator/api/v1alpha1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -330,6 +331,7 @@ func TestRemoteAgentOrchestrationStorePersistsTranscriptsAndArtifacts(t *testing
 		"/api/v1/remote-agent-pools",
 		"/api/v1/remote-agents",
 		"/api/v1/remote-agent-tasks",
+		"/api/v1/remote-agent-tasks/{taskID}/retry",
 		"/api/v1/remote-agent-tasks/{taskID}/transcript",
 		"/api/v1/remote-agent-tasks/{taskID}/artifacts",
 	} {
@@ -452,5 +454,115 @@ func TestRemoteAgentOrchestrationStoreRedactsSensitiveTaskPersistence(t *testing
 	}
 	if !strings.Contains(content, "[redacted]") {
 		t.Fatalf("expected persisted store to contain redaction markers, got %s", content)
+	}
+}
+
+func TestRemoteAgentOrchestrationService_TimesOutAndCanRetryTask(t *testing.T) {
+	store := newRemoteAgentOrchestrationStore(filepath.Join(t.TempDir(), "orchestration.jsonl"))
+	service := newRemoteAgentOrchestrationService(store, "", nil, nil)
+
+	agent, err := service.CreateAgent(remoteAgentCreateRequest{Name: "reviewer"})
+	if err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	task, err := service.DispatchTask("tester", remoteAgentTaskCreateRequest{
+		Target:         remoteAgentTaskTarget{AgentID: agent.ID},
+		Prompt:         "Review this change",
+		TimeoutSeconds: 1,
+	})
+	if err != nil {
+		t.Fatalf("dispatch task: %v", err)
+	}
+
+	service.mu.Lock()
+	stored := service.tasks[task.ID]
+	assignedAt := time.Now().UTC().Add(-2 * time.Second).Format(time.RFC3339)
+	stored.AssignedAt = assignedAt
+	stored.LastTransitionAt = assignedAt
+	service.tasks[task.ID] = stored
+	service.store.SaveTask(stored)
+	service.mu.Unlock()
+
+	timedOut, ok := service.GetTask(task.ID)
+	if !ok {
+		t.Fatal("expected timed out task to remain addressable")
+	}
+	if timedOut.State != remoteAgentTaskStateTimedOut {
+		t.Fatalf("task state = %s, want %s", timedOut.State, remoteAgentTaskStateTimedOut)
+	}
+	if timedOut.Result == nil || timedOut.Result.Outcome != string(remoteAgentTaskStateTimedOut) {
+		t.Fatalf("unexpected timed out result: %+v", timedOut.Result)
+	}
+	agent, ok = service.GetAgent(agent.ID)
+	if !ok {
+		t.Fatal("expected agent to remain addressable")
+	}
+	if agent.CurrentTaskID != "" || agent.Availability != remoteAgentAvailabilityIdle {
+		t.Fatalf("expected agent released after timeout, got %+v", agent)
+	}
+
+	retried, err := service.RetryTask(task.ID)
+	if err != nil {
+		t.Fatalf("retry task: %v", err)
+	}
+	if retried.State != remoteAgentTaskStateAssigned || retried.Attempt != 2 || retried.RetryCount != 1 {
+		t.Fatalf("unexpected retried task: %+v", retried)
+	}
+	if retried.CompletedAt != "" || retried.Result != nil || len(retried.OutputArtifacts) != 0 || len(retried.Transcript) != 0 {
+		t.Fatalf("expected retry to reset terminal attempt state, got %+v", retried)
+	}
+}
+
+func TestRemoteAgentOrchestrationAPIContract_RetryEndpointRequeuesTerminalTask(t *testing.T) {
+	api, cleanup := newTestAPI(t)
+	defer cleanup()
+
+	if err := api.Tokens.Create(context.Background(), "t-orchestration", "orchestration", []string{
+		ScopeRemoteAgentRead,
+		ScopeRemoteAgentWrite,
+		ScopeRemoteAgentTaskRead,
+		ScopeRemoteAgentTaskWrite,
+	}); err != nil {
+		t.Fatalf("create token: %v", err)
+	}
+
+	srv := httptest.NewServer(api.Handler())
+	defer srv.Close()
+
+	resp, body := doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/remote-agents", "orchestration", map[string]any{
+		"name": "reviewer",
+	})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create agent status = %d, want 201 (body=%s)", resp.StatusCode, string(body))
+	}
+	var agent remoteAgent
+	if err := json.Unmarshal(body, &agent); err != nil {
+		t.Fatalf("unmarshal agent: %v", err)
+	}
+
+	resp, body = doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/remote-agent-tasks", "orchestration", map[string]any{
+		"target": map[string]any{"agentId": agent.ID},
+		"prompt": "Review the patch",
+	})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("dispatch task status = %d, want 201 (body=%s)", resp.StatusCode, string(body))
+	}
+	var task remoteAgentTask
+	if err := json.Unmarshal(body, &task); err != nil {
+		t.Fatalf("unmarshal task: %v", err)
+	}
+	if _, err := api.RemoteAgentOrchestration.CancelTask(task.ID); err != nil {
+		t.Fatalf("cancel task: %v", err)
+	}
+
+	resp, body = doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/remote-agent-tasks/"+task.ID+"/retry", "orchestration", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("retry task status = %d, want 200 (body=%s)", resp.StatusCode, string(body))
+	}
+	if err := json.Unmarshal(body, &task); err != nil {
+		t.Fatalf("unmarshal retried task: %v", err)
+	}
+	if task.State != remoteAgentTaskStateAssigned || task.Attempt != 2 || task.RetryCount != 1 {
+		t.Fatalf("unexpected retried task payload: %+v", task)
 	}
 }

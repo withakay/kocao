@@ -26,6 +26,7 @@ var openAPISpec = []byte(`{
     "/api/v1/remote-agent-tasks": {"get": {"security": [{"bearerAuth": []}] }, "post": {"security": [{"bearerAuth": []}] }},
     "/api/v1/remote-agent-tasks/{taskID}": {"get": {"security": [{"bearerAuth": []}] }},
     "/api/v1/remote-agent-tasks/{taskID}/cancel": {"post": {"security": [{"bearerAuth": []}] }},
+    "/api/v1/remote-agent-tasks/{taskID}/retry": {"post": {"security": [{"bearerAuth": []}] }},
     "/api/v1/remote-agent-tasks/{taskID}/transcript": {"get": {"security": [{"bearerAuth": []}] }},
     "/api/v1/remote-agent-tasks/{taskID}/artifacts": {"get": {"security": [{"bearerAuth": []}] }},
     "/api/v1/workspace-sessions/{workspaceSessionID}/attach-control": {"patch": {"security": [{"bearerAuth": []}] }},
