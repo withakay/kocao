@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	operatorv1alpha1 "github.com/withakay/kocao/internal/operator/api/v1alpha1"
 )
 
 func TestAgentStop_Success(t *testing.T) {
@@ -163,6 +165,89 @@ func TestAgentStop_AlreadyStopped(t *testing.T) {
 	}
 	if !strings.Contains(out, "run-done") {
 		t.Errorf("expected run ID in output, got:\n%s", out)
+	}
+}
+
+func TestAgentStop_ConflictFallsBackToTerminalStatus(t *testing.T) {
+	t.Setenv(EnvToken, "")
+
+	tests := []struct {
+		name        string
+		writeStop   func(http.ResponseWriter)
+		phase       string
+		wantFailure bool
+	}{
+		{
+			name: "json message field with completed status",
+			writeStop: func(w http.ResponseWriter) {
+				w.WriteHeader(http.StatusConflict)
+				_ = json.NewEncoder(w).Encode(map[string]any{"message": "session already terminated"})
+			},
+			phase: string(operatorv1alpha1.AgentSessionPhaseCompleted),
+		},
+		{
+			name: "plain text body with failed status",
+			writeStop: func(w http.ResponseWriter) {
+				w.WriteHeader(http.StatusConflict)
+				_, _ = w.Write([]byte("stop rejected: session is terminal"))
+			},
+			phase: string(operatorv1alpha1.AgentSessionPhaseFailed),
+		},
+		{
+			name: "nested json body with running status still fails",
+			writeStop: func(w http.ResponseWriter) {
+				w.WriteHeader(http.StatusConflict)
+				_ = json.NewEncoder(w).Encode(map[string]any{"details": map[string]any{"reason": "race"}})
+			},
+			phase:       string(operatorv1alpha1.AgentSessionPhaseRunning),
+			wantFailure: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch {
+				case r.URL.Path == "/api/v1/harness-runs/run-done/agent-session/stop" && r.Method == http.MethodPost:
+					tt.writeStop(w)
+
+				case r.URL.Path == "/api/v1/harness-runs/run-done/agent-session" && r.Method == http.MethodGet:
+					_ = json.NewEncoder(w).Encode(map[string]any{
+						"sessionId":          "as-done",
+						"runId":              "run-done",
+						"displayName":        "my-agent",
+						"runtime":            "opencode",
+						"agent":              "claude",
+						"phase":              tt.phase,
+						"workspaceSessionId": "ws-5",
+					})
+
+				default:
+					http.NotFound(w, r)
+				}
+			}))
+			defer srv.Close()
+
+			var stdout bytes.Buffer
+			var stderr bytes.Buffer
+			code := Main([]string{"--api-url", srv.URL, "--token", "test-token", "agent", "stop", "run-done"}, &stdout, &stderr)
+			if tt.wantFailure {
+				if code == 0 {
+					t.Fatalf("exit code = %d, want non-zero", code)
+				}
+				if !strings.Contains(stderr.String(), "409") {
+					t.Fatalf("stderr = %q, want 409 context", stderr.String())
+				}
+				return
+			}
+
+			if code != 0 {
+				t.Fatalf("exit code = %d, want 0; stderr=%s", code, stderr.String())
+			}
+			if !strings.Contains(stdout.String(), "Agent session stopped") {
+				t.Fatalf("stdout = %q, want stop summary", stdout.String())
+			}
+		})
 	}
 }
 

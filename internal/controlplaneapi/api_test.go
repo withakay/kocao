@@ -97,12 +97,13 @@ func doJSON(t *testing.T, c *http.Client, method, url, token string, body any) (
 }
 
 type fakeAgentSessionTransport struct {
-	mu         sync.Mutex
-	writer     *io.PipeWriter
-	sessionID  string
-	deleted    bool
-	postCalls  []string
-	lastPrompt string
+	mu          sync.Mutex
+	writer      *io.PipeWriter
+	sessionID   string
+	deleted     bool
+	deleteCalls int
+	postCalls   []string
+	lastPrompt  string
 }
 
 func newFakeAgentSessionTransport() *fakeAgentSessionTransport {
@@ -176,6 +177,7 @@ func (f *fakeAgentSessionTransport) DeleteACP(_ context.Context, _ string, _ str
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.deleted = true
+	f.deleteCalls++
 	if f.writer != nil {
 		_ = f.writer.Close()
 	}
@@ -1634,6 +1636,87 @@ func TestStop_NoBridge_CompletedState(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("stop status = %d, want 200 (body=%s)", resp.StatusCode, string(b))
 	}
+}
+
+func TestStop_Idempotent_SameServiceInstance(t *testing.T) {
+	api, cleanup := newTestAPI(t)
+	defer cleanup()
+	transport := newFakeAgentSessionTransport()
+	api.AgentSessions = newAgentSessionService(transport, newAgentSessionStore(""))
+
+	if err := api.Tokens.Create(context.Background(), "t-full", "full", []string{"harness-run:write", "harness-run:read"}); err != nil {
+		t.Fatalf("create token: %v", err)
+	}
+
+	run := &operatorv1alpha1.HarnessRun{
+		TypeMeta:   metav1.TypeMeta{APIVersion: operatorv1alpha1.GroupVersion.String(), Kind: "HarnessRun"},
+		ObjectMeta: metav1.ObjectMeta{Name: "run-stop-idempotent", Namespace: api.Namespace},
+		Spec: operatorv1alpha1.HarnessRunSpec{
+			RepoURL:    "https://example.com/repo",
+			Image:      "kocao/harness-runtime:dev",
+			WorkingDir: "/workspace/repo",
+			AgentSession: &operatorv1alpha1.AgentSessionSpec{
+				Runtime: operatorv1alpha1.AgentRuntimeSandboxAgent,
+				Agent:   operatorv1alpha1.AgentKindClaude,
+			},
+		},
+	}
+	if err := api.K8s.Create(context.Background(), run); err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	var stored operatorv1alpha1.HarnessRun
+	if err := api.K8s.Get(context.Background(), client.ObjectKeyFromObject(run), &stored); err != nil {
+		t.Fatalf("get run: %v", err)
+	}
+	stored.Status.PodName = "pod-stop-idempotent"
+	stored.Status.Phase = operatorv1alpha1.HarnessRunPhaseRunning
+	if err := api.K8s.Status().Update(context.Background(), &stored); err != nil {
+		t.Fatalf("update run status: %v", err)
+	}
+
+	srv := httptest.NewServer(api.Handler())
+	defer srv.Close()
+
+	resp, b := doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/harness-runs/"+run.Name+"/agent-session", "full", nil)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create session status = %d, want 201 (body=%s)", resp.StatusCode, string(b))
+	}
+
+	transport.waitWriter(t, 5*time.Second)
+
+	resp, b = doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/harness-runs/"+run.Name+"/agent-session/stop", "full", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("first stop status = %d, want 200 (body=%s)", resp.StatusCode, string(b))
+	}
+	var first agentSessionDTO
+	if err := json.Unmarshal(b, &first); err != nil {
+		t.Fatalf("unmarshal first stop response: %v", err)
+	}
+	if first.Phase != operatorv1alpha1.AgentSessionPhaseCompleted {
+		t.Fatalf("first stop phase = %q, want Completed", first.Phase)
+	}
+
+	transport.mu.Lock()
+	deleteCalls := transport.deleteCalls
+	transport.mu.Unlock()
+
+	resp, b = doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/harness-runs/"+run.Name+"/agent-session/stop", "full", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("second stop status = %d, want 200 (body=%s)", resp.StatusCode, string(b))
+	}
+	var second agentSessionDTO
+	if err := json.Unmarshal(b, &second); err != nil {
+		t.Fatalf("unmarshal second stop response: %v", err)
+	}
+	if second.Phase != operatorv1alpha1.AgentSessionPhaseCompleted {
+		t.Fatalf("second stop phase = %q, want Completed", second.Phase)
+	}
+
+	transport.mu.Lock()
+	if transport.deleteCalls != deleteCalls {
+		t.Fatalf("delete call count = %d, want %d", transport.deleteCalls, deleteCalls)
+	}
+	transport.mu.Unlock()
 }
 
 func TestCreate_Idempotent_ReusesExistingSession(t *testing.T) {

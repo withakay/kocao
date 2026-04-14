@@ -5,8 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"strings"
 	"time"
+
+	operatorv1alpha1 "github.com/withakay/kocao/internal/operator/api/v1alpha1"
 )
 
 func runAgentStopCommand(args []string, cfg Config, stdout io.Writer, stderr io.Writer) error {
@@ -40,10 +41,7 @@ func runAgentStopCommand(args []string, cfg Config, stdout io.Writer, stderr io.
 
 	if err := client.StopAgentSession(ctx, runID); err != nil {
 		var apiErr *APIError
-		if errors.As(err, &apiErr) && apiErr.StatusCode == 409 && strings.Contains(strings.ToLower(apiErr.Message), "already stopped") {
-			// Treat repeated stop as success so the CLI stays idempotent across
-			// mixed server versions and race windows.
-		} else {
+		if !errors.As(err, &apiErr) || apiErr.StatusCode != 409 || !stopConflictIsTerminal(ctx, client, runID) {
 			return err
 		}
 	}
@@ -60,4 +58,12 @@ func runAgentStopCommand(args []string, cfg Config, stdout io.Writer, stderr io.
 		return writeJSON(stdout, map[string]any{"status": "stopped", "session": session})
 	}
 	return writeAgentSessionSummary(stdout, "Agent session stopped", session)
+}
+
+func stopConflictIsTerminal(ctx context.Context, client *Client, runID string) bool {
+	session, err := client.GetAgentSession(ctx, runID)
+	if err != nil {
+		return false
+	}
+	return operatorv1alpha1.NormalizeAgentSessionPhase(session.Phase).IsTerminal()
 }
