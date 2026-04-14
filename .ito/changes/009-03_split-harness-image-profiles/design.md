@@ -32,6 +32,8 @@ This keeps the user-facing profile vocabulary small while still covering the mai
 ### Decision: `full` is the rollout safety profile
 - The current monolithic image maps directly to `full`.
 - Any workflow that cannot yet classify itself safely can continue to select `full`.
+- `build/harness/profile-matrix.json` records this as `compatibilityProfile` to make the no-selection/unknown-workload safety fallback explicit.
+- The matrix separately records `preferredMinimalProfile` as `base` so task 1.1 can identify the smallest general-purpose profile without implying that `base` is the fallback when selection is ambiguous.
 - This allows task 2.2 to add selection logic without risking regression for unknown workloads.
 
 ### Decision: Every profile keeps the same sandbox-agent control surface
@@ -64,7 +66,7 @@ Expected tags from those targets:
 - `kocao/harness-runtime:<tag>-full`
 
 ### Decision: Shared layers are split by responsibility
-Task 2.1 should factor the Dockerfile into these logical layers:
+Task 2.1 should factor the Dockerfile into these logical layers and compose each exported target from those named stages/artifacts:
 
 1. `os-common`
    - Ubuntu base image
@@ -85,7 +87,7 @@ Task 2.1 should factor the Dockerfile into these logical layers:
    - `web-toolchain`
    - `full-extra-toolchains`
 
-The important rule is that the expensive, high-churn workload runtimes move out of the common sandbox-agent path.
+The important rule is that the expensive, high-churn workload runtimes move out of the common sandbox-agent path. Profile relationships are therefore expressed as layer composition, not parent-image inheritance.
 
 ## Profile Matrix
 
@@ -103,8 +105,10 @@ The machine-readable source of truth for this task is `build/harness/profile-mat
 
 ### Go
 - Purpose: backend and CLI workloads that need Go builds/tests plus native compilation support.
-- Includes:
-  - `base`
+- Composed from layers:
+  - `os-common`
+  - `agent-runtime`
+  - `contract`
   - `native-build`
   - `go-toolchain`
 - Excludes:
@@ -112,17 +116,23 @@ The machine-readable source of truth for this task is `build/harness/profile-mat
 
 ### Web
 - Purpose: JavaScript/TypeScript web workflows.
-- Includes:
-  - `base`
+- Composed from layers:
+  - `os-common`
+  - `agent-runtime`
+  - `contract`
   - `web-toolchain`
 - Excludes:
   - Go-native compile toolchain and the full polyglot set
 
 ### Full
 - Purpose: compatibility profile for unknown or broad polyglot workloads.
-- Includes:
-  - `go`
-  - `web`
+- Composed from layers:
+  - `os-common`
+  - `agent-runtime`
+  - `contract`
+  - `native-build`
+  - `go-toolchain`
+  - `web-toolchain`
   - `full-extra-toolchains`
 - This is the only profile that preserves the current broad runtime footprint.
 
@@ -156,7 +166,7 @@ Task 2.1 should build in this order so shared layers are maximally reusable:
 3. `web`
 4. `full`
 
-`full` should inherit from the already-built `go` and `web` layer families rather than re-declaring those installations independently.
+`full` should be assembled from the same reusable Docker stages that provide `native-build`, `go-toolchain`, and `web-toolchain`, plus `full-extra-toolchains`, rather than using a dual-parent profile inheritance model.
 
 ### CI strategy
 Task 2.1 should add a profile-aware build job rather than replacing the existing Go/Web test jobs.
@@ -176,6 +186,7 @@ Task 2.1 should add a profile-aware build job rather than replacing the existing
 
 - Keep the design source of truth in `build/harness/profile-matrix.json`.
 - Add Go tests that validate the planned matrix, target names, build order, and sandbox-agent invariants.
+- Do not treat `mock` as part of the preserved cross-profile compatibility contract; smoke coverage may still use it internally, but the profile family only guarantees the supported agent set already documented above.
 - Keep `docs/sandbox-agent-integration.md` aligned with the rule that every profile preserves the same sandbox-agent surface.
 
 ## Follow-up For Task 1.2

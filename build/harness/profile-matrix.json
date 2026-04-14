@@ -1,7 +1,7 @@
 {
   "version": 1,
   "dockerfile": "build/Dockerfile.harness",
-  "defaultProfile": "base",
+  "preferredMinimalProfile": "base",
   "compatibilityProfile": "full",
   "buildOrder": ["base", "go", "web", "full"],
   "sharedLayers": {
@@ -43,7 +43,7 @@
   "compatibility": {
     "workspaceDir": "/workspace",
     "runAsUser": 10001,
-    "requiredAgents": ["claude", "codex", "mock", "opencode", "pi"],
+    "requiredAgents": ["claude", "codex", "opencode", "pi"],
     "requiredTools": ["sandbox-agent", "claude", "codex", "opencode", "pi"],
     "requiredEntrypoint": "/usr/local/bin/kocao-harness-entrypoint",
     "requiredHealthEndpoint": "/v1/health",
@@ -53,7 +53,6 @@
     "base": {
       "imageSuffix": "base",
       "buildTarget": "harness-profile-base",
-      "inherits": [],
       "layers": ["os-common", "agent-runtime", "contract"],
       "devRuntimes": [],
       "smokeChecks": ["contract"],
@@ -62,7 +61,6 @@
     "go": {
       "imageSuffix": "go",
       "buildTarget": "harness-profile-go",
-      "inherits": ["base"],
       "layers": ["os-common", "agent-runtime", "contract", "native-build", "go-toolchain"],
       "devRuntimes": ["go"],
       "smokeChecks": ["contract", "go"],
@@ -71,7 +69,6 @@
     "web": {
       "imageSuffix": "web",
       "buildTarget": "harness-profile-web",
-      "inherits": ["base"],
       "layers": ["os-common", "agent-runtime", "contract", "web-toolchain"],
       "devRuntimes": ["node", "bun"],
       "smokeChecks": ["contract", "web"],
@@ -80,7 +77,6 @@
     "full": {
       "imageSuffix": "full",
       "buildTarget": "harness-profile-full",
-      "inherits": ["go", "web"],
       "layers": [
         "os-common",
         "agent-runtime",

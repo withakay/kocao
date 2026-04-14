@@ -9,14 +9,14 @@ import (
 )
 
 type profileMatrix struct {
-	Version              int                       `json:"version"`
-	Dockerfile           string                    `json:"dockerfile"`
-	DefaultProfile       string                    `json:"defaultProfile"`
-	CompatibilityProfile string                    `json:"compatibilityProfile"`
-	BuildOrder           []string                  `json:"buildOrder"`
-	SharedLayers         map[string]sharedLayer    `json:"sharedLayers"`
-	Compatibility        profileCompatibility      `json:"compatibility"`
-	Profiles             map[string]plannedProfile `json:"profiles"`
+	Version                 int                       `json:"version"`
+	Dockerfile              string                    `json:"dockerfile"`
+	PreferredMinimalProfile string                    `json:"preferredMinimalProfile"`
+	CompatibilityProfile    string                    `json:"compatibilityProfile"`
+	BuildOrder              []string                  `json:"buildOrder"`
+	SharedLayers            map[string]sharedLayer    `json:"sharedLayers"`
+	Compatibility           profileCompatibility      `json:"compatibility"`
+	Profiles                map[string]plannedProfile `json:"profiles"`
 }
 
 type sharedLayer struct {
@@ -39,7 +39,6 @@ type profileCompatibility struct {
 type plannedProfile struct {
 	ImageSuffix string   `json:"imageSuffix"`
 	BuildTarget string   `json:"buildTarget"`
-	Inherits    []string `json:"inherits"`
 	Layers      []string `json:"layers"`
 	DevRuntimes []string `json:"devRuntimes"`
 	SmokeChecks []string `json:"smokeChecks"`
@@ -66,8 +65,8 @@ func TestHarnessProfileMatrixDefinesConcreteBuildPlan(t *testing.T) {
 	if matrix.Dockerfile != "build/Dockerfile.harness" {
 		t.Fatalf("unexpected dockerfile path %q", matrix.Dockerfile)
 	}
-	if matrix.DefaultProfile != "base" {
-		t.Fatalf("default profile must be base, got %q", matrix.DefaultProfile)
+	if matrix.PreferredMinimalProfile != "base" {
+		t.Fatalf("preferred minimal profile must be base, got %q", matrix.PreferredMinimalProfile)
 	}
 	if matrix.CompatibilityProfile != "full" {
 		t.Fatalf("compatibility profile must be full, got %q", matrix.CompatibilityProfile)
@@ -85,13 +84,12 @@ func TestHarnessProfileMatrixDefinesConcreteBuildPlan(t *testing.T) {
 	}
 
 	profiles := map[string]struct {
-		inherits []string
-		target   string
+		target string
 	}{
-		"base": {inherits: []string{}, target: "harness-profile-base"},
-		"go":   {inherits: []string{"base"}, target: "harness-profile-go"},
-		"web":  {inherits: []string{"base"}, target: "harness-profile-web"},
-		"full": {inherits: []string{"go", "web"}, target: "harness-profile-full"},
+		"base": {target: "harness-profile-base"},
+		"go":   {target: "harness-profile-go"},
+		"web":  {target: "harness-profile-web"},
+		"full": {target: "harness-profile-full"},
 	}
 
 	seenTargets := map[string]string{}
@@ -100,9 +98,6 @@ func TestHarnessProfileMatrixDefinesConcreteBuildPlan(t *testing.T) {
 		profile, ok := matrix.Profiles[name]
 		if !ok {
 			t.Fatalf("profile %q missing", name)
-		}
-		if !slices.Equal(profile.Inherits, want.inherits) {
-			t.Fatalf("profile %q inherits mismatch: got %v want %v", name, profile.Inherits, want.inherits)
 		}
 		if profile.BuildTarget != want.target {
 			t.Fatalf("profile %q build target mismatch: got %q want %q", name, profile.BuildTarget, want.target)
@@ -129,6 +124,18 @@ func TestHarnessProfileMatrixDefinesConcreteBuildPlan(t *testing.T) {
 	if !slices.Equal(matrix.Profiles["base"].SmokeChecks, []string{"contract"}) {
 		t.Fatalf("base profile must only run contract smoke checks")
 	}
+	if !slices.Equal(matrix.Profiles["base"].Layers, []string{"os-common", "agent-runtime", "contract"}) {
+		t.Fatalf("base profile layers mismatch: %v", matrix.Profiles["base"].Layers)
+	}
+	if !slices.Equal(matrix.Profiles["go"].Layers, []string{"os-common", "agent-runtime", "contract", "native-build", "go-toolchain"}) {
+		t.Fatalf("go profile layers mismatch: %v", matrix.Profiles["go"].Layers)
+	}
+	if !slices.Equal(matrix.Profiles["web"].Layers, []string{"os-common", "agent-runtime", "contract", "web-toolchain"}) {
+		t.Fatalf("web profile layers mismatch: %v", matrix.Profiles["web"].Layers)
+	}
+	if !slices.Equal(matrix.Profiles["full"].Layers, []string{"os-common", "agent-runtime", "contract", "native-build", "go-toolchain", "web-toolchain", "full-extra-toolchains"}) {
+		t.Fatalf("full profile layers mismatch: %v", matrix.Profiles["full"].Layers)
+	}
 	if !slices.Contains(matrix.Profiles["full"].SmokeChecks, "full") {
 		t.Fatalf("full profile must include full smoke coverage")
 	}
@@ -148,7 +155,7 @@ func TestHarnessProfileMatrixDefinesConcreteBuildPlan(t *testing.T) {
 			t.Fatalf("compatibility tools must include %q", tool)
 		}
 	}
-	for _, agent := range []string{"claude", "codex", "mock", "opencode", "pi"} {
+	for _, agent := range []string{"claude", "codex", "opencode", "pi"} {
 		if !slices.Contains(matrix.Compatibility.RequiredAgents, agent) {
 			t.Fatalf("compatibility agents must include %q", agent)
 		}
