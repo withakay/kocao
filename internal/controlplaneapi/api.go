@@ -28,15 +28,16 @@ const (
 )
 
 type API struct {
-	Env           string
-	Namespace     string
-	K8s           client.Client
-	Clientset     kubernetes.Interface
-	Auth          *Authenticator
-	Tokens        *TokenStore
-	Audit         *AuditStore
-	Attach        *AttachService
-	AgentSessions *AgentSessionService
+	Env                      string
+	Namespace                string
+	K8s                      client.Client
+	Clientset                kubernetes.Interface
+	Auth                     *Authenticator
+	Tokens                   *TokenStore
+	Audit                    *AuditStore
+	Attach                   *AttachService
+	AgentSessions            *AgentSessionService
+	RemoteAgentOrchestration *RemoteAgentOrchestrationService
 
 	attachOrigins attachOriginAllowlist
 }
@@ -181,6 +182,81 @@ func (a *API) serveAPI(w http.ResponseWriter, r *http.Request) {
 		a.serveAuthz(w, r, []string{"harness-run:read"}, func(_ *http.Request) (string, string, string) {
 			return "harness-run.list", "harness-run", "*"
 		}, a.handleRunsList)
+		return
+	case len(segs) == 1 && segs[0] == "remote-agent-pools" && r.Method == http.MethodGet:
+		a.serveAuthz(w, r, []string{ScopeRemoteAgentRead}, func(_ *http.Request) (string, string, string) {
+			return "remote-agent-pool.list", "remote-agent-pool", "*"
+		}, a.handleRemoteAgentPoolsList)
+		return
+	case len(segs) == 1 && segs[0] == "remote-agent-pools" && r.Method == http.MethodPost:
+		a.serveAuthz(w, r, []string{ScopeRemoteAgentWrite}, func(_ *http.Request) (string, string, string) {
+			return "remote-agent-pool.create", "remote-agent-pool", "(new)"
+		}, a.handleRemoteAgentPoolsCreate)
+		return
+	case len(segs) == 1 && segs[0] == "remote-agent-pools":
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	case len(segs) == 1 && segs[0] == "remote-agents" && r.Method == http.MethodGet:
+		a.serveAuthz(w, r, []string{ScopeRemoteAgentRead}, func(_ *http.Request) (string, string, string) {
+			return "remote-agent.list", "remote-agent", "*"
+		}, a.handleRemoteAgentsList)
+		return
+	case len(segs) == 1 && segs[0] == "remote-agents" && r.Method == http.MethodPost:
+		a.serveAuthz(w, r, []string{ScopeRemoteAgentWrite}, func(_ *http.Request) (string, string, string) {
+			return "remote-agent.create", "remote-agent", "(new)"
+		}, a.handleRemoteAgentsCreate)
+		return
+	case len(segs) == 1 && segs[0] == "remote-agents":
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	case len(segs) == 2 && segs[0] == "remote-agents" && r.Method == http.MethodGet:
+		id := segs[1]
+		a.serveAuthz(w, r, []string{ScopeRemoteAgentRead}, func(_ *http.Request) (string, string, string) {
+			return "remote-agent.get", "remote-agent", id
+		}, func(w http.ResponseWriter, r *http.Request) { a.handleRemoteAgentGet(w, r, id) })
+		return
+	case len(segs) == 2 && segs[0] == "remote-agents":
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	case len(segs) == 1 && segs[0] == "remote-agent-tasks" && r.Method == http.MethodGet:
+		a.serveAuthz(w, r, []string{ScopeRemoteAgentTaskRead}, func(_ *http.Request) (string, string, string) {
+			return "remote-agent-task.list", "remote-agent-task", "*"
+		}, a.handleRemoteAgentTasksList)
+		return
+	case len(segs) == 1 && segs[0] == "remote-agent-tasks" && r.Method == http.MethodPost:
+		a.serveAuthz(w, r, []string{ScopeRemoteAgentTaskWrite}, func(_ *http.Request) (string, string, string) {
+			return "remote-agent-task.create", "remote-agent-task", "(new)"
+		}, a.handleRemoteAgentTasksCreate)
+		return
+	case len(segs) == 1 && segs[0] == "remote-agent-tasks":
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	case len(segs) == 2 && segs[0] == "remote-agent-tasks" && r.Method == http.MethodGet:
+		id := segs[1]
+		a.serveAuthz(w, r, []string{ScopeRemoteAgentTaskRead}, func(_ *http.Request) (string, string, string) {
+			return "remote-agent-task.get", "remote-agent-task", id
+		}, func(w http.ResponseWriter, r *http.Request) { a.handleRemoteAgentTaskGet(w, r, id) })
+		return
+	case len(segs) == 3 && segs[0] == "remote-agent-tasks" && segs[2] == "cancel" && r.Method == http.MethodPost:
+		id := segs[1]
+		a.serveAuthz(w, r, []string{ScopeRemoteAgentTaskWrite}, func(_ *http.Request) (string, string, string) {
+			return "remote-agent-task.cancel", "remote-agent-task", id
+		}, func(w http.ResponseWriter, r *http.Request) { a.handleRemoteAgentTaskCancel(w, r, id) })
+		return
+	case len(segs) == 3 && segs[0] == "remote-agent-tasks" && segs[2] == "transcript" && r.Method == http.MethodGet:
+		id := segs[1]
+		a.serveAuthz(w, r, []string{ScopeRemoteAgentTaskRead}, func(_ *http.Request) (string, string, string) {
+			return "remote-agent-task.transcript", "remote-agent-task", id
+		}, func(w http.ResponseWriter, r *http.Request) { a.handleRemoteAgentTaskTranscriptGet(w, r, id) })
+		return
+	case len(segs) == 3 && segs[0] == "remote-agent-tasks" && segs[2] == "artifacts" && r.Method == http.MethodGet:
+		id := segs[1]
+		a.serveAuthz(w, r, []string{ScopeRemoteAgentTaskRead}, func(_ *http.Request) (string, string, string) {
+			return "remote-agent-task.artifacts", "remote-agent-task", id
+		}, func(w http.ResponseWriter, r *http.Request) { a.handleRemoteAgentTaskArtifactsGet(w, r, id) })
+		return
+	case len(segs) >= 2 && segs[0] == "remote-agent-tasks":
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	case len(segs) == 1 && segs[0] == "harness-runs":
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -1069,14 +1145,15 @@ func New(namespace, auditPath, bootstrapToken string, restCfg *rest.Config, k8s 
 	}
 
 	api := &API{
-		Env:           env,
-		Namespace:     namespace,
-		K8s:           k8s,
-		Clientset:     cs,
-		Auth:          newAuthenticator(tokens),
-		Tokens:        tokens,
-		Audit:         newAuditStore(auditPath),
-		attachOrigins: origins,
+		Env:                      env,
+		Namespace:                namespace,
+		K8s:                      k8s,
+		Clientset:                cs,
+		Auth:                     newAuthenticator(tokens),
+		Tokens:                   tokens,
+		Audit:                    newAuditStore(auditPath),
+		RemoteAgentOrchestration: newRemoteAgentOrchestrationService(newRemoteAgentOrchestrationStore(remoteAgentOrchestrationStorePath(auditPath))),
+		attachOrigins:            origins,
 	}
 	if restCfg != nil {
 		api.Attach = newAttachService(namespace, restCfg, k8s, tokens, api.Audit)

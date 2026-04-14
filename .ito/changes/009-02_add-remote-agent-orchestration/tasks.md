@@ -27,8 +27,8 @@ ______________________________________________________________________
 - **Verify**: `go test ./internal/controlplaneapi/...`
 - **Done When**: Data model and API semantics are encoded in code/tests and match the proposal specs.
 - **Requirements**: remote-agent-orchestration:named-remote-agents, remote-agent-orchestration:task-dispatch-lifecycle, agent-artifacts:persistent-agent-transcripts, agent-artifacts:attached-task-artifacts
-- **Updated At**: 2026-04-13
-- **Status**: [ ] pending
+- **Updated At**: 2026-04-14
+- **Status**: [x] complete
 
 ### Task 1.2: Define dashboard information architecture
 
