@@ -107,7 +107,8 @@ RUN npm install -g "@mariozechner/pi-coding-agent@${PI_VERSION}" \
 # Sandbox Agent CLI — installed via npm wrapper with pinned version.
 ARG SANDBOX_AGENT_VERSION=0.4.2
 RUN npm install -g "@sandbox-agent/cli@${SANDBOX_AGENT_VERSION}" \
-  && sandbox-agent --version
+  && sandbox-agent --version \
+  && sandbox-agent install-agent mock
 
 # ── Prepare agent state directories ──
 # These directories must exist with correct ownership so that Kubernetes

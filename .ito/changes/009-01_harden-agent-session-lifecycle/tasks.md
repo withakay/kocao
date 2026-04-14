@@ -83,8 +83,8 @@ ______________________________________________________________________
 - **Verify**: CI workflow run or equivalent local Kind workflow command
 - **Done When**: CI exercises the live lifecycle and fails on regressions that previously only appeared in MicroK8s demos.
 - **Requirements**: agent-session-lifecycle:explicit-state-machine, agent-diagnostics:operator-and-cli-visibility
-- **Updated At**: 2026-04-13
-- **Status**: [ ] pending
+- **Updated At**: 2026-04-14
+- **Status**: [x] complete
 
 ### Task 3.2: Refresh demos and operational guidance
 

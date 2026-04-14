@@ -20,6 +20,8 @@ import (
 	operatorv1alpha1 "github.com/withakay/kocao/internal/operator/api/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -30,6 +32,7 @@ const (
 	agentSessionBlockerRepoAccess            = "repo-access"
 	agentSessionBlockerNetwork               = "network"
 	agentSessionBlockerImagePull             = "image-pull"
+	agentSessionSandboxAgentPortName         = "sandbox-agent"
 )
 
 type jsonRPCEnvelope struct {
@@ -53,19 +56,28 @@ type agentSessionTransport interface {
 }
 
 type podProxyAgentSessionTransport struct {
-	namespace string
-	clientset *http.Client
-	baseURL   *url.URL
-	token     string
+	namespace  string
+	kubeClient kubernetes.Interface
+	httpClient *http.Client
+	direct     *http.Client
+	baseURL    *url.URL
+	token      string
 }
 
-func newPodProxyAgentSessionTransport(namespace string, restClient *http.Client, baseURL *url.URL, token string) *podProxyAgentSessionTransport {
-	return &podProxyAgentSessionTransport{namespace: namespace, clientset: restClient, baseURL: baseURL, token: token}
+func newPodProxyAgentSessionTransport(namespace string, kubeClient kubernetes.Interface, restClient *http.Client, baseURL *url.URL, token string) *podProxyAgentSessionTransport {
+	return &podProxyAgentSessionTransport{
+		namespace:  namespace,
+		kubeClient: kubeClient,
+		httpClient: restClient,
+		direct:     &http.Client{},
+		baseURL:    baseURL,
+		token:      token,
+	}
 }
 
-func (t *podProxyAgentSessionTransport) acpURL(podName, serverID string, bootstrapAgent string) string {
+func (t *podProxyAgentSessionTransport) proxyACPURL(podName, serverID string, bootstrapAgent string) string {
 	u := *t.baseURL
-	u.Path = strings.TrimRight(u.Path, "/") + "/api/v1/namespaces/" + url.PathEscape(t.namespace) + "/pods/" + url.PathEscape(podName) + ":2468/proxy/v1/acp/" + url.PathEscape(serverID)
+	u.Path = strings.TrimRight(u.Path, "/") + "/api/v1/namespaces/" + url.PathEscape(t.namespace) + "/pods/" + url.PathEscape(podName) + ":" + url.PathEscape(agentSessionSandboxAgentPortName) + "/proxy/v1/acp/" + url.PathEscape(serverID)
 	q := url.Values{}
 	if bootstrapAgent != "" {
 		q.Set("agent", bootstrapAgent)
@@ -74,67 +86,127 @@ func (t *podProxyAgentSessionTransport) acpURL(podName, serverID string, bootstr
 	return u.String()
 }
 
-func (t *podProxyAgentSessionTransport) do(ctx context.Context, method, urlStr string, accept string, payload any) ([]byte, error) {
+func (t *podProxyAgentSessionTransport) directACPURL(podIP, serverID string, bootstrapAgent string) string {
+	u := url.URL{Scheme: "http", Host: podIP + ":2468", Path: "/v1/acp/" + url.PathEscape(serverID)}
+	q := url.Values{}
+	if bootstrapAgent != "" {
+		q.Set("agent", bootstrapAgent)
+	}
+	u.RawQuery = q.Encode()
+	return u.String()
+}
+
+func (t *podProxyAgentSessionTransport) resolveURLs(ctx context.Context, podName, serverID, bootstrapAgent string) []string {
+	urls := make([]string, 0, 2)
+	if t.kubeClient != nil {
+		if pod, err := t.kubeClient.CoreV1().Pods(t.namespace).Get(ctx, podName, metav1.GetOptions{}); err == nil {
+			if podIP := strings.TrimSpace(pod.Status.PodIP); podIP != "" {
+				urls = append(urls, t.directACPURL(podIP, serverID, bootstrapAgent))
+			}
+		}
+	}
+	if t.baseURL != nil {
+		urls = append(urls, t.proxyACPURL(podName, serverID, bootstrapAgent))
+	}
+	return urls
+}
+
+func (t *podProxyAgentSessionTransport) do(ctx context.Context, method string, urlStrs []string, accept string, payload any) ([]byte, error) {
+	if len(urlStrs) == 0 {
+		return nil, fmt.Errorf("no transport URL available")
+	}
 	var body io.Reader
+	var rawBody []byte
 	if payload != nil {
 		buf, err := json.Marshal(payload)
 		if err != nil {
 			return nil, err
 		}
-		body = bytes.NewReader(buf)
+		rawBody = buf
 	}
-	req, err := http.NewRequestWithContext(ctx, method, urlStr, body)
-	if err != nil {
-		return nil, err
+	var lastErr error
+	for _, urlStr := range urlStrs {
+		if payload != nil {
+			body = bytes.NewReader(rawBody)
+		} else {
+			body = nil
+		}
+		req, err := http.NewRequestWithContext(ctx, method, urlStr, body)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		if accept != "" {
+			req.Header.Set("Accept", accept)
+		}
+		if payload != nil {
+			req.Header.Set("Content-Type", "application/json")
+		}
+		client := t.direct
+		if strings.HasPrefix(urlStr, "https://") {
+			client = t.httpClient
+			if t.token != "" {
+				req.Header.Set("Authorization", "Bearer "+t.token)
+			}
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		bodyBytes, readErr := io.ReadAll(io.LimitReader(resp.Body, 2*1024*1024))
+		_ = resp.Body.Close()
+		if readErr != nil {
+			lastErr = readErr
+			continue
+		}
+		if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+			lastErr = fmt.Errorf("sandbox-agent transport %s %s returned %d: %s", method, urlStr, resp.StatusCode, strings.TrimSpace(string(bodyBytes)))
+			continue
+		}
+		return bodyBytes, nil
 	}
-	if accept != "" {
-		req.Header.Set("Accept", accept)
-	}
-	if payload != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
-	if t.token != "" {
-		req.Header.Set("Authorization", "Bearer "+t.token)
-	}
-	resp, err := t.clientset.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = resp.Body.Close() }()
-	bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 2*1024*1024))
-	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		return nil, fmt.Errorf("sandbox-agent proxy %s %s returned %d: %s", method, urlStr, resp.StatusCode, strings.TrimSpace(string(bodyBytes)))
-	}
-	return bodyBytes, nil
+	return nil, lastErr
 }
 
 func (t *podProxyAgentSessionTransport) PostACP(ctx context.Context, podName, serverID, bootstrapAgent string, payload any) ([]byte, error) {
-	return t.do(ctx, http.MethodPost, t.acpURL(podName, serverID, bootstrapAgent), "application/json", payload)
+	return t.do(ctx, http.MethodPost, t.resolveURLs(ctx, podName, serverID, bootstrapAgent), "application/json", payload)
 }
 
 func (t *podProxyAgentSessionTransport) StreamACP(ctx context.Context, podName, serverID string) (io.ReadCloser, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, t.acpURL(podName, serverID, ""), nil)
-	if err != nil {
-		return nil, err
+	var lastErr error
+	for _, urlStr := range t.resolveURLs(ctx, podName, serverID, "") {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, urlStr, nil)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		req.Header.Set("Accept", "text/event-stream")
+		client := t.direct
+		if strings.HasPrefix(urlStr, "https://") {
+			client = t.httpClient
+			if t.token != "" {
+				req.Header.Set("Authorization", "Bearer "+t.token)
+			}
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+			bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 2*1024*1024))
+			_ = resp.Body.Close()
+			lastErr = fmt.Errorf("sandbox-agent stream GET %s returned %d: %s", urlStr, resp.StatusCode, strings.TrimSpace(string(bodyBytes)))
+			continue
+		}
+		return resp.Body, nil
 	}
-	req.Header.Set("Accept", "text/event-stream")
-	if t.token != "" {
-		req.Header.Set("Authorization", "Bearer "+t.token)
-	}
-	resp, err := t.clientset.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		defer func() { _ = resp.Body.Close() }()
-		bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 2*1024*1024))
-		return nil, fmt.Errorf("sandbox-agent stream GET returned %d: %s", resp.StatusCode, strings.TrimSpace(string(bodyBytes)))
-	}
-	return resp.Body, nil
+	return nil, lastErr
 }
 
 func (t *podProxyAgentSessionTransport) DeleteACP(ctx context.Context, podName, serverID string) error {
-	_, err := t.do(ctx, http.MethodDelete, t.acpURL(podName, serverID, ""), "application/json", nil)
+	_, err := t.do(ctx, http.MethodDelete, t.resolveURLs(ctx, podName, serverID, ""), "application/json", nil)
 	return err
 }
 

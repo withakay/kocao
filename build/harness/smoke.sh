@@ -101,7 +101,7 @@ fi
 
 if [[ "${health_ok}" -eq 1 ]]; then
   agents_json="$(curl -fsS "http://${sandbox_host}:${sandbox_port}/v1/agents" 2>/dev/null || true)"
-  for required_agent in claude codex opencode pi; do
+  for required_agent in claude codex mock opencode pi; do
     if [[ -z "${agents_json}" ]] || ! jq -e --arg agent "${required_agent}" '.agents[]? | select(.id == $agent)' >/dev/null <<<"${agents_json}"; then
       echo "FAIL: sandbox-agent catalog missing ${required_agent}" >&2
       fail=1
@@ -109,6 +109,14 @@ if [[ "${health_ok}" -eq 1 ]]; then
       echo "  ok: sandbox-agent catalog includes ${required_agent}"
     fi
   done
+
+  report_json="$(sandbox-agent api agents report --endpoint "http://${sandbox_host}:${sandbox_port}" 2>/dev/null || true)"
+  if [[ -z "${report_json}" ]] || ! jq -e '.agents[]? | select(.id == "mock" and .installed == true)' >/dev/null <<<"${report_json}"; then
+    echo "FAIL: sandbox-agent mock agent is not installed" >&2
+    fail=1
+  else
+    echo "  ok: sandbox-agent mock agent is installed"
+  fi
 fi
 
 echo ""

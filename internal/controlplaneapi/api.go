@@ -1042,7 +1042,7 @@ func New(namespace, auditPath, bootstrapToken string, restCfg *rest.Config, k8s 
 		if err != nil {
 			return nil, err
 		}
-		agentTransport = newPodProxyAgentSessionTransport(namespace, httpClient, baseURL, "")
+		agentTransport = newPodProxyAgentSessionTransport(namespace, cs, httpClient, baseURL, "")
 	}
 
 	api := &API{
