@@ -2,18 +2,23 @@ package controlplaneapi
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 
 	operatorv1alpha1 "github.com/withakay/kocao/internal/operator/api/v1alpha1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 type remoteAgentAvailability string
@@ -27,7 +32,6 @@ const (
 type remoteAgentTaskState string
 
 const (
-	remoteAgentTaskStateQueued    remoteAgentTaskState = "queued"
 	remoteAgentTaskStateAssigned  remoteAgentTaskState = "assigned"
 	remoteAgentTaskStateRunning   remoteAgentTaskState = "running"
 	remoteAgentTaskStateCompleted remoteAgentTaskState = "completed"
@@ -209,6 +213,9 @@ type remoteAgentOrchestrationStoreRecord struct {
 	Task  *remoteAgentTask `json:"task,omitempty"`
 }
 
+var remoteAgentSensitiveValuePattern = regexp.MustCompile(`(?i)("?(?:api[_ -]?key|authorization|credential|password|secret|token)"?\s*[:=]\s*"?)([^"\s,;]+)`)
+var remoteAgentBearerValuePattern = regexp.MustCompile(`(?i)(bearer\s+)([^"\s,;]+)`)
+
 type RemoteAgentOrchestrationStore struct {
 	mu     sync.Mutex
 	path   string
@@ -229,6 +236,7 @@ func remoteAgentOrchestrationStorePath(auditPath string) string {
 }
 
 func (s *RemoteAgentOrchestrationStore) append(record remoteAgentOrchestrationStoreRecord) {
+	record = sanitizeRemoteAgentStoreRecord(record)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.path == "" {
@@ -246,6 +254,100 @@ func (s *RemoteAgentOrchestrationStore) append(record remoteAgentOrchestrationSt
 	defer func() { _ = f.Close() }()
 	_ = json.NewEncoder(f).Encode(record)
 	_ = f.Sync()
+}
+
+func sanitizeRemoteAgentStoreRecord(record remoteAgentOrchestrationStoreRecord) remoteAgentOrchestrationStoreRecord {
+	if record.Agent != nil {
+		agent := *record.Agent
+		agent.CurrentSession = sanitizeRemoteAgentSessionBinding(agent.CurrentSession)
+		record.Agent = &agent
+	}
+	if record.Task != nil {
+		task := *record.Task
+		task.Prompt = sanitizeRemoteAgentText(task.Prompt)
+		task.CurrentSession = sanitizeRemoteAgentSessionBinding(task.CurrentSession)
+		if task.Result != nil {
+			result := *task.Result
+			result.Summary = sanitizeRemoteAgentText(result.Summary)
+			result.Outcome = sanitizeRemoteAgentText(result.Outcome)
+			task.Result = &result
+		}
+		if len(task.Transcript) != 0 {
+			transcript := make([]remoteAgentTranscriptEntry, len(task.Transcript))
+			for i, entry := range task.Transcript {
+				entry.Text = sanitizeRemoteAgentText(entry.Text)
+				entry.EventRef = sanitizeRemoteAgentText(entry.EventRef)
+				transcript[i] = entry
+			}
+			task.Transcript = transcript
+		}
+		task.InputArtifacts = sanitizeRemoteAgentArtifacts(task.InputArtifacts)
+		task.OutputArtifacts = sanitizeRemoteAgentArtifacts(task.OutputArtifacts)
+		record.Task = &task
+	}
+	return record
+}
+
+func sanitizeRemoteAgentSessionBinding(binding *remoteAgentSessionBinding) *remoteAgentSessionBinding {
+	if binding == nil {
+		return nil
+	}
+	copyBinding := *binding
+	copyBinding.HarnessRunID = strings.TrimSpace(copyBinding.HarnessRunID)
+	copyBinding.SessionID = strings.TrimSpace(copyBinding.SessionID)
+	copyBinding.PodName = strings.TrimSpace(copyBinding.PodName)
+	return &copyBinding
+}
+
+func sanitizeRemoteAgentArtifacts(artifacts []remoteAgentArtifactRef) []remoteAgentArtifactRef {
+	if len(artifacts) == 0 {
+		return nil
+	}
+	out := make([]remoteAgentArtifactRef, len(artifacts))
+	for i, artifact := range artifacts {
+		artifact.Name = sanitizeRemoteAgentText(artifact.Name)
+		artifact.Path = sanitizeRemoteAgentText(artifact.Path)
+		artifact.URI = sanitizeRemoteAgentURI(artifact.URI)
+		out[i] = artifact
+	}
+	return out
+}
+
+func sanitizeRemoteAgentText(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	value = remoteAgentBearerValuePattern.ReplaceAllString(value, `${1}[redacted]`)
+	return remoteAgentSensitiveValuePattern.ReplaceAllString(value, `${1}[redacted]`)
+}
+
+func sanitizeRemoteAgentURI(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return sanitizeRemoteAgentText(raw)
+	}
+	if parsed.User != nil {
+		parsed.User = url.User("[redacted]")
+	}
+	query := parsed.Query()
+	for key := range query {
+		if agentSessionKeyLooksSensitive(key) {
+			query.Set(key, "[redacted]")
+			continue
+		}
+		values := query[key]
+		for i := range values {
+			values[i] = sanitizeRemoteAgentText(values[i])
+		}
+		query[key] = values
+	}
+	parsed.RawQuery = query.Encode()
+	return parsed.String()
 }
 
 func (s *RemoteAgentOrchestrationStore) SavePool(pool remoteAgentPool) {
@@ -314,19 +416,25 @@ func (s *RemoteAgentOrchestrationStore) load() (map[string]remoteAgentPool, map[
 }
 
 type RemoteAgentOrchestrationService struct {
-	mu     sync.Mutex
-	store  *RemoteAgentOrchestrationStore
-	pools  map[string]remoteAgentPool
-	agents map[string]remoteAgent
-	tasks  map[string]remoteAgentTask
+	mu            sync.Mutex
+	store         *RemoteAgentOrchestrationStore
+	namespace     string
+	k8s           client.Client
+	agentSessions *AgentSessionService
+	pools         map[string]remoteAgentPool
+	agents        map[string]remoteAgent
+	tasks         map[string]remoteAgentTask
 }
 
-func newRemoteAgentOrchestrationService(store *RemoteAgentOrchestrationStore) *RemoteAgentOrchestrationService {
+func newRemoteAgentOrchestrationService(store *RemoteAgentOrchestrationStore, namespace string, k8s client.Client, agentSessions *AgentSessionService) *RemoteAgentOrchestrationService {
 	service := &RemoteAgentOrchestrationService{
-		store:  store,
-		pools:  map[string]remoteAgentPool{},
-		agents: map[string]remoteAgent{},
-		tasks:  map[string]remoteAgentTask{},
+		store:         store,
+		namespace:     namespace,
+		k8s:           k8s,
+		agentSessions: agentSessions,
+		pools:         map[string]remoteAgentPool{},
+		agents:        map[string]remoteAgent{},
+		tasks:         map[string]remoteAgentTask{},
 	}
 	if store == nil {
 		return service
@@ -363,6 +471,62 @@ func validateRemoteAgentRequest(req remoteAgentCreateRequest) error {
 		return &requestError{status: http.StatusBadRequest, msg: "name required"}
 	}
 	return nil
+}
+
+func (s *RemoteAgentOrchestrationService) resolveSessionBinding(workspaceSessionID string, binding *remoteAgentSessionBinding) (*remoteAgentSessionBinding, error) {
+	if binding == nil {
+		return nil, nil
+	}
+	harnessRunID := strings.TrimSpace(binding.HarnessRunID)
+	if harnessRunID == "" {
+		return nil, &requestError{status: http.StatusBadRequest, msg: "currentSession.harnessRunId required"}
+	}
+	resolved := &remoteAgentSessionBinding{HarnessRunID: harnessRunID}
+	if s.k8s == nil {
+		return resolved, nil
+	}
+	var run operatorv1alpha1.HarnessRun
+	if err := s.k8s.Get(context.Background(), client.ObjectKey{Namespace: s.namespace, Name: harnessRunID}, &run); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil, &requestError{status: http.StatusBadRequest, msg: "currentSession.harnessRunId not found"}
+		}
+		return nil, &requestError{status: http.StatusInternalServerError, msg: "resolve currentSession.harnessRunId failed"}
+	}
+	if requestedWorkspace := strings.TrimSpace(workspaceSessionID); requestedWorkspace != "" && run.Spec.WorkspaceSessionName != "" && run.Spec.WorkspaceSessionName != requestedWorkspace {
+		return nil, &requestError{status: http.StatusBadRequest, msg: "currentSession.harnessRunId does not belong to workspaceSessionId"}
+	}
+	if run.Status.PodName != "" {
+		resolved.PodName = run.Status.PodName
+	}
+	if run.Status.AgentSession != nil {
+		resolved.SessionID = strings.TrimSpace(run.Status.AgentSession.SessionID)
+		resolved.Runtime = run.Status.AgentSession.Runtime
+		resolved.Agent = run.Status.AgentSession.Agent
+	}
+	if s.agentSessions != nil && run.Spec.AgentSession != nil && run.Spec.AgentSession.Enabled() {
+		state := s.agentSessions.GetState(&run)
+		if state.SessionID != "" {
+			resolved.SessionID = state.SessionID
+		}
+		if state.PodName != "" {
+			resolved.PodName = state.PodName
+		}
+		if state.Runtime != "" {
+			resolved.Runtime = state.Runtime
+		}
+		if state.Agent != "" {
+			resolved.Agent = state.Agent
+		}
+	}
+	if run.Spec.AgentSession != nil {
+		if resolved.Runtime == "" {
+			resolved.Runtime = run.Spec.AgentSession.Runtime
+		}
+		if resolved.Agent == "" {
+			resolved.Agent = run.Spec.AgentSession.Agent
+		}
+	}
+	return resolved, nil
 }
 
 func validateRemoteAgentTaskCreateRequest(req remoteAgentTaskCreateRequest) error {
@@ -490,6 +654,10 @@ func (s *RemoteAgentOrchestrationService) CreateAgent(req remoteAgentCreateReque
 		}
 	}
 	now := nowRFC3339()
+	currentSession, err := s.resolveSessionBinding(req.WorkspaceSessionID, req.CurrentSession)
+	if err != nil {
+		return remoteAgent{}, err
+	}
 	agent := remoteAgent{
 		ID:                 newID(),
 		Name:               strings.TrimSpace(req.Name),
@@ -501,7 +669,7 @@ func (s *RemoteAgentOrchestrationService) CreateAgent(req remoteAgentCreateReque
 		Runtime:            req.Runtime,
 		Agent:              req.Agent,
 		Availability:       remoteAgentAvailabilityIdle,
-		CurrentSession:     req.CurrentSession,
+		CurrentSession:     currentSession,
 		CreatedAt:          now,
 		UpdatedAt:          now,
 	}
@@ -579,13 +747,10 @@ func (s *RemoteAgentOrchestrationService) DispatchTask(requestedBy string, req r
 	if err != nil {
 		return remoteAgentTask{}, err
 	}
-	now := nowRFC3339()
-	state := remoteAgentTaskStateAssigned
-	assignedAt := now
 	if agent.Availability == remoteAgentAvailabilityBusy && strings.TrimSpace(agent.CurrentTaskID) != "" {
-		state = remoteAgentTaskStateQueued
-		assignedAt = ""
+		return remoteAgentTask{}, &requestError{status: http.StatusConflict, msg: "remote agent is busy; wait for the active task to finish or cancel it"}
 	}
+	now := nowRFC3339()
 	inputArtifacts := make([]remoteAgentArtifactRef, 0, len(req.InputArtifacts))
 	for _, artifact := range req.InputArtifacts {
 		inputArtifacts = append(inputArtifacts, makeRemoteAgentArtifact(artifact))
@@ -599,25 +764,23 @@ func (s *RemoteAgentOrchestrationService) DispatchTask(requestedBy string, req r
 		PoolName:           agent.PoolName,
 		WorkspaceSessionID: agent.WorkspaceSessionID,
 		Prompt:             strings.TrimSpace(req.Prompt),
-		State:              state,
+		State:              remoteAgentTaskStateAssigned,
 		TimeoutSeconds:     req.TimeoutSeconds,
 		Attempt:            1,
 		CurrentSession:     agent.CurrentSession,
 		CreatedAt:          now,
-		AssignedAt:         assignedAt,
+		AssignedAt:         now,
 		LastTransitionAt:   now,
 		InputArtifacts:     inputArtifacts,
 	}
 	s.tasks[task.ID] = task
-	if task.State == remoteAgentTaskStateAssigned {
-		agent.Availability = remoteAgentAvailabilityBusy
-		agent.CurrentTaskID = task.ID
-		agent.LastActivityAt = now
-		agent.UpdatedAt = now
-		s.agents[agent.ID] = agent
-		if s.store != nil {
-			s.store.SaveAgent(agent)
-		}
+	agent.Availability = remoteAgentAvailabilityBusy
+	agent.CurrentTaskID = task.ID
+	agent.LastActivityAt = now
+	agent.UpdatedAt = now
+	s.agents[agent.ID] = agent
+	if s.store != nil {
+		s.store.SaveAgent(agent)
 	}
 	if s.store != nil {
 		s.store.SaveTask(task)
@@ -693,7 +856,7 @@ func (s *RemoteAgentOrchestrationService) StartTask(taskID string) (remoteAgentT
 func (s *RemoteAgentOrchestrationService) CancelTask(taskID string) (remoteAgentTask, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	task, err := s.transitionTaskLocked(taskID, []remoteAgentTaskState{remoteAgentTaskStateQueued, remoteAgentTaskStateAssigned, remoteAgentTaskStateRunning}, remoteAgentTaskStateCancelled)
+	task, err := s.transitionTaskLocked(taskID, []remoteAgentTaskState{remoteAgentTaskStateAssigned, remoteAgentTaskStateRunning}, remoteAgentTaskStateCancelled)
 	if err != nil {
 		return remoteAgentTask{}, err
 	}
@@ -742,9 +905,11 @@ func (s *RemoteAgentOrchestrationService) AppendTranscript(taskID string, entry 
 	if !ok {
 		return remoteAgentTask{}, &requestError{status: http.StatusNotFound, msg: "remote agent task not found"}
 	}
-	if task.isTerminal() && task.State != remoteAgentTaskStateCompleted {
-		return remoteAgentTask{}, &requestError{status: http.StatusConflict, msg: "terminal task transcript is immutable"}
+	if task.State != remoteAgentTaskStateAssigned && task.State != remoteAgentTaskStateRunning {
+		return remoteAgentTask{}, &requestError{status: http.StatusConflict, msg: "task transcript is immutable outside active states"}
 	}
+	entry.Text = strings.TrimSpace(entry.Text)
+	entry.EventRef = strings.TrimSpace(entry.EventRef)
 	entry.Sequence = int64(len(task.Transcript) + 1)
 	if strings.TrimSpace(entry.At) == "" {
 		entry.At = nowRFC3339()
@@ -764,6 +929,9 @@ func (s *RemoteAgentOrchestrationService) AddOutputArtifact(taskID string, req r
 	task, ok := s.tasks[strings.TrimSpace(taskID)]
 	if !ok {
 		return remoteAgentTask{}, &requestError{status: http.StatusNotFound, msg: "remote agent task not found"}
+	}
+	if task.State != remoteAgentTaskStateAssigned && task.State != remoteAgentTaskStateRunning {
+		return remoteAgentTask{}, &requestError{status: http.StatusConflict, msg: "task artifacts are immutable outside active states"}
 	}
 	task.OutputArtifacts = append(task.OutputArtifacts, makeRemoteAgentArtifact(req))
 	if task.Result != nil {

@@ -5,12 +5,21 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	operatorv1alpha1 "github.com/withakay/kocao/internal/operator/api/v1alpha1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
+
+func createHarnessRunForRemoteAgent(t *testing.T, api *API, run operatorv1alpha1.HarnessRun) {
+	t.Helper()
+	if err := api.K8s.Create(context.Background(), &run); err != nil {
+		t.Fatalf("create harness run: %v", err)
+	}
+}
 
 func TestRemoteAgentOrchestrationAPIContract_TaskLifecycleTranscriptAndArtifacts(t *testing.T) {
 	api, cleanup := newTestAPI(t)
@@ -40,6 +49,25 @@ func TestRemoteAgentOrchestrationAPIContract_TaskLifecycleTranscriptAndArtifacts
 		t.Fatalf("unmarshal pool: %v", err)
 	}
 
+	createHarnessRunForRemoteAgent(t, api, operatorv1alpha1.HarnessRun{
+		ObjectMeta: metav1.ObjectMeta{Name: "run-123", Namespace: "test-ns"},
+		Spec: operatorv1alpha1.HarnessRunSpec{
+			WorkspaceSessionName: "ws-123",
+			AgentSession: &operatorv1alpha1.AgentSessionSpec{
+				Runtime: operatorv1alpha1.AgentRuntimeSandboxAgent,
+				Agent:   operatorv1alpha1.AgentKindClaude,
+			},
+		},
+		Status: operatorv1alpha1.HarnessRunStatus{
+			PodName: "pod-123",
+			AgentSession: &operatorv1alpha1.AgentSessionStatus{
+				Runtime:   operatorv1alpha1.AgentRuntimeSandboxAgent,
+				Agent:     operatorv1alpha1.AgentKindClaude,
+				SessionID: "sas-123",
+			},
+		},
+	})
+
 	resp, body = doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/remote-agents", "orchestration", map[string]any{
 		"name":               "reviewer",
 		"displayName":        "Primary Reviewer",
@@ -49,10 +77,10 @@ func TestRemoteAgentOrchestrationAPIContract_TaskLifecycleTranscriptAndArtifacts
 		"agent":              operatorv1alpha1.AgentKindClaude,
 		"currentSession": map[string]any{
 			"harnessRunId": "run-123",
-			"sessionId":    "sas-123",
-			"podName":      "pod-123",
+			"sessionId":    "spoofed-session",
+			"podName":      "spoofed-pod",
 			"runtime":      operatorv1alpha1.AgentRuntimeSandboxAgent,
-			"agent":        operatorv1alpha1.AgentKindClaude,
+			"agent":        operatorv1alpha1.AgentKindCodex,
 		},
 	})
 	if resp.StatusCode != http.StatusCreated {
@@ -61,6 +89,9 @@ func TestRemoteAgentOrchestrationAPIContract_TaskLifecycleTranscriptAndArtifacts
 	var agent remoteAgent
 	if err := json.Unmarshal(body, &agent); err != nil {
 		t.Fatalf("unmarshal agent: %v", err)
+	}
+	if agent.CurrentSession == nil || agent.CurrentSession.HarnessRunID != "run-123" || agent.CurrentSession.SessionID != "sas-123" || agent.CurrentSession.PodName != "pod-123" || agent.CurrentSession.Agent != operatorv1alpha1.AgentKindClaude {
+		t.Fatalf("expected current session to be derived from harness run state, got %+v", agent.CurrentSession)
 	}
 
 	resp, body = doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/remote-agent-tasks", "orchestration", map[string]any{
@@ -225,6 +256,20 @@ func TestRemoteAgentOrchestrationAPIContract_RequiresUnambiguousNamedAgentAndSup
 		t.Fatalf("unmarshal task: %v", err)
 	}
 
+	resp, body = doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/remote-agent-tasks", "orchestration", map[string]any{
+		"target": map[string]any{
+			"agentName": "worker",
+			"poolName":  "reviewers",
+		},
+		"prompt": "Do another thing",
+	})
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("busy dispatch status = %d, want 409 (body=%s)", resp.StatusCode, string(body))
+	}
+	if !strings.Contains(string(body), "busy") {
+		t.Fatalf("expected busy error, got %s", string(body))
+	}
+
 	resp, body = doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/remote-agent-tasks/"+task.ID+"/cancel", "orchestration", nil)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("cancel task status = %d, want 200 (body=%s)", resp.StatusCode, string(body))
@@ -239,7 +284,7 @@ func TestRemoteAgentOrchestrationAPIContract_RequiresUnambiguousNamedAgentAndSup
 
 func TestRemoteAgentOrchestrationStorePersistsTranscriptsAndArtifacts(t *testing.T) {
 	store := newRemoteAgentOrchestrationStore(filepath.Join(t.TempDir(), "orchestration.jsonl"))
-	service := newRemoteAgentOrchestrationService(store)
+	service := newRemoteAgentOrchestrationService(store, "", nil, nil)
 
 	pool, err := service.CreatePool(remoteAgentPoolCreateRequest{Name: "researchers"})
 	if err != nil {
@@ -270,7 +315,7 @@ func TestRemoteAgentOrchestrationStorePersistsTranscriptsAndArtifacts(t *testing
 		t.Fatalf("complete task: %v", err)
 	}
 
-	reloaded := newRemoteAgentOrchestrationService(store)
+	reloaded := newRemoteAgentOrchestrationService(store, "", nil, nil)
 	restoredTask, ok := reloaded.GetTask(task.ID)
 	if !ok {
 		t.Fatal("expected persisted task to be loaded")
@@ -291,5 +336,121 @@ func TestRemoteAgentOrchestrationStorePersistsTranscriptsAndArtifacts(t *testing
 		if !strings.Contains(string(openAPISpec), path) {
 			t.Fatalf("expected OpenAPI spec to contain %q", path)
 		}
+	}
+}
+
+func TestRemoteAgentOrchestrationAPIContract_ValidatesCurrentSessionBinding(t *testing.T) {
+	api, cleanup := newTestAPI(t)
+	defer cleanup()
+
+	createHarnessRunForRemoteAgent(t, api, operatorv1alpha1.HarnessRun{
+		ObjectMeta: metav1.ObjectMeta{Name: "run-123", Namespace: "test-ns"},
+		Spec: operatorv1alpha1.HarnessRunSpec{
+			WorkspaceSessionName: "ws-123",
+			AgentSession: &operatorv1alpha1.AgentSessionSpec{
+				Runtime: operatorv1alpha1.AgentRuntimeSandboxAgent,
+				Agent:   operatorv1alpha1.AgentKindClaude,
+			},
+		},
+		Status: operatorv1alpha1.HarnessRunStatus{
+			PodName: "pod-123",
+			AgentSession: &operatorv1alpha1.AgentSessionStatus{
+				Runtime:   operatorv1alpha1.AgentRuntimeSandboxAgent,
+				Agent:     operatorv1alpha1.AgentKindClaude,
+				SessionID: "sas-123",
+			},
+		},
+	})
+
+	_, err := api.RemoteAgentOrchestration.CreateAgent(remoteAgentCreateRequest{
+		Name:               "reviewer",
+		WorkspaceSessionID: "ws-123",
+		CurrentSession: &remoteAgentSessionBinding{
+			HarnessRunID: "run-123",
+			SessionID:    "spoofed-session",
+			PodName:      "spoofed-pod",
+			Runtime:      operatorv1alpha1.AgentRuntimeSandboxAgent,
+			Agent:        operatorv1alpha1.AgentKindCodex,
+		},
+	})
+	if err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+
+	_, err = api.RemoteAgentOrchestration.CreateAgent(remoteAgentCreateRequest{
+		Name:               "reviewer-2",
+		WorkspaceSessionID: "ws-123",
+		CurrentSession:     &remoteAgentSessionBinding{SessionID: "sas-123"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "currentSession.harnessRunId required") {
+		t.Fatalf("expected harnessRunId validation error, got %v", err)
+	}
+}
+
+func TestRemoteAgentOrchestrationService_ArtifactAndTranscriptMutationRequiresActiveTask(t *testing.T) {
+	service := newRemoteAgentOrchestrationService(newRemoteAgentOrchestrationStore(""), "", nil, nil)
+
+	agent, err := service.CreateAgent(remoteAgentCreateRequest{Name: "reviewer"})
+	if err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	task, err := service.DispatchTask("tester", remoteAgentTaskCreateRequest{
+		Target: remoteAgentTaskTarget{AgentID: agent.ID},
+		Prompt: "Review this patch",
+	})
+	if err != nil {
+		t.Fatalf("dispatch task: %v", err)
+	}
+	if _, err := service.CompleteTask(task.ID, remoteAgentTaskCompleteRequest{Summary: "done"}); err != nil {
+		t.Fatalf("complete task: %v", err)
+	}
+	if _, err := service.AppendTranscript(task.ID, remoteAgentTranscriptEntry{Role: remoteAgentTranscriptRoleAgent, Text: "late transcript"}); err == nil || !strings.Contains(err.Error(), "immutable") {
+		t.Fatalf("expected transcript mutation to be rejected after completion, got %v", err)
+	}
+	if _, err := service.AddOutputArtifact(task.ID, remoteAgentArtifactCreateRequest{Name: "late.md", Kind: remoteAgentArtifactKindReport}); err == nil || !strings.Contains(err.Error(), "immutable") {
+		t.Fatalf("expected artifact mutation to be rejected after completion, got %v", err)
+	}
+}
+
+func TestRemoteAgentOrchestrationStoreRedactsSensitiveTaskPersistence(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "orchestration.jsonl")
+	store := newRemoteAgentOrchestrationStore(path)
+	service := newRemoteAgentOrchestrationService(store, "", nil, nil)
+
+	agent, err := service.CreateAgent(remoteAgentCreateRequest{Name: "researcher", CurrentSession: &remoteAgentSessionBinding{HarnessRunID: "run-456", SessionID: "spoofed"}})
+	if err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	task, err := service.DispatchTask("tester", remoteAgentTaskCreateRequest{
+		Target: remoteAgentTaskTarget{AgentID: agent.ID},
+		Prompt: "authorization: Bearer super-secret-token",
+		InputArtifacts: []remoteAgentArtifactCreateRequest{{
+			Name: "brief token=topsecret.md",
+			Kind: remoteAgentArtifactKindFile,
+			URI:  "https://user:pass@example.invalid/out?token=topsecret",
+		}},
+	})
+	if err != nil {
+		t.Fatalf("dispatch task: %v", err)
+	}
+	if _, err := service.AppendTranscript(task.ID, remoteAgentTranscriptEntry{Role: remoteAgentTranscriptRoleUser, Text: "password=hunter2"}); err != nil {
+		t.Fatalf("append transcript: %v", err)
+	}
+	if _, err := service.AddOutputArtifact(task.ID, remoteAgentArtifactCreateRequest{Name: "report", Kind: remoteAgentArtifactKindReport, Path: "/tmp/token=abc"}); err != nil {
+		t.Fatalf("add output artifact: %v", err)
+	}
+
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read store: %v", err)
+	}
+	content := string(raw)
+	for _, secret := range []string{"super-secret-token", "topsecret", "hunter2", "user:pass"} {
+		if strings.Contains(content, secret) {
+			t.Fatalf("expected persisted store to redact %q, got %s", secret, content)
+		}
+	}
+	if !strings.Contains(content, "[redacted]") {
+		t.Fatalf("expected persisted store to contain redaction markers, got %s", content)
 	}
 }

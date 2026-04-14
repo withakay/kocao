@@ -1145,15 +1145,14 @@ func New(namespace, auditPath, bootstrapToken string, restCfg *rest.Config, k8s 
 	}
 
 	api := &API{
-		Env:                      env,
-		Namespace:                namespace,
-		K8s:                      k8s,
-		Clientset:                cs,
-		Auth:                     newAuthenticator(tokens),
-		Tokens:                   tokens,
-		Audit:                    newAuditStore(auditPath),
-		RemoteAgentOrchestration: newRemoteAgentOrchestrationService(newRemoteAgentOrchestrationStore(remoteAgentOrchestrationStorePath(auditPath))),
-		attachOrigins:            origins,
+		Env:           env,
+		Namespace:     namespace,
+		K8s:           k8s,
+		Clientset:     cs,
+		Auth:          newAuthenticator(tokens),
+		Tokens:        tokens,
+		Audit:         newAuditStore(auditPath),
+		attachOrigins: origins,
 	}
 	if restCfg != nil {
 		api.Attach = newAttachService(namespace, restCfg, k8s, tokens, api.Audit)
@@ -1161,6 +1160,7 @@ func New(namespace, auditPath, bootstrapToken string, restCfg *rest.Config, k8s 
 	if agentTransport != nil {
 		api.AgentSessions = newAgentSessionService(agentTransport, newAgentSessionStore(agentSessionStorePath(auditPath)))
 	}
+	api.RemoteAgentOrchestration = newRemoteAgentOrchestrationService(newRemoteAgentOrchestrationStore(remoteAgentOrchestrationStorePath(auditPath)), namespace, k8s, api.AgentSessions)
 	if err := validateAPI(api); err != nil {
 		return nil, err
 	}
