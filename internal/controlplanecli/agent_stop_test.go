@@ -251,6 +251,56 @@ func TestAgentStop_ConflictFallsBackToTerminalStatus(t *testing.T) {
 	}
 }
 
+func TestAgentStop_ConflictFallbackSurvivesNearExpiredStopContext(t *testing.T) {
+	t.Setenv(EnvToken, "")
+
+	const (
+		stopDelay = 190 * time.Millisecond
+		getDelay  = 35 * time.Millisecond
+		timeout   = 200 * time.Millisecond
+	)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/api/v1/harness-runs/run-done/agent-session/stop" && r.Method == http.MethodPost:
+			time.Sleep(stopDelay)
+			w.WriteHeader(http.StatusConflict)
+			_ = json.NewEncoder(w).Encode(map[string]any{"error": "agent session already stopped"})
+
+		case r.URL.Path == "/api/v1/harness-runs/run-done/agent-session" && r.Method == http.MethodGet:
+			time.Sleep(getDelay)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"sessionId":          "as-done",
+				"runId":              "run-done",
+				"displayName":        "my-agent",
+				"runtime":            "opencode",
+				"agent":              "claude",
+				"phase":              string(operatorv1alpha1.AgentSessionPhaseCompleted),
+				"workspaceSessionId": "ws-5",
+			})
+
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code := Main([]string{
+		"--api-url", srv.URL,
+		"--token", "test-token",
+		"--timeout", timeout.String(),
+		"agent", "stop", "run-done",
+	}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0; stderr=%s", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "Agent session stopped") {
+		t.Fatalf("stdout = %q, want stop summary", stdout.String())
+	}
+}
+
 // TestAgentStop_SlowServer verifies that the stop command does not hang
 // indefinitely when the server is slow to respond. The CLI should use a
 // bounded context timeout.
