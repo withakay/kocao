@@ -156,6 +156,23 @@ func TestRemoteAgentTaskDispatchRejectsConflictingAgentFlags(t *testing.T) {
 	}
 }
 
+func TestRemoteAgentTaskDispatchRejectsMissingSelector(t *testing.T) {
+	t.Setenv(EnvToken, "")
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code := Main([]string{"remote-agents", "tasks", "dispatch", "--prompt", "Review the patch"}, &stdout, &stderr)
+	if code != 1 {
+		t.Fatalf("exit code = %d, want 1; stderr=%s", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "must specify --agent <name> or --agent-id <id>") {
+		t.Fatalf("expected missing selector error, got: %s", stderr.String())
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("expected no stdout output, got: %s", stdout.String())
+	}
+}
+
 func TestRemoteAgentTaskDispatchRejectsMissingPrompt(t *testing.T) {
 	t.Setenv(EnvToken, "")
 
@@ -167,6 +184,28 @@ func TestRemoteAgentTaskDispatchRejectsMissingPrompt(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "must specify --prompt <text> or --prompt-file <path>") {
 		t.Fatalf("expected missing prompt error, got: %s", stderr.String())
+	}
+}
+
+func TestRemoteAgentTaskDispatchRejectsBlankPromptFile(t *testing.T) {
+	t.Setenv(EnvToken, "")
+	tempDir := t.TempDir()
+	promptPath := filepath.Join(tempDir, "prompt.txt")
+	if err := os.WriteFile(promptPath, []byte(" \n\t "), 0o600); err != nil {
+		t.Fatalf("write prompt file: %v", err)
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code := Main([]string{"remote-agents", "tasks", "dispatch", "--agent-id", "agent-1", "--prompt-file", promptPath}, &stdout, &stderr)
+	if code != 1 {
+		t.Fatalf("exit code = %d, want 1; stderr=%s", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "task prompt cannot be empty") {
+		t.Fatalf("expected blank prompt file error, got: %s", stderr.String())
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("expected no stdout output, got: %s", stdout.String())
 	}
 }
 
@@ -200,6 +239,48 @@ func TestRemoteAgentTaskDispatchRejectsUnsupportedOutputFormat(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), `unsupported output format "yaml"`) {
 		t.Fatalf("expected unsupported output error, got: %s", stderr.String())
+	}
+}
+
+func TestRemoteAgentTaskDispatchWithWorkspaceDisambiguation(t *testing.T) {
+	t.Setenv(EnvToken, "")
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/api/v1/remote-agents" && r.Method == http.MethodGet:
+			_ = json.NewEncoder(w).Encode(map[string]any{"remoteAgents": []map[string]any{
+				{"id": "agent-1", "name": "reviewer", "poolName": "backend", "workspaceSessionId": "ws-1"},
+				{"id": "agent-2", "name": "reviewer", "poolName": "backend", "workspaceSessionId": "ws-2"},
+			}})
+		case r.URL.Path == "/api/v1/remote-agent-tasks" && r.Method == http.MethodPost:
+			var payload map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				t.Fatalf("decode payload: %v", err)
+			}
+			target := payload["target"].(map[string]any)
+			if target["agentId"] != "agent-2" {
+				t.Fatalf("agentId = %#v, want agent-2", target["agentId"])
+			}
+			if payload["prompt"] != "Review the patch" {
+				t.Fatalf("prompt = %#v", payload["prompt"])
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"id": "task-2", "state": "assigned", "agentName": "reviewer", "poolName": "backend", "attempt": 1,
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code := Main([]string{"--api-url", srv.URL, "--token", "test-token", "remote-agents", "tasks", "dispatch", "--agent", "reviewer", "--workspace", "ws-2", "--prompt", "Review the patch"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("exit code = %d stderr=%s", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "dispatched task task-2 to reviewer (pool backend)") {
+		t.Fatalf("unexpected output: %s", stdout.String())
 	}
 }
 
