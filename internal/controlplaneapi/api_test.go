@@ -201,6 +201,19 @@ func TestOpenAPI_Unauthenticated(t *testing.T) {
 	}
 }
 
+func TestPodProxyAgentSessionTransport_ProxyACPURLUsesNumericPort(t *testing.T) {
+	baseURL, err := url.Parse("https://kubernetes.default.svc")
+	if err != nil {
+		t.Fatalf("parse base URL: %v", err)
+	}
+	transport := newPodProxyAgentSessionTransport("kocao-system", nil, &http.Client{}, baseURL, "")
+	got := transport.proxyACPURL("demo-pod", "server-123", "mock")
+	want := "https://kubernetes.default.svc/api/v1/namespaces/kocao-system/pods/demo-pod:2468/proxy/v1/acp/server-123?agent=mock"
+	if got != want {
+		t.Fatalf("proxyACPURL() = %q, want %q", got, want)
+	}
+}
+
 func TestCaddyEdgeConfig_HasScalarAndProxyRoutes(t *testing.T) {
 	b, err := os.ReadFile(filepath.Join("..", "..", "deploy", "base", "caddy", "Caddyfile"))
 	if err != nil {

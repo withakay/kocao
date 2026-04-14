@@ -32,7 +32,7 @@ const (
 	agentSessionBlockerRepoAccess            = "repo-access"
 	agentSessionBlockerNetwork               = "network"
 	agentSessionBlockerImagePull             = "image-pull"
-	agentSessionSandboxAgentPortName         = "sandbox-agent"
+	agentSessionSandboxAgentPort             = 2468
 )
 
 type jsonRPCEnvelope struct {
@@ -77,7 +77,7 @@ func newPodProxyAgentSessionTransport(namespace string, kubeClient kubernetes.In
 
 func (t *podProxyAgentSessionTransport) proxyACPURL(podName, serverID string, bootstrapAgent string) string {
 	u := *t.baseURL
-	u.Path = strings.TrimRight(u.Path, "/") + "/api/v1/namespaces/" + url.PathEscape(t.namespace) + "/pods/" + url.PathEscape(podName) + ":" + url.PathEscape(agentSessionSandboxAgentPortName) + "/proxy/v1/acp/" + url.PathEscape(serverID)
+	u.Path = strings.TrimRight(u.Path, "/") + "/api/v1/namespaces/" + url.PathEscape(t.namespace) + "/pods/" + url.PathEscape(podName) + ":" + strconv.Itoa(agentSessionSandboxAgentPort) + "/proxy/v1/acp/" + url.PathEscape(serverID)
 	q := url.Values{}
 	if bootstrapAgent != "" {
 		q.Set("agent", bootstrapAgent)
@@ -87,7 +87,7 @@ func (t *podProxyAgentSessionTransport) proxyACPURL(podName, serverID string, bo
 }
 
 func (t *podProxyAgentSessionTransport) directACPURL(podIP, serverID string, bootstrapAgent string) string {
-	u := url.URL{Scheme: "http", Host: podIP + ":2468", Path: "/v1/acp/" + url.PathEscape(serverID)}
+	u := url.URL{Scheme: "http", Host: podIP + ":" + strconv.Itoa(agentSessionSandboxAgentPort), Path: "/v1/acp/" + url.PathEscape(serverID)}
 	q := url.Values{}
 	if bootstrapAgent != "" {
 		q.Set("agent", bootstrapAgent)
