@@ -484,6 +484,52 @@ func TestCreateHarnessRunRejectsUnsupportedAgentSession(t *testing.T) {
 	}
 }
 
+func TestCreateHarnessRunAllowsMockAgentFixtureWithEnv(t *testing.T) {
+	t.Setenv(allowMockAgentFixtureEnv, "1")
+
+	api, cleanup := newTestAPI(t)
+	defer cleanup()
+
+	if err := api.Tokens.Create(context.Background(), "t-full", "full", []string{"workspace-session:write", "workspace-session:read", "harness-run:write", "harness-run:read"}); err != nil {
+		t.Fatalf("create token: %v", err)
+	}
+
+	srv := httptest.NewServer(api.Handler())
+	defer srv.Close()
+
+	resp, b := doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/workspace-sessions", "full", map[string]any{"repoURL": "https://example.com/repo"})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create session status = %d, want 201 (body=%s)", resp.StatusCode, string(b))
+	}
+	var sess sessionResponse
+	_ = json.Unmarshal(b, &sess)
+
+	resp, b = doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/workspace-sessions/"+sess.ID+"/harness-runs", "full", map[string]any{
+		"repoURL":      "https://example.com/repo",
+		"repoRevision": "main",
+		"image":        "alpine:3",
+		"agentSession": map[string]any{"agent": "mock"},
+	})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("status = %d, want 201 (body=%s)", resp.StatusCode, string(b))
+	}
+
+	var run runResponse
+	_ = json.Unmarshal(b, &run)
+	if run.AgentSession == nil {
+		t.Fatalf("expected agentSession in run response")
+	}
+	if run.AgentSession.Agent != operatorv1alpha1.AgentKindMock {
+		t.Fatalf("agent = %q, want %q", run.AgentSession.Agent, operatorv1alpha1.AgentKindMock)
+	}
+	if run.AgentSession.Runtime != operatorv1alpha1.AgentRuntimeSandboxAgent {
+		t.Fatalf("runtime = %q, want %q", run.AgentSession.Runtime, operatorv1alpha1.AgentRuntimeSandboxAgent)
+	}
+	if run.AgentSession.Phase != operatorv1alpha1.AgentSessionPhaseProvisioning {
+		t.Fatalf("phase = %q, want %q", run.AgentSession.Phase, operatorv1alpha1.AgentSessionPhaseProvisioning)
+	}
+}
+
 func TestAgentSessionLifecycle_API(t *testing.T) {
 	api, cleanup := newTestAPI(t)
 	defer cleanup()

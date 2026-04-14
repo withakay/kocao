@@ -162,8 +162,8 @@ func TestAgentSessionSpecApplyDefaultsAndValidate(t *testing.T) {
 	if mockSpec.Agent != AgentKindMock {
 		t.Fatalf("mock agent = %q, want %q", mockSpec.Agent, AgentKindMock)
 	}
-	if err := mockSpec.Validate(); err != nil {
-		t.Fatalf("validate mock: %v", err)
+	if err := mockSpec.Validate(); err == nil {
+		t.Fatal("expected mock validation error, got nil")
 	}
 }
 

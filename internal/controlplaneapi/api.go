@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -23,6 +24,7 @@ const (
 	annotationAttachEnabled              = "kocao.withakay.github.com/attach-enabled"
 	annotationEgressMode                 = "kocao.withakay.github.com/egress-mode"
 	annotationSymphonyRefreshRequestedAt = "kocao.withakay.github.com/symphony-refresh-requested-at"
+	allowMockAgentFixtureEnv             = "KOCAO_ALLOW_MOCK_AGENT_FIXTURE"
 )
 
 type API struct {
@@ -703,9 +705,11 @@ func (a *API) handleSessionRunsCreate(w http.ResponseWriter, r *http.Request, wo
 	}
 	if req.AgentSession != nil {
 		req.AgentSession.ApplyDefaults()
-		if err := req.AgentSession.Validate(); err != nil {
-			writeError(w, http.StatusBadRequest, err.Error())
-			return
+		if !a.allowMockAgentFixture(req.AgentSession) {
+			if err := req.AgentSession.Validate(); err != nil {
+				writeError(w, http.StatusBadRequest, err.Error())
+				return
+			}
 		}
 	}
 	egressMode, ok := normalizeRunEgressMode(req.EgressMode)
@@ -783,6 +787,25 @@ func (a *API) handleSessionRunsCreate(w http.ResponseWriter, r *http.Request, wo
 	}
 
 	writeJSON(w, http.StatusCreated, runToResponse(run, sess.Spec.DisplayName))
+}
+
+func (a *API) allowMockAgentFixture(spec *operatorv1alpha1.AgentSessionSpec) bool {
+	if spec == nil {
+		return false
+	}
+	if spec.Runtime != operatorv1alpha1.AgentRuntimeSandboxAgent || spec.Agent != operatorv1alpha1.AgentKindMock {
+		return false
+	}
+	value, ok := os.LookupEnv(allowMockAgentFixtureEnv)
+	if !ok {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
 }
 
 func (a *API) sessionDisplayNameFor(ctx context.Context, run *operatorv1alpha1.HarnessRun) string {

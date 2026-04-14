@@ -346,6 +346,7 @@ make -C "${ROOT_DIR}" kind-load-images-live-agent KIND_CLUSTER_NAME="${KIND_CLUS
 
 log "deploying control plane"
 make -C "${ROOT_DIR}" deploy
+kubectl -n "${K8S_NAMESPACE}" set env deploy/control-plane-api KOCAO_ALLOW_MOCK_AGENT_FIXTURE=1 >/dev/null
 kubectl -n "${K8S_NAMESPACE}" rollout restart deploy/control-plane-api deploy/control-plane-operator
 make -C "${ROOT_DIR}" deploy-wait
 
