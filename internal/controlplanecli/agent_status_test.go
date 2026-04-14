@@ -29,6 +29,11 @@ func TestAgentStatus_Success(t *testing.T) {
 			"phase":              "Ready",
 			"workspaceSessionId": "ws-789",
 			"createdAt":          now.Format(time.RFC3339),
+			"diagnostic": map[string]any{
+				"class":   "sandbox-agent-readiness",
+				"summary": "Sandbox-agent is not ready yet.",
+				"detail":  "waiting for health endpoint",
+			},
 		})
 	}))
 	defer srv.Close()
@@ -49,6 +54,9 @@ func TestAgentStatus_Success(t *testing.T) {
 		"Phase:", "Ready",
 		"Workspace:", "ws-789",
 		"Created:", "2026-04-12T13:00:00Z",
+		"Blocker:", "sandbox-agent-readiness",
+		"Summary:", "Sandbox-agent is not ready yet.",
+		"Detail:", "waiting for health endpoint",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output missing %q, got:\n%s", want, out)
@@ -69,6 +77,10 @@ func TestAgentStatus_JSONOutput(t *testing.T) {
 			"phase":              "Ready",
 			"workspaceSessionId": "ws-789",
 			"createdAt":          now.Format(time.RFC3339),
+			"diagnostic": map[string]any{
+				"class":   "image-pull",
+				"summary": "Image pull is blocking session readiness.",
+			},
 		})
 	}))
 	defer srv.Close()
@@ -101,6 +113,9 @@ func TestAgentStatus_JSONOutput(t *testing.T) {
 	}
 	if session.WorkspaceID != "ws-789" {
 		t.Errorf("WorkspaceID = %q, want ws-789", session.WorkspaceID)
+	}
+	if session.Diagnostic == nil || session.Diagnostic.Class != "image-pull" {
+		t.Fatalf("Diagnostic = %#v, want image-pull", session.Diagnostic)
 	}
 }
 

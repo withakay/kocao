@@ -66,8 +66,8 @@ ______________________________________________________________________
 - **Verify**: `go test ./internal/controlplaneapi/... ./internal/controlplanecli/...`
 - **Done When**: API and CLI status surfaces include meaningful blocker output and tests cover representative failure modes.
 - **Requirements**: agent-diagnostics:session-blocker-diagnostics, agent-diagnostics:operator-and-cli-visibility
-- **Updated At**: 2026-04-13
-- **Status**: [ ] pending
+- **Updated At**: 2026-04-14
+- **Status**: [x] complete
 
 ______________________________________________________________________
 

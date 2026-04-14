@@ -68,6 +68,19 @@ func writeAgentSessionSummary(w io.Writer, heading string, session *AgentSession
 			return err
 		}
 	}
+	if session.Diagnostic != nil {
+		if _, err := fmt.Fprintf(w, "  %-10s %s\n", "Blocker:", valueOrDash(session.Diagnostic.Class)); err != nil {
+			return err
+		}
+		if _, err := fmt.Fprintf(w, "  %-10s %s\n", "Summary:", valueOrDash(session.Diagnostic.Summary)); err != nil {
+			return err
+		}
+		if strings.TrimSpace(session.Diagnostic.Detail) != "" {
+			if _, err := fmt.Fprintf(w, "  %-10s %s\n", "Detail:", session.Diagnostic.Detail); err != nil {
+				return err
+			}
+		}
+	}
 	return nil
 }
 

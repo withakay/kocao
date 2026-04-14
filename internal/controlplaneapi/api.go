@@ -454,14 +454,15 @@ func (a *API) handleSessionDelete(w http.ResponseWriter, r *http.Request, id str
 // agentSessionListItem is the per-session JSON shape returned by the
 // workspace-level agent-sessions list endpoint.
 type agentSessionListItem struct {
-	SessionID   string `json:"sessionId"`
-	RunID       string `json:"runId"`
-	DisplayName string `json:"displayName,omitempty"`
-	Runtime     string `json:"runtime,omitempty"`
-	Agent       string `json:"agent,omitempty"`
-	Phase       string `json:"phase,omitempty"`
-	WorkspaceID string `json:"workspaceSessionId,omitempty"`
-	CreatedAt   string `json:"createdAt,omitempty"`
+	SessionID   string                     `json:"sessionId"`
+	RunID       string                     `json:"runId"`
+	DisplayName string                     `json:"displayName,omitempty"`
+	Runtime     string                     `json:"runtime,omitempty"`
+	Agent       string                     `json:"agent,omitempty"`
+	Phase       string                     `json:"phase,omitempty"`
+	WorkspaceID string                     `json:"workspaceSessionId,omitempty"`
+	CreatedAt   string                     `json:"createdAt,omitempty"`
+	Diagnostic  *agentSessionDiagnosticDTO `json:"diagnostic,omitempty"`
 }
 
 // handleWorkspaceAgentSessionsList returns all agent sessions associated with
@@ -497,10 +498,11 @@ func (a *API) handleWorkspaceAgentSessionsList(w http.ResponseWriter, r *http.Re
 			RunID:       run.Name,
 			WorkspaceID: workspaceSessionID,
 		}
+		state, _ := agentSessionStateFromHarnessRun(run)
 
 		// Prefer live bridge state from AgentSessionService when available.
 		if a.AgentSessions != nil {
-			state := a.AgentSessions.GetState(run)
+			state = a.AgentSessions.GetState(run)
 			if state.SessionID != "" || state.Phase != "" {
 				item.SessionID = state.SessionID
 				item.Runtime = string(state.Runtime)
@@ -533,6 +535,7 @@ func (a *API) handleWorkspaceAgentSessionsList(w http.ResponseWriter, r *http.Re
 		if !run.CreationTimestamp.IsZero() {
 			item.CreatedAt = run.CreationTimestamp.Time.UTC().Format(time.RFC3339)
 		}
+		item.Diagnostic = a.agentSessionDiagnostic(r.Context(), run, state)
 
 		out = append(out, item)
 	}

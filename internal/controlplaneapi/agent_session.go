@@ -18,8 +18,18 @@ import (
 	"time"
 
 	operatorv1alpha1 "github.com/withakay/kocao/internal/operator/api/v1alpha1"
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+)
+
+const (
+	agentSessionBlockerProvisioning          = "provisioning"
+	agentSessionBlockerSandboxAgentReadiness = "sandbox-agent-readiness"
+	agentSessionBlockerAuth                  = "auth"
+	agentSessionBlockerRepoAccess            = "repo-access"
+	agentSessionBlockerNetwork               = "network"
+	agentSessionBlockerImagePull             = "image-pull"
 )
 
 type jsonRPCEnvelope struct {
@@ -841,6 +851,13 @@ type agentSessionDTO struct {
 	WorkspaceSessionID string                             `json:"workspaceSessionId,omitempty"`
 	DisplayName        string                             `json:"displayName,omitempty"`
 	CreatedAt          string                             `json:"createdAt,omitempty"`
+	Diagnostic         *agentSessionDiagnosticDTO         `json:"diagnostic,omitempty"`
+}
+
+type agentSessionDiagnosticDTO struct {
+	Class   string `json:"class"`
+	Summary string `json:"summary"`
+	Detail  string `json:"detail,omitempty"`
 }
 
 func (a *API) agentSessionToDTO(ctx context.Context, run *operatorv1alpha1.HarnessRun, state agentSessionState) agentSessionDTO {
@@ -858,6 +875,7 @@ func (a *API) agentSessionToDTO(ctx context.Context, run *operatorv1alpha1.Harne
 	if !run.CreationTimestamp.IsZero() {
 		dto.CreatedAt = run.CreationTimestamp.Time.UTC().Format(time.RFC3339)
 	}
+	dto.Diagnostic = a.agentSessionDiagnostic(ctx, run, state)
 	if run.Spec.WorkspaceSessionName != "" {
 		displayName := a.sessionDisplayNameFor(ctx, run)
 		if displayName != "" {
@@ -869,6 +887,143 @@ func (a *API) agentSessionToDTO(ctx context.Context, run *operatorv1alpha1.Harne
 		}
 	}
 	return dto
+}
+
+func (a *API) agentSessionDiagnostic(ctx context.Context, run *operatorv1alpha1.HarnessRun, state agentSessionState) *agentSessionDiagnosticDTO {
+	phase := operatorv1alpha1.NormalizeAgentSessionPhase(string(state.Phase))
+	switch phase {
+	case operatorv1alpha1.AgentSessionPhaseReady, operatorv1alpha1.AgentSessionPhaseRunning, operatorv1alpha1.AgentSessionPhaseCompleted:
+		return nil
+	}
+
+	if strings.TrimSpace(state.PodName) == "" {
+		return &agentSessionDiagnosticDTO{
+			Class:   agentSessionBlockerProvisioning,
+			Summary: "Harness pod has not been assigned yet.",
+			Detail:  "Waiting for the operator to create and schedule the run pod.",
+		}
+	}
+
+	var pod corev1.Pod
+	if err := a.K8s.Get(ctx, client.ObjectKey{Namespace: a.Namespace, Name: state.PodName}, &pod); err != nil {
+		if apierrors.IsNotFound(err) {
+			return &agentSessionDiagnosticDTO{
+				Class:   agentSessionBlockerProvisioning,
+				Summary: "Harness pod is still provisioning.",
+				Detail:  fmt.Sprintf("Pod %q is not visible yet.", state.PodName),
+			}
+		}
+		return &agentSessionDiagnosticDTO{
+			Class:   agentSessionBlockerProvisioning,
+			Summary: "Unable to inspect harness pod state.",
+			Detail:  err.Error(),
+		}
+	}
+
+	for _, cond := range pod.Status.Conditions {
+		if cond.Type == corev1.PodScheduled && cond.Status == corev1.ConditionFalse {
+			return &agentSessionDiagnosticDTO{
+				Class:   agentSessionBlockerProvisioning,
+				Summary: "Pod scheduling is blocking session readiness.",
+				Detail:  diagnosticDetail(cond.Reason, cond.Message),
+			}
+		}
+	}
+
+	for _, status := range pod.Status.InitContainerStatuses {
+		if diag := diagnosticFromContainerStatus(status, true); diag != nil {
+			return diag
+		}
+	}
+	for _, status := range pod.Status.ContainerStatuses {
+		if diag := diagnosticFromContainerStatus(status, false); diag != nil {
+			return diag
+		}
+	}
+
+	if pod.Status.Phase == corev1.PodRunning && phase == operatorv1alpha1.AgentSessionPhaseProvisioning {
+		return &agentSessionDiagnosticDTO{
+			Class:   agentSessionBlockerSandboxAgentReadiness,
+			Summary: "Sandbox-agent is not ready yet.",
+			Detail:  fmt.Sprintf("Pod %q is running, but the sandbox-agent health path has not produced a ready session.", pod.Name),
+		}
+	}
+
+	if pod.Status.Phase == corev1.PodPending {
+		return &agentSessionDiagnosticDTO{
+			Class:   agentSessionBlockerProvisioning,
+			Summary: "Harness pod is still pending.",
+			Detail:  fmt.Sprintf("Pod %q is pending while the session remains in %s.", pod.Name, valueOrUnknown(string(phase))),
+		}
+	}
+
+	return nil
+}
+
+func diagnosticFromContainerStatus(status corev1.ContainerStatus, initContainer bool) *agentSessionDiagnosticDTO {
+	containerType := "container"
+	if initContainer {
+		containerType = "initContainer"
+	}
+	name := strings.TrimSpace(status.Name)
+	if waiting := status.State.Waiting; waiting != nil {
+		if class, summary, ok := classifyAgentSessionBlocker(name, waiting.Reason, waiting.Message); ok {
+			return &agentSessionDiagnosticDTO{Class: class, Summary: summary, Detail: fmt.Sprintf("%s %q waiting: %s", containerType, name, diagnosticDetail(waiting.Reason, waiting.Message))}
+		}
+	}
+	if terminated := status.State.Terminated; terminated != nil && terminated.ExitCode != 0 {
+		if class, summary, ok := classifyAgentSessionBlocker(name, terminated.Reason, terminated.Message); ok {
+			return &agentSessionDiagnosticDTO{Class: class, Summary: summary, Detail: fmt.Sprintf("%s %q terminated: %s", containerType, name, diagnosticDetail(terminated.Reason, terminated.Message))}
+		}
+	}
+	return nil
+}
+
+func classifyAgentSessionBlocker(containerName, reason, message string) (string, string, bool) {
+	combined := strings.ToLower(strings.Join([]string{containerName, reason, message}, " "))
+	switch {
+	case containsAny(combined, "imagepullbackoff", "errimagepull", "failed to pull image", "pull access denied", "back-off pulling image", "invalidimagename"):
+		return agentSessionBlockerImagePull, "Image pull is blocking session readiness.", true
+	case containsAny(combined, "dial tcp", "i/o timeout", "no such host", "network is unreachable", "connection refused", "tls handshake timeout", "temporary failure in name resolution", "egress"):
+		return agentSessionBlockerNetwork, "Network reachability is blocking session readiness.", true
+	case containsAny(combined, "repository", "repo", "git clone", "could not read from remote repository", "access denied", "remote: repository not found", "git ls-remote"):
+		return agentSessionBlockerRepoAccess, "Repository access is blocking session readiness.", true
+	case containsAny(combined, "oauth", "auth.json", "credential", "api key", "secret", "token", "unauthorized", "forbidden", "authentication"):
+		return agentSessionBlockerAuth, "Credential setup is blocking session readiness.", true
+	case containsAny(combined, "sandbox-agent"):
+		return agentSessionBlockerSandboxAgentReadiness, "Sandbox-agent is not ready yet.", true
+	default:
+		return "", "", false
+	}
+}
+
+func diagnosticDetail(reason, message string) string {
+	reason = strings.TrimSpace(reason)
+	message = strings.TrimSpace(message)
+	if reason == "" {
+		return message
+	}
+	if message == "" {
+		return reason
+	}
+	return reason + ": " + message
+}
+
+func containsAny(value string, candidates ...string) bool {
+	for _, candidate := range candidates {
+		if strings.Contains(value, candidate) {
+			return true
+		}
+	}
+	return false
+}
+
+func valueOrUnknown(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "unknown state"
+	}
+	return value
 }
 
 type agentSessionPromptRequest struct {

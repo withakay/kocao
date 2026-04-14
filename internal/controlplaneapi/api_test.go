@@ -630,6 +630,161 @@ func TestAgentSessionLifecycle_API(t *testing.T) {
 	}
 }
 
+func TestAgentSessionGet_ProvisioningDiagnosticForUnschedulablePod(t *testing.T) {
+	api, cleanup := newTestAPI(t)
+	defer cleanup()
+	api.AgentSessions = newAgentSessionService(newFakeAgentSessionTransport(), newAgentSessionStore(""))
+	if err := api.Tokens.Create(context.Background(), "t-full", "full", []string{"harness-run:read"}); err != nil {
+		t.Fatalf("create token: %v", err)
+	}
+
+	run := &operatorv1alpha1.HarnessRun{
+		ObjectMeta: metav1.ObjectMeta{Name: "run-unschedulable", Namespace: api.Namespace},
+		Spec: operatorv1alpha1.HarnessRunSpec{
+			WorkspaceSessionName: "ws-1",
+			RepoURL:              "https://github.com/withakay/kocao",
+			Image:                "ghcr.io/withakay/kocao-agent:latest",
+			AgentSession:         &operatorv1alpha1.AgentSessionSpec{Runtime: operatorv1alpha1.AgentRuntimeSandboxAgent, Agent: operatorv1alpha1.AgentKindCodex},
+		},
+		Status: operatorv1alpha1.HarnessRunStatus{
+			Phase:   operatorv1alpha1.HarnessRunPhaseStarting,
+			PodName: "pod-unschedulable",
+			AgentSession: &operatorv1alpha1.AgentSessionStatus{
+				Runtime: operatorv1alpha1.AgentRuntimeSandboxAgent,
+				Agent:   operatorv1alpha1.AgentKindCodex,
+				Phase:   operatorv1alpha1.AgentSessionPhaseProvisioning,
+			},
+		},
+	}
+	if err := api.K8s.Create(context.Background(), run); err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "pod-unschedulable", Namespace: api.Namespace},
+		Status: corev1.PodStatus{
+			Phase: corev1.PodPending,
+			Conditions: []corev1.PodCondition{{
+				Type:    corev1.PodScheduled,
+				Status:  corev1.ConditionFalse,
+				Reason:  "Unschedulable",
+				Message: "0/1 nodes are available: insufficient cpu.",
+			}},
+		},
+	}
+	if err := api.K8s.Create(context.Background(), pod); err != nil {
+		t.Fatalf("create pod: %v", err)
+	}
+
+	srv := httptest.NewServer(api.Handler())
+	defer srv.Close()
+
+	resp, b := doJSON(t, srv.Client(), http.MethodGet, srv.URL+"/api/v1/harness-runs/"+run.Name+"/agent-session", "full", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("get agent session status = %d (body=%s)", resp.StatusCode, string(b))
+	}
+	var dto struct {
+		Diagnostic *agentSessionDiagnosticDTO `json:"diagnostic"`
+	}
+	if err := json.Unmarshal(b, &dto); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	if dto.Diagnostic == nil {
+		t.Fatal("expected diagnostic")
+	}
+	if dto.Diagnostic.Class != agentSessionBlockerProvisioning {
+		t.Fatalf("diagnostic class = %q, want %q", dto.Diagnostic.Class, agentSessionBlockerProvisioning)
+	}
+	if !strings.Contains(dto.Diagnostic.Detail, "Unschedulable") {
+		t.Fatalf("diagnostic detail = %q, want scheduling reason", dto.Diagnostic.Detail)
+	}
+}
+
+func TestAgentSessionGet_ImagePullDiagnostic(t *testing.T) {
+	api, cleanup := newTestAPI(t)
+	defer cleanup()
+	api.AgentSessions = newAgentSessionService(newFakeAgentSessionTransport(), newAgentSessionStore(""))
+
+	run := &operatorv1alpha1.HarnessRun{
+		ObjectMeta: metav1.ObjectMeta{Name: "run-image-pull", Namespace: api.Namespace},
+		Spec: operatorv1alpha1.HarnessRunSpec{
+			RepoURL:      "https://github.com/withakay/kocao",
+			Image:        "ghcr.io/private/image:missing",
+			AgentSession: &operatorv1alpha1.AgentSessionSpec{Runtime: operatorv1alpha1.AgentRuntimeSandboxAgent, Agent: operatorv1alpha1.AgentKindCodex},
+		},
+		Status: operatorv1alpha1.HarnessRunStatus{
+			Phase:   operatorv1alpha1.HarnessRunPhaseStarting,
+			PodName: "pod-image-pull",
+			AgentSession: &operatorv1alpha1.AgentSessionStatus{
+				Runtime: operatorv1alpha1.AgentRuntimeSandboxAgent,
+				Agent:   operatorv1alpha1.AgentKindCodex,
+				Phase:   operatorv1alpha1.AgentSessionPhaseProvisioning,
+			},
+		},
+	}
+	if err := api.K8s.Create(context.Background(), run); err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "pod-image-pull", Namespace: api.Namespace},
+		Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "workspace"}}},
+		Status: corev1.PodStatus{
+			Phase: corev1.PodPending,
+			ContainerStatuses: []corev1.ContainerStatus{{
+				Name: "workspace",
+				State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{
+					Reason:  "ImagePullBackOff",
+					Message: "Back-off pulling image \"ghcr.io/private/image:missing\"",
+				}},
+			}},
+		},
+	}
+	if err := api.K8s.Create(context.Background(), pod); err != nil {
+		t.Fatalf("create pod: %v", err)
+	}
+
+	state, _ := agentSessionStateFromHarnessRun(run)
+	diag := api.agentSessionDiagnostic(context.Background(), run, state)
+	if diag == nil {
+		t.Fatal("expected diagnostic")
+	}
+	if diag.Class != agentSessionBlockerImagePull {
+		t.Fatalf("diagnostic class = %q, want %q", diag.Class, agentSessionBlockerImagePull)
+	}
+}
+
+func TestAgentSessionGet_AuthRepoAndNetworkDiagnostics(t *testing.T) {
+	tests := []struct {
+		name          string
+		reason        string
+		message       string
+		containerName string
+		wantClass     string
+	}{
+		{name: "auth", containerName: "auth-seed", reason: "CreateContainerConfigError", message: "secret \"missing-auth\" not found", wantClass: agentSessionBlockerAuth},
+		{name: "repo", containerName: "workspace", reason: "StartError", message: "fatal: could not read from remote repository", wantClass: agentSessionBlockerRepoAccess},
+		{name: "network", containerName: "workspace", reason: "StartError", message: "dial tcp 140.82.112.3:443: i/o timeout", wantClass: agentSessionBlockerNetwork},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			status := corev1.ContainerStatus{
+				Name: tt.containerName,
+				State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{
+					ExitCode: 1,
+					Reason:   tt.reason,
+					Message:  tt.message,
+				}},
+			}
+			diag := diagnosticFromContainerStatus(status, tt.containerName == "auth-seed")
+			if diag == nil {
+				t.Fatal("expected diagnostic")
+			}
+			if diag.Class != tt.wantClass {
+				t.Fatalf("diagnostic class = %q, want %q", diag.Class, tt.wantClass)
+			}
+		})
+	}
+}
+
 func TestSymphonyProjectLifecycle_API(t *testing.T) {
 	api, cleanup := newTestAPI(t)
 	defer cleanup()
