@@ -156,6 +156,15 @@ func TestAgentSessionSpecApplyDefaultsAndValidate(t *testing.T) {
 	if err := spec.Validate(); err != nil {
 		t.Fatalf("validate: %v", err)
 	}
+
+	mockSpec := &AgentSessionSpec{Agent: AgentKind(" mock ")}
+	mockSpec.ApplyDefaults()
+	if mockSpec.Agent != AgentKindMock {
+		t.Fatalf("mock agent = %q, want %q", mockSpec.Agent, AgentKindMock)
+	}
+	if err := mockSpec.Validate(); err == nil {
+		t.Fatal("expected mock validation error, got nil")
+	}
 }
 
 func TestAgentSessionSpecValidateRejectsInvalidConfig(t *testing.T) {
@@ -169,5 +178,59 @@ func TestAgentSessionSpecValidateRejectsInvalidConfig(t *testing.T) {
 		if err := tc.Validate(); err == nil {
 			t.Fatalf("expected validation error for %#v", tc)
 		}
+	}
+}
+
+func TestNormalizeAgentSessionPhase(t *testing.T) {
+	cases := map[string]AgentSessionPhase{
+		"":               "",
+		" Provisioning ": AgentSessionPhaseProvisioning,
+		"ready":          AgentSessionPhaseReady,
+		"running":        AgentSessionPhaseRunning,
+		"Active":         AgentSessionPhaseRunning,
+		"stopping":       AgentSessionPhaseStopping,
+		"completed":      AgentSessionPhaseCompleted,
+		"failed":         AgentSessionPhaseFailed,
+	}
+	for input, want := range cases {
+		if got := NormalizeAgentSessionPhase(input); got != want {
+			t.Fatalf("NormalizeAgentSessionPhase(%q) = %q, want %q", input, got, want)
+		}
+	}
+}
+
+func TestAgentSessionPhaseCanTransitionTo(t *testing.T) {
+	tests := []struct {
+		name string
+		from AgentSessionPhase
+		to   AgentSessionPhase
+		want bool
+	}{
+		{name: "create starts provisioning", from: "", to: AgentSessionPhaseProvisioning, want: true},
+		{name: "provisioning to ready", from: AgentSessionPhaseProvisioning, to: AgentSessionPhaseReady, want: true},
+		{name: "ready to running", from: AgentSessionPhaseReady, to: AgentSessionPhaseRunning, want: true},
+		{name: "running to stopping", from: AgentSessionPhaseRunning, to: AgentSessionPhaseStopping, want: true},
+		{name: "stopping to completed", from: AgentSessionPhaseStopping, to: AgentSessionPhaseCompleted, want: true},
+		{name: "ready cannot go back to provisioning", from: AgentSessionPhaseReady, to: AgentSessionPhaseProvisioning, want: false},
+		{name: "completed is durable", from: AgentSessionPhaseCompleted, to: AgentSessionPhaseRunning, want: false},
+		{name: "failed is durable", from: AgentSessionPhaseFailed, to: AgentSessionPhaseReady, want: false},
+		{name: "active alias normalizes to running", from: AgentSessionPhaseActive, to: AgentSessionPhaseStopping, want: true},
+	}
+	for _, tt := range tests {
+		if got := tt.from.CanTransitionTo(tt.to); got != tt.want {
+			t.Fatalf("%s: %q -> %q = %v, want %v", tt.name, tt.from, tt.to, got, tt.want)
+		}
+	}
+}
+
+func TestAgentSessionPhaseIsTerminal(t *testing.T) {
+	if !AgentSessionPhaseCompleted.IsTerminal() {
+		t.Fatal("completed phase should be terminal")
+	}
+	if !AgentSessionPhaseFailed.IsTerminal() {
+		t.Fatal("failed phase should be terminal")
+	}
+	if AgentSessionPhaseRunning.IsTerminal() {
+		t.Fatal("running phase should not be terminal")
 	}
 }

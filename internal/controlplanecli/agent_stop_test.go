@@ -6,7 +6,11 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
+
+	operatorv1alpha1 "github.com/withakay/kocao/internal/operator/api/v1alpha1"
 )
 
 func TestAgentStop_Success(t *testing.T) {
@@ -133,6 +137,17 @@ func TestAgentStop_AlreadyStopped(t *testing.T) {
 			w.WriteHeader(http.StatusConflict)
 			_ = json.NewEncoder(w).Encode(map[string]any{"error": "agent session already stopped"})
 
+		case r.URL.Path == "/api/v1/harness-runs/run-done/agent-session" && r.Method == http.MethodGet:
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"sessionId":          "as-done",
+				"runId":              "run-done",
+				"displayName":        "my-agent",
+				"runtime":            "opencode",
+				"agent":              "claude",
+				"phase":              "Completed",
+				"workspaceSessionId": "ws-5",
+			})
+
 		default:
 			http.NotFound(w, r)
 		}
@@ -142,11 +157,214 @@ func TestAgentStop_AlreadyStopped(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 	code := Main([]string{"--api-url", srv.URL, "--token", "test-token", "agent", "stop", "run-done"}, &stdout, &stderr)
-	if code != 1 {
-		t.Fatalf("exit code = %d, want 1; stderr=%s", code, stderr.String())
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0; stderr=%s", code, stderr.String())
 	}
-	errOut := stderr.String()
-	if !strings.Contains(errOut, "already stopped") {
-		t.Errorf("expected 'already stopped' in stderr, got:\n%s", errOut)
+	out := stdout.String()
+	if !strings.Contains(out, "Agent session stopped") {
+		t.Errorf("expected stop summary in stdout, got:\n%s", out)
+	}
+	if !strings.Contains(out, "run-done") {
+		t.Errorf("expected run ID in output, got:\n%s", out)
+	}
+}
+
+func TestAgentStop_ConflictFallsBackToTerminalStatus(t *testing.T) {
+	t.Setenv(EnvToken, "")
+
+	tests := []struct {
+		name        string
+		writeStop   func(http.ResponseWriter)
+		phase       string
+		wantFailure bool
+	}{
+		{
+			name: "json message field with completed status",
+			writeStop: func(w http.ResponseWriter) {
+				w.WriteHeader(http.StatusConflict)
+				_ = json.NewEncoder(w).Encode(map[string]any{"message": "session already terminated"})
+			},
+			phase: string(operatorv1alpha1.AgentSessionPhaseCompleted),
+		},
+		{
+			name: "plain text body with failed status",
+			writeStop: func(w http.ResponseWriter) {
+				w.WriteHeader(http.StatusConflict)
+				_, _ = w.Write([]byte("stop rejected: session is terminal"))
+			},
+			phase: string(operatorv1alpha1.AgentSessionPhaseFailed),
+		},
+		{
+			name: "nested json body with running status still fails",
+			writeStop: func(w http.ResponseWriter) {
+				w.WriteHeader(http.StatusConflict)
+				_ = json.NewEncoder(w).Encode(map[string]any{"details": map[string]any{"reason": "race"}})
+			},
+			phase:       string(operatorv1alpha1.AgentSessionPhaseRunning),
+			wantFailure: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch {
+				case r.URL.Path == "/api/v1/harness-runs/run-done/agent-session/stop" && r.Method == http.MethodPost:
+					tt.writeStop(w)
+
+				case r.URL.Path == "/api/v1/harness-runs/run-done/agent-session" && r.Method == http.MethodGet:
+					_ = json.NewEncoder(w).Encode(map[string]any{
+						"sessionId":          "as-done",
+						"runId":              "run-done",
+						"displayName":        "my-agent",
+						"runtime":            "opencode",
+						"agent":              "claude",
+						"phase":              tt.phase,
+						"workspaceSessionId": "ws-5",
+					})
+
+				default:
+					http.NotFound(w, r)
+				}
+			}))
+			defer srv.Close()
+
+			var stdout bytes.Buffer
+			var stderr bytes.Buffer
+			code := Main([]string{"--api-url", srv.URL, "--token", "test-token", "agent", "stop", "run-done"}, &stdout, &stderr)
+			if tt.wantFailure {
+				if code == 0 {
+					t.Fatalf("exit code = %d, want non-zero", code)
+				}
+				if !strings.Contains(stderr.String(), "409") {
+					t.Fatalf("stderr = %q, want 409 context", stderr.String())
+				}
+				return
+			}
+
+			if code != 0 {
+				t.Fatalf("exit code = %d, want 0; stderr=%s", code, stderr.String())
+			}
+			if !strings.Contains(stdout.String(), "Agent session stopped") {
+				t.Fatalf("stdout = %q, want stop summary", stdout.String())
+			}
+		})
+	}
+}
+
+func TestAgentStop_ConflictFallbackSurvivesNearExpiredStopContext(t *testing.T) {
+	t.Setenv(EnvToken, "")
+
+	const (
+		stopDelay = 190 * time.Millisecond
+		getDelay  = 35 * time.Millisecond
+		timeout   = 200 * time.Millisecond
+	)
+
+	var followupGets int32
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/api/v1/harness-runs/run-done/agent-session/stop" && r.Method == http.MethodPost:
+			time.Sleep(stopDelay)
+			w.WriteHeader(http.StatusConflict)
+			_ = json.NewEncoder(w).Encode(map[string]any{"error": "agent session already stopped"})
+
+		case r.URL.Path == "/api/v1/harness-runs/run-done/agent-session" && r.Method == http.MethodGet:
+			getCount := atomic.AddInt32(&followupGets, 1)
+			time.Sleep(getDelay)
+			sessionID := "as-done-initial"
+			phase := string(operatorv1alpha1.AgentSessionPhaseCompleted)
+			if getCount == 2 {
+				sessionID = "as-done-summary"
+				phase = string(operatorv1alpha1.AgentSessionPhaseFailed)
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"sessionId":          sessionID,
+				"runId":              "run-done",
+				"displayName":        "my-agent",
+				"runtime":            "opencode",
+				"agent":              "claude",
+				"phase":              phase,
+				"workspaceSessionId": "ws-5",
+			})
+
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code := Main([]string{
+		"--api-url", srv.URL,
+		"--token", "test-token",
+		"--timeout", timeout.String(),
+		"agent", "stop", "run-done",
+	}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0; stderr=%s", code, stderr.String())
+	}
+	out := stdout.String()
+	if got := atomic.LoadInt32(&followupGets); got != 2 {
+		t.Fatalf("follow-up GET count = %d, want 2", got)
+	}
+	if !strings.Contains(out, "Agent session stopped") {
+		t.Fatalf("stdout = %q, want stop summary heading", out)
+	}
+	if !strings.Contains(out, "Run ID:") || !strings.Contains(out, "run-done") {
+		t.Fatalf("stdout = %q, want Run ID summary", out)
+	}
+	if !strings.Contains(out, "Session ID:") || !strings.Contains(out, "as-done-summary") {
+		t.Fatalf("stdout = %q, want Session ID from second follow-up fetch", out)
+	}
+	if strings.Contains(out, "as-done-initial") {
+		t.Fatalf("stdout = %q, unexpectedly used first follow-up payload", out)
+	}
+	if !strings.Contains(out, "Phase:") || !strings.Contains(out, string(operatorv1alpha1.AgentSessionPhaseFailed)) {
+		t.Fatalf("stdout = %q, want Failed phase from second follow-up fetch", out)
+	}
+}
+
+// TestAgentStop_SlowServer verifies that the stop command does not hang
+// indefinitely when the server is slow to respond. The CLI should use a
+// bounded context timeout.
+func TestAgentStop_SlowServer(t *testing.T) {
+	t.Setenv(EnvToken, "")
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Simulate a slow server that takes longer than the client timeout.
+		// The test uses a 1s timeout, so sleeping 5s should trigger it.
+		select {
+		case <-r.Context().Done():
+			return
+		case <-time.After(5 * time.Second):
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	done := make(chan int, 1)
+	go func() {
+		var stdout bytes.Buffer
+		var stderr bytes.Buffer
+		code := Main([]string{
+			"--api-url", srv.URL,
+			"--token", "test-token",
+			"--timeout", "1s",
+			"agent", "stop", "run-slow",
+		}, &stdout, &stderr)
+		done <- code
+	}()
+
+	select {
+	case code := <-done:
+		// The stop command should fail (non-zero) due to timeout, not hang.
+		if code == 0 {
+			t.Fatal("expected non-zero exit code for timed-out stop")
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("stop command hung despite timeout - context timeout not applied")
 	}
 }

@@ -53,7 +53,9 @@ rules:
       - symphonyprojects
       - symphonyprojects/status
       - sessions
+      - sessions/status
       - harnessruns
+      - harnessruns/status
     verbs:
       - get
       - list

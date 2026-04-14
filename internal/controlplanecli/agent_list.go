@@ -79,7 +79,13 @@ func collectAgentSessions(ctx context.Context, client *Client, workspaceID strin
 		sessions, err := client.ListAgentSessions(ctx, ws.ID)
 		if err != nil {
 			var apiErr *APIError
-			if errors.As(err, &apiErr) && apiErr.StatusCode == 404 {
+			// Only tolerate 404 when the error message indicates the
+			// workspace itself was not found (race: deleted between the
+			// list call and this per-workspace call). Any other 404
+			// (e.g. a missing agent-sessions endpoint) is a regression
+			// and must surface.
+			if errors.As(err, &apiErr) && apiErr.StatusCode == 404 &&
+				strings.Contains(strings.ToLower(apiErr.Message), "workspace session not found") {
 				continue
 			}
 			return nil, fmt.Errorf("list agent sessions for workspace %s: %w", ws.ID, err)
@@ -91,15 +97,16 @@ func collectAgentSessions(ctx context.Context, client *Client, workspaceID strin
 
 func writeAgentSessionsTable(w io.Writer, sessions []AgentSession) error {
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
-	if _, err := fmt.Fprintln(tw, "SESSION ID\tRUN\tAGENT\tPHASE\tWORKSPACE\tCREATED"); err != nil {
+	if _, err := fmt.Fprintln(tw, "SESSION ID\tRUN\tAGENT\tPHASE\tBLOCKER\tWORKSPACE\tCREATED"); err != nil {
 		return err
 	}
 	for _, session := range sessions {
-		if _, err := fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n",
+		if _, err := fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
 			session.SessionID,
 			valueOrDash(session.RunID),
 			valueOrDash(session.Agent),
 			valueOrDash(session.Phase),
+			formatAgentSessionBlocker(session.Diagnostic),
 			valueOrDash(session.WorkspaceID),
 			formatAgentSessionCreatedAt(session.CreatedAt),
 		); err != nil {

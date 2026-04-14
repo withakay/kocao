@@ -385,6 +385,8 @@ const (
 	AgentKindClaude   AgentKind = "claude"
 	AgentKindCodex    AgentKind = "codex"
 	AgentKindPi       AgentKind = "pi"
+	// AgentKindMock is reserved for internal ACP fixture coverage.
+	AgentKindMock AgentKind = "mock"
 )
 
 type AgentSessionPhase string
@@ -392,11 +394,99 @@ type AgentSessionPhase string
 const (
 	AgentSessionPhaseProvisioning AgentSessionPhase = "Provisioning"
 	AgentSessionPhaseReady        AgentSessionPhase = "Ready"
-	AgentSessionPhaseActive       AgentSessionPhase = "Active"
-	AgentSessionPhaseStopping     AgentSessionPhase = "Stopping"
-	AgentSessionPhaseCompleted    AgentSessionPhase = "Completed"
-	AgentSessionPhaseFailed       AgentSessionPhase = "Failed"
+	AgentSessionPhaseRunning      AgentSessionPhase = "Running"
+	// AgentSessionPhaseActive is a deprecated compatibility alias for Running.
+	AgentSessionPhaseActive    AgentSessionPhase = AgentSessionPhaseRunning
+	AgentSessionPhaseStopping  AgentSessionPhase = "Stopping"
+	AgentSessionPhaseCompleted AgentSessionPhase = "Completed"
+	AgentSessionPhaseFailed    AgentSessionPhase = "Failed"
 )
+
+func NormalizeAgentSessionPhase(raw string) AgentSessionPhase {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "":
+		return ""
+	case strings.ToLower(string(AgentSessionPhaseProvisioning)):
+		return AgentSessionPhaseProvisioning
+	case strings.ToLower(string(AgentSessionPhaseReady)):
+		return AgentSessionPhaseReady
+	case strings.ToLower(string(AgentSessionPhaseRunning)), "active":
+		return AgentSessionPhaseRunning
+	case strings.ToLower(string(AgentSessionPhaseStopping)):
+		return AgentSessionPhaseStopping
+	case strings.ToLower(string(AgentSessionPhaseCompleted)):
+		return AgentSessionPhaseCompleted
+	case strings.ToLower(string(AgentSessionPhaseFailed)):
+		return AgentSessionPhaseFailed
+	default:
+		return AgentSessionPhase(strings.TrimSpace(raw))
+	}
+}
+
+func (p AgentSessionPhase) normalized() AgentSessionPhase {
+	return NormalizeAgentSessionPhase(string(p))
+}
+
+func (p AgentSessionPhase) IsTerminal() bool {
+	switch p.normalized() {
+	case AgentSessionPhaseCompleted, AgentSessionPhaseFailed:
+		return true
+	default:
+		return false
+	}
+}
+
+func (p AgentSessionPhase) CanTransitionTo(next AgentSessionPhase) bool {
+	current := p.normalized()
+	next = next.normalized()
+	if next == "" {
+		return false
+	}
+	if current == next {
+		return true
+	}
+	switch current {
+	case "":
+		switch next {
+		case AgentSessionPhaseProvisioning, AgentSessionPhaseReady, AgentSessionPhaseRunning, AgentSessionPhaseStopping, AgentSessionPhaseCompleted, AgentSessionPhaseFailed:
+			return true
+		default:
+			return false
+		}
+	case AgentSessionPhaseProvisioning:
+		switch next {
+		case AgentSessionPhaseReady, AgentSessionPhaseRunning, AgentSessionPhaseStopping, AgentSessionPhaseCompleted, AgentSessionPhaseFailed:
+			return true
+		default:
+			return false
+		}
+	case AgentSessionPhaseReady:
+		switch next {
+		case AgentSessionPhaseRunning, AgentSessionPhaseStopping, AgentSessionPhaseCompleted, AgentSessionPhaseFailed:
+			return true
+		default:
+			return false
+		}
+	case AgentSessionPhaseRunning:
+		switch next {
+		case AgentSessionPhaseStopping, AgentSessionPhaseCompleted, AgentSessionPhaseFailed:
+			return true
+		default:
+			return false
+		}
+	case AgentSessionPhaseStopping:
+		switch next {
+		case AgentSessionPhaseCompleted, AgentSessionPhaseFailed:
+			return true
+		default:
+			return false
+		}
+	case AgentSessionPhaseCompleted, AgentSessionPhaseFailed:
+		return false
+	default:
+		return false
+	}
+}
 
 type AgentSessionSpec struct {
 	// Runtime identifies the provider-neutral in-sandbox agent control runtime.
@@ -462,6 +552,8 @@ func NormalizeAgentKind(raw string) AgentKind {
 		return AgentKindCodex
 	case string(AgentKindPi):
 		return AgentKindPi
+	case string(AgentKindMock):
+		return AgentKindMock
 	default:
 		return AgentKind(normalized)
 	}

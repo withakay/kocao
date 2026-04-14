@@ -29,6 +29,43 @@ jobs:
       - name: Test
         run: make test
 
+  agent-lifecycle-live:
+    name: Agent Lifecycle (kind live)
+    runs-on: ubuntu-latest
+    needs: go
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Setup kubectl
+        uses: azure/setup-kubectl@v4
+        with:
+          version: latest
+
+      - name: Run live lifecycle verification in kind
+        env:
+          KOCAO_LIVE_TEST_KEEP_CLUSTER: "1"
+        run: make test-agent-live-kind KIND_CLUSTER_NAME=kocao-gha-live
+
+      - name: Collect kind diagnostics on failure
+        if: failure()
+        run: |
+          kubectl get all -A || true
+          kubectl get events -A --sort-by=.lastTimestamp || true
+          kubectl -n kocao-system get harnessruns || true
+          kubectl -n kocao-system describe deploy/control-plane-api deploy/control-plane-operator || true
+
+      - name: Cleanup kind cluster
+        if: always()
+        run: make kind-down KIND_CLUSTER_NAME=kocao-gha-live
+
   web:
     name: Web (lint + test)
     runs-on: ubuntu-latest

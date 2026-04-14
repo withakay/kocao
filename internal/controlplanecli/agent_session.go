@@ -14,14 +14,21 @@ import (
 
 // AgentSession represents an agent session associated with a harness run.
 type AgentSession struct {
-	SessionID   string    `json:"sessionId"`
-	RunID       string    `json:"runId"`
-	DisplayName string    `json:"displayName"`
-	Runtime     string    `json:"runtime"`
-	Agent       string    `json:"agent"`
-	Phase       string    `json:"phase"`
-	WorkspaceID string    `json:"workspaceSessionId"`
-	CreatedAt   time.Time `json:"createdAt,omitempty"`
+	SessionID   string                  `json:"sessionId"`
+	RunID       string                  `json:"runId"`
+	DisplayName string                  `json:"displayName"`
+	Runtime     string                  `json:"runtime"`
+	Agent       string                  `json:"agent"`
+	Phase       string                  `json:"phase"`
+	WorkspaceID string                  `json:"workspaceSessionId"`
+	CreatedAt   time.Time               `json:"createdAt,omitempty"`
+	Diagnostic  *AgentSessionDiagnostic `json:"diagnostic,omitempty"`
+}
+
+type AgentSessionDiagnostic struct {
+	Class   string `json:"class"`
+	Summary string `json:"summary"`
+	Detail  string `json:"detail,omitempty"`
 }
 
 // AgentSessionEvent represents a single event from an agent session event stream.

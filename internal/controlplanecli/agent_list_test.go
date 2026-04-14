@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 func TestAgentList_TableOutput(t *testing.T) {
@@ -60,7 +61,6 @@ func TestAgentList_TableOutput(t *testing.T) {
 	}
 
 	out := stdout.String()
-	// Verify header row
 	if !strings.Contains(out, "SESSION ID") {
 		t.Errorf("missing SESSION ID header, got:\n%s", out)
 	}
@@ -73,6 +73,9 @@ func TestAgentList_TableOutput(t *testing.T) {
 	if !strings.Contains(out, "PHASE") {
 		t.Errorf("missing PHASE header, got:\n%s", out)
 	}
+	if !strings.Contains(out, "BLOCKER") {
+		t.Errorf("missing BLOCKER header, got:\n%s", out)
+	}
 	if !strings.Contains(out, "WORKSPACE") {
 		t.Errorf("missing WORKSPACE header, got:\n%s", out)
 	}
@@ -80,7 +83,6 @@ func TestAgentList_TableOutput(t *testing.T) {
 		t.Errorf("missing CREATED header, got:\n%s", out)
 	}
 
-	// Verify data rows
 	if !strings.Contains(out, "as-1") {
 		t.Errorf("missing session as-1, got:\n%s", out)
 	}
@@ -92,6 +94,41 @@ func TestAgentList_TableOutput(t *testing.T) {
 	}
 	if !strings.Contains(out, "Running") {
 		t.Errorf("missing phase Running, got:\n%s", out)
+	}
+	if !strings.Contains(out, "-") {
+		t.Errorf("missing empty blocker marker, got:\n%s", out)
+	}
+}
+
+func TestWriteAgentSessionsTable_IncludesBlockerColumn(t *testing.T) {
+	var out bytes.Buffer
+	err := writeAgentSessionsTable(&out, []AgentSession{{
+		SessionID:   "sess-123",
+		RunID:       "run-123",
+		Agent:       "codex",
+		Phase:       "Provisioning",
+		WorkspaceID: "ws-123",
+		CreatedAt:   time.Date(2026, 4, 12, 13, 0, 0, 0, time.UTC),
+		Diagnostic: &AgentSessionDiagnostic{
+			Class:   "sandbox-agent-readiness",
+			Summary: "Sandbox-agent is not ready yet.",
+		},
+	}})
+	if err != nil {
+		t.Fatalf("write table: %v", err)
+	}
+
+	got := out.String()
+	for _, want := range []string{
+		"SESSION ID",
+		"BLOCKER",
+		"sess-123",
+		"Provisioning",
+		"sandbox-agent-readiness",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("output missing %q, got:\n%s", want, got)
+		}
 	}
 }
 
@@ -185,7 +222,6 @@ func TestAgentList_YAMLOutput(t *testing.T) {
 	}
 
 	out := stdout.String()
-	// YAML output should contain key-value pairs
 	if !strings.Contains(out, "sessionId: as-1") {
 		t.Errorf("YAML output missing sessionId, got:\n%s", out)
 	}
@@ -291,7 +327,6 @@ func TestAgentList_WorkspaceFilter(t *testing.T) {
 		t.Fatalf("exit code = %d stderr=%s", code, stderr.String())
 	}
 
-	// Should NOT have called ListWorkspaceSessions
 	mu.Lock()
 	paths := append([]string{}, requestedPaths...)
 	mu.Unlock()
@@ -402,6 +437,72 @@ func TestAgentList_WorkspaceFilterAPIError(t *testing.T) {
 	}
 }
 
+func TestAgentList_404WorkspaceNotFound_Skipped(t *testing.T) {
+	t.Setenv(EnvToken, "")
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/api/v1/workspace-sessions" && r.Method == http.MethodGet:
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"workspaceSessions": []map[string]any{
+					{"id": "ws-deleted", "phase": "Active"},
+					{"id": "ws-ok", "phase": "Active"},
+				},
+			})
+		case r.URL.Path == "/api/v1/workspace-sessions/ws-deleted/agent-sessions" && r.Method == http.MethodGet:
+			w.WriteHeader(http.StatusNotFound)
+			_ = json.NewEncoder(w).Encode(map[string]any{"error": "workspace session not found"})
+		case r.URL.Path == "/api/v1/workspace-sessions/ws-ok/agent-sessions" && r.Method == http.MethodGet:
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"agentSessions": []map[string]any{
+					{"sessionId": "as-ok", "runId": "run-ok", "agent": "claude", "phase": "Running", "workspaceSessionId": "ws-ok"},
+				},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code := Main([]string{"--api-url", srv.URL, "--token", "test-token", "agent", "list"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("exit code = %d stderr=%s", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "as-ok") {
+		t.Errorf("expected session as-ok in output, got:\n%s", stdout.String())
+	}
+}
+
+func TestAgentList_404Generic_NotSkipped(t *testing.T) {
+	t.Setenv(EnvToken, "")
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/api/v1/workspace-sessions" && r.Method == http.MethodGet:
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"workspaceSessions": []map[string]any{
+					{"id": "ws-1", "phase": "Active"},
+				},
+			})
+		case r.URL.Path == "/api/v1/workspace-sessions/ws-1/agent-sessions" && r.Method == http.MethodGet:
+			w.WriteHeader(http.StatusNotFound)
+			_ = json.NewEncoder(w).Encode(map[string]any{"error": "not found"})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code := Main([]string{"--api-url", srv.URL, "--token", "test-token", "agent", "list"}, &stdout, &stderr)
+	if code != 1 {
+		t.Fatalf("exit code = %d, want 1 (generic 404 should not be silently skipped); stderr=%s", code, stderr.String())
+	}
+}
+
 func TestAgentList_LsAlias(t *testing.T) {
 	t.Setenv(EnvToken, "")
 
@@ -424,7 +525,6 @@ func TestAgentList_LsAlias(t *testing.T) {
 		t.Fatalf("exit code = %d stderr=%s", code, stderr.String())
 	}
 
-	// "ls" alias should work the same as "list"
 	if !strings.Contains(stdout.String(), "no agent sessions found") {
 		t.Errorf("expected 'no agent sessions found' message via ls alias, got:\n%s", stdout.String())
 	}

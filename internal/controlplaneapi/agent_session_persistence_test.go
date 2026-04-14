@@ -103,12 +103,12 @@ func TestAgentSessionPersistenceAndResumeHistory_API_StoreBacked(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("get resumed agent session status = %d, want 200 (body=%s)", resp.StatusCode, string(b))
 	}
-	var resumedState agentSessionState
-	if err := json.Unmarshal(b, &resumedState); err != nil {
+	var resumedDTO agentSessionDTO
+	if err := json.Unmarshal(b, &resumedDTO); err != nil {
 		t.Fatalf("unmarshal resumed state: %v", err)
 	}
-	if resumedState.HarnessRunID != resumed.Name || resumedState.SessionID != "sas-123" {
-		t.Fatalf("unexpected resumed state: %+v", resumedState)
+	if resumedDTO.RunID != resumed.Name || resumedDTO.SessionID != "sas-123" {
+		t.Fatalf("unexpected resumed state: %+v", resumedDTO)
 	}
 
 	resp, b = doJSON(t, srv.Client(), http.MethodGet, srv.URL+"/api/v1/harness-runs/"+resumed.Name+"/agent-session/events?offset=0&limit=10", "full", nil)
@@ -218,5 +218,306 @@ func TestAgentSessionBridgeSanitizesEventsBeforeBroadcast(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for broadcast event")
+	}
+}
+
+func TestAgentSessionRestartReconciliation_GetUsesHarnessRunStatusWithoutBridge(t *testing.T) {
+	api, cleanup := newTestAPI(t)
+	defer cleanup()
+	api.AgentSessions = newAgentSessionService(newFakeAgentSessionTransport(), newAgentSessionStore(""))
+
+	if err := api.Tokens.Create(context.Background(), "t-full", "full", []string{"harness-run:read", "harness-run:write"}); err != nil {
+		t.Fatalf("create token: %v", err)
+	}
+
+	run := &operatorv1alpha1.HarnessRun{
+		TypeMeta:   metav1.TypeMeta{APIVersion: operatorv1alpha1.GroupVersion.String(), Kind: "HarnessRun"},
+		ObjectMeta: metav1.ObjectMeta{Name: "run-restart-reconcile-get", Namespace: api.Namespace},
+		Spec: operatorv1alpha1.HarnessRunSpec{
+			RepoURL:    "https://example.com/repo",
+			Image:      "kocao/harness-runtime:dev",
+			WorkingDir: "/workspace/repo",
+			AgentSession: &operatorv1alpha1.AgentSessionSpec{
+				Runtime: operatorv1alpha1.AgentRuntimeSandboxAgent,
+				Agent:   operatorv1alpha1.AgentKindClaude,
+			},
+		},
+	}
+	if err := api.K8s.Create(context.Background(), run); err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	var stored operatorv1alpha1.HarnessRun
+	if err := api.K8s.Get(context.Background(), client.ObjectKeyFromObject(run), &stored); err != nil {
+		t.Fatalf("get run: %v", err)
+	}
+	stored.Status.PodName = "pod-restart-reconcile-get"
+	stored.Status.Phase = operatorv1alpha1.HarnessRunPhaseRunning
+	stored.Status.AgentSession = &operatorv1alpha1.AgentSessionStatus{
+		Runtime:   operatorv1alpha1.AgentRuntimeSandboxAgent,
+		Agent:     operatorv1alpha1.AgentKindClaude,
+		SessionID: "sas-restart-get",
+		Phase:     operatorv1alpha1.AgentSessionPhaseRunning,
+	}
+	if err := api.K8s.Status().Update(context.Background(), &stored); err != nil {
+		t.Fatalf("update run status: %v", err)
+	}
+
+	srv := httptest.NewServer(api.Handler())
+	defer srv.Close()
+
+	resp, b := doJSON(t, srv.Client(), http.MethodGet, srv.URL+"/api/v1/harness-runs/"+run.Name+"/agent-session", "full", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", resp.StatusCode, string(b))
+	}
+
+	var dto agentSessionDTO
+	if err := json.Unmarshal(b, &dto); err != nil {
+		t.Fatalf("unmarshal status response: %v", err)
+	}
+	if dto.SessionID != "sas-restart-get" {
+		t.Fatalf("session ID = %q, want sas-restart-get", dto.SessionID)
+	}
+	if dto.Phase != operatorv1alpha1.AgentSessionPhaseRunning {
+		t.Fatalf("phase = %q, want Running", dto.Phase)
+	}
+}
+
+func TestAgentSessionRestartReconciliation_StopRebuildsBridgeFromHarnessRunStatus(t *testing.T) {
+	api, cleanup := newTestAPI(t)
+	defer cleanup()
+	transport := newFakeAgentSessionTransport()
+	api.AgentSessions = newAgentSessionService(transport, newAgentSessionStore(""))
+
+	if err := api.Tokens.Create(context.Background(), "t-full", "full", []string{"harness-run:read", "harness-run:write"}); err != nil {
+		t.Fatalf("create token: %v", err)
+	}
+
+	run := &operatorv1alpha1.HarnessRun{
+		TypeMeta:   metav1.TypeMeta{APIVersion: operatorv1alpha1.GroupVersion.String(), Kind: "HarnessRun"},
+		ObjectMeta: metav1.ObjectMeta{Name: "run-restart-reconcile-stop", Namespace: api.Namespace},
+		Spec: operatorv1alpha1.HarnessRunSpec{
+			RepoURL:    "https://example.com/repo",
+			Image:      "kocao/harness-runtime:dev",
+			WorkingDir: "/workspace/repo",
+			AgentSession: &operatorv1alpha1.AgentSessionSpec{
+				Runtime: operatorv1alpha1.AgentRuntimeSandboxAgent,
+				Agent:   operatorv1alpha1.AgentKindClaude,
+			},
+		},
+	}
+	if err := api.K8s.Create(context.Background(), run); err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	var stored operatorv1alpha1.HarnessRun
+	if err := api.K8s.Get(context.Background(), client.ObjectKeyFromObject(run), &stored); err != nil {
+		t.Fatalf("get run: %v", err)
+	}
+	stored.Status.PodName = "pod-restart-reconcile-stop"
+	stored.Status.Phase = operatorv1alpha1.HarnessRunPhaseRunning
+	stored.Status.AgentSession = &operatorv1alpha1.AgentSessionStatus{
+		Runtime:   operatorv1alpha1.AgentRuntimeSandboxAgent,
+		Agent:     operatorv1alpha1.AgentKindClaude,
+		SessionID: "sas-restart-stop",
+		Phase:     operatorv1alpha1.AgentSessionPhaseRunning,
+	}
+	if err := api.K8s.Status().Update(context.Background(), &stored); err != nil {
+		t.Fatalf("update run status: %v", err)
+	}
+
+	srv := httptest.NewServer(api.Handler())
+	defer srv.Close()
+
+	resp, b := doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/harness-runs/"+run.Name+"/agent-session/stop", "full", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("stop status = %d, want 200 (body=%s)", resp.StatusCode, string(b))
+	}
+
+	if !transport.deleted {
+		t.Fatal("expected stop to issue DeleteACP after restart reconciliation")
+	}
+
+	var dto agentSessionDTO
+	if err := json.Unmarshal(b, &dto); err != nil {
+		t.Fatalf("unmarshal stop response: %v", err)
+	}
+	if dto.SessionID != "sas-restart-stop" {
+		t.Fatalf("session ID = %q, want sas-restart-stop", dto.SessionID)
+	}
+	if dto.Phase != operatorv1alpha1.AgentSessionPhaseCompleted {
+		t.Fatalf("phase = %q, want Completed", dto.Phase)
+	}
+
+	if err := api.K8s.Get(context.Background(), client.ObjectKeyFromObject(run), &stored); err != nil {
+		t.Fatalf("get run after stop: %v", err)
+	}
+	if stored.Status.AgentSession == nil {
+		t.Fatal("expected stop to persist reconciled agent session state")
+	}
+	if stored.Status.AgentSession.Phase != operatorv1alpha1.AgentSessionPhaseCompleted {
+		t.Fatalf("stored phase = %q, want Completed", stored.Status.AgentSession.Phase)
+	}
+}
+
+func TestAgentSessionRestartReconciliation_CRDRunningOverridesPersistedCompleted(t *testing.T) {
+	api, cleanup := newTestAPI(t)
+	defer cleanup()
+	store := newAgentSessionStore("")
+	transport := newFakeAgentSessionTransport()
+	api.AgentSessions = newAgentSessionService(transport, store)
+
+	if err := api.Tokens.Create(context.Background(), "t-full", "full", []string{"harness-run:read", "harness-run:write"}); err != nil {
+		t.Fatalf("create token: %v", err)
+	}
+
+	run := &operatorv1alpha1.HarnessRun{
+		TypeMeta:   metav1.TypeMeta{APIVersion: operatorv1alpha1.GroupVersion.String(), Kind: "HarnessRun"},
+		ObjectMeta: metav1.ObjectMeta{Name: "run-restart-conflict-live", Namespace: api.Namespace},
+		Spec: operatorv1alpha1.HarnessRunSpec{
+			RepoURL:    "https://example.com/repo",
+			Image:      "kocao/harness-runtime:dev",
+			WorkingDir: "/workspace/repo",
+			AgentSession: &operatorv1alpha1.AgentSessionSpec{
+				Runtime: operatorv1alpha1.AgentRuntimeSandboxAgent,
+				Agent:   operatorv1alpha1.AgentKindClaude,
+			},
+		},
+	}
+	if err := api.K8s.Create(context.Background(), run); err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	var stored operatorv1alpha1.HarnessRun
+	if err := api.K8s.Get(context.Background(), client.ObjectKeyFromObject(run), &stored); err != nil {
+		t.Fatalf("get run: %v", err)
+	}
+	stored.Status.PodName = "pod-restart-conflict-live"
+	stored.Status.Phase = operatorv1alpha1.HarnessRunPhaseRunning
+	stored.Status.AgentSession = &operatorv1alpha1.AgentSessionStatus{
+		Runtime:   operatorv1alpha1.AgentRuntimeSandboxAgent,
+		Agent:     operatorv1alpha1.AgentKindClaude,
+		SessionID: "sas-live",
+		Phase:     operatorv1alpha1.AgentSessionPhaseRunning,
+	}
+	if err := api.K8s.Status().Update(context.Background(), &stored); err != nil {
+		t.Fatalf("update run status: %v", err)
+	}
+	store.SaveState(agentSessionState{
+		HarnessRunID: run.Name,
+		PodName:      stored.Status.PodName,
+		ServerID:     run.Name,
+		Runtime:      operatorv1alpha1.AgentRuntimeSandboxAgent,
+		Agent:        operatorv1alpha1.AgentKindClaude,
+		SessionID:    "sas-stale-completed",
+		Phase:        operatorv1alpha1.AgentSessionPhaseCompleted,
+		LastSequence: 17,
+	})
+
+	srv := httptest.NewServer(api.Handler())
+	defer srv.Close()
+
+	resp, b := doJSON(t, srv.Client(), http.MethodGet, srv.URL+"/api/v1/harness-runs/"+run.Name+"/agent-session", "full", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("get status = %d, want 200 (body=%s)", resp.StatusCode, string(b))
+	}
+	var dto agentSessionDTO
+	if err := json.Unmarshal(b, &dto); err != nil {
+		t.Fatalf("unmarshal get response: %v", err)
+	}
+	if dto.Phase != operatorv1alpha1.AgentSessionPhaseRunning {
+		t.Fatalf("get phase = %q, want Running", dto.Phase)
+	}
+	if dto.SessionID != "sas-live" {
+		t.Fatalf("get session ID = %q, want sas-live", dto.SessionID)
+	}
+
+	resp, b = doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/harness-runs/"+run.Name+"/agent-session/stop", "full", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("stop status = %d, want 200 (body=%s)", resp.StatusCode, string(b))
+	}
+	if !transport.deleted {
+		t.Fatal("expected stop to still issue DeleteACP when CRD reports Running")
+	}
+	if err := json.Unmarshal(b, &dto); err != nil {
+		t.Fatalf("unmarshal stop response: %v", err)
+	}
+	if dto.Phase != operatorv1alpha1.AgentSessionPhaseCompleted {
+		t.Fatalf("stop phase = %q, want Completed", dto.Phase)
+	}
+	if dto.LastSequence != 17 {
+		t.Fatalf("stop lastSequence = %d, want 17", dto.LastSequence)
+	}
+}
+
+func TestAgentSessionRestartReconciliation_CRDCompletedOverridesPersistedRunningOnStop(t *testing.T) {
+	api, cleanup := newTestAPI(t)
+	defer cleanup()
+	store := newAgentSessionStore("")
+	transport := newFakeAgentSessionTransport()
+	api.AgentSessions = newAgentSessionService(transport, store)
+
+	if err := api.Tokens.Create(context.Background(), "t-full", "full", []string{"harness-run:read", "harness-run:write"}); err != nil {
+		t.Fatalf("create token: %v", err)
+	}
+
+	run := &operatorv1alpha1.HarnessRun{
+		TypeMeta:   metav1.TypeMeta{APIVersion: operatorv1alpha1.GroupVersion.String(), Kind: "HarnessRun"},
+		ObjectMeta: metav1.ObjectMeta{Name: "run-restart-conflict-terminal", Namespace: api.Namespace},
+		Spec: operatorv1alpha1.HarnessRunSpec{
+			RepoURL:    "https://example.com/repo",
+			Image:      "kocao/harness-runtime:dev",
+			WorkingDir: "/workspace/repo",
+			AgentSession: &operatorv1alpha1.AgentSessionSpec{
+				Runtime: operatorv1alpha1.AgentRuntimeSandboxAgent,
+				Agent:   operatorv1alpha1.AgentKindClaude,
+			},
+		},
+	}
+	if err := api.K8s.Create(context.Background(), run); err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	var stored operatorv1alpha1.HarnessRun
+	if err := api.K8s.Get(context.Background(), client.ObjectKeyFromObject(run), &stored); err != nil {
+		t.Fatalf("get run: %v", err)
+	}
+	stored.Status.PodName = "pod-restart-conflict-terminal"
+	stored.Status.Phase = operatorv1alpha1.HarnessRunPhaseSucceeded
+	stored.Status.AgentSession = &operatorv1alpha1.AgentSessionStatus{
+		Runtime:   operatorv1alpha1.AgentRuntimeSandboxAgent,
+		Agent:     operatorv1alpha1.AgentKindClaude,
+		SessionID: "sas-terminal",
+		Phase:     operatorv1alpha1.AgentSessionPhaseCompleted,
+	}
+	if err := api.K8s.Status().Update(context.Background(), &stored); err != nil {
+		t.Fatalf("update run status: %v", err)
+	}
+	store.SaveState(agentSessionState{
+		HarnessRunID: run.Name,
+		PodName:      stored.Status.PodName,
+		ServerID:     run.Name,
+		Runtime:      operatorv1alpha1.AgentRuntimeSandboxAgent,
+		Agent:        operatorv1alpha1.AgentKindClaude,
+		SessionID:    "sas-terminal",
+		Phase:        operatorv1alpha1.AgentSessionPhaseRunning,
+		LastSequence: 9,
+	})
+
+	srv := httptest.NewServer(api.Handler())
+	defer srv.Close()
+
+	resp, b := doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/harness-runs/"+run.Name+"/agent-session/stop", "full", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("stop status = %d, want 200 (body=%s)", resp.StatusCode, string(b))
+	}
+	if transport.deleted {
+		t.Fatal("expected stop to no-op when CRD already reports a terminal phase")
+	}
+	var dto agentSessionDTO
+	if err := json.Unmarshal(b, &dto); err != nil {
+		t.Fatalf("unmarshal stop response: %v", err)
+	}
+	if dto.Phase != operatorv1alpha1.AgentSessionPhaseCompleted {
+		t.Fatalf("stop phase = %q, want Completed", dto.Phase)
+	}
+	if dto.LastSequence != 9 {
+		t.Fatalf("stop lastSequence = %d, want 9", dto.LastSequence)
 	}
 }

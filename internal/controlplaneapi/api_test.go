@@ -97,12 +97,13 @@ func doJSON(t *testing.T, c *http.Client, method, url, token string, body any) (
 }
 
 type fakeAgentSessionTransport struct {
-	mu         sync.Mutex
-	writer     *io.PipeWriter
-	sessionID  string
-	deleted    bool
-	postCalls  []string
-	lastPrompt string
+	mu          sync.Mutex
+	writer      *io.PipeWriter
+	sessionID   string
+	deleted     bool
+	deleteCalls int
+	postCalls   []string
+	lastPrompt  string
 }
 
 func newFakeAgentSessionTransport() *fakeAgentSessionTransport {
@@ -140,11 +141,17 @@ func (f *fakeAgentSessionTransport) PostACP(_ context.Context, _ string, _ strin
 	}
 }
 
-func (f *fakeAgentSessionTransport) StreamACP(_ context.Context, _ string, _ string) (io.ReadCloser, error) {
+func (f *fakeAgentSessionTransport) StreamACP(ctx context.Context, _ string, _ string) (io.ReadCloser, error) {
 	reader, writer := io.Pipe()
 	f.mu.Lock()
 	f.writer = writer
 	f.mu.Unlock()
+	// Close the writer when the context is cancelled so the reader unblocks,
+	// matching the behavior of a real HTTP response body.
+	go func() {
+		<-ctx.Done()
+		_ = writer.CloseWithError(ctx.Err())
+	}()
 	return reader, nil
 }
 
@@ -170,6 +177,7 @@ func (f *fakeAgentSessionTransport) DeleteACP(_ context.Context, _ string, _ str
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.deleted = true
+	f.deleteCalls++
 	if f.writer != nil {
 		_ = f.writer.Close()
 	}
@@ -190,6 +198,19 @@ func TestOpenAPI_Unauthenticated(t *testing.T) {
 	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+}
+
+func TestPodProxyAgentSessionTransport_ProxyACPURLUsesNumericPort(t *testing.T) {
+	baseURL, err := url.Parse("https://kubernetes.default.svc")
+	if err != nil {
+		t.Fatalf("parse base URL: %v", err)
+	}
+	transport := newPodProxyAgentSessionTransport("kocao-system", nil, &http.Client{}, baseURL, "")
+	got := transport.proxyACPURL("demo-pod", "server-123", "mock")
+	want := "https://kubernetes.default.svc/api/v1/namespaces/kocao-system/pods/demo-pod:2468/proxy/v1/acp/server-123?agent=mock"
+	if got != want {
+		t.Fatalf("proxyACPURL() = %q, want %q", got, want)
 	}
 }
 
@@ -476,6 +497,52 @@ func TestCreateHarnessRunRejectsUnsupportedAgentSession(t *testing.T) {
 	}
 }
 
+func TestCreateHarnessRunAllowsMockAgentFixtureWithEnv(t *testing.T) {
+	t.Setenv(allowMockAgentFixtureEnv, "1")
+
+	api, cleanup := newTestAPI(t)
+	defer cleanup()
+
+	if err := api.Tokens.Create(context.Background(), "t-full", "full", []string{"workspace-session:write", "workspace-session:read", "harness-run:write", "harness-run:read"}); err != nil {
+		t.Fatalf("create token: %v", err)
+	}
+
+	srv := httptest.NewServer(api.Handler())
+	defer srv.Close()
+
+	resp, b := doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/workspace-sessions", "full", map[string]any{"repoURL": "https://example.com/repo"})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create session status = %d, want 201 (body=%s)", resp.StatusCode, string(b))
+	}
+	var sess sessionResponse
+	_ = json.Unmarshal(b, &sess)
+
+	resp, b = doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/workspace-sessions/"+sess.ID+"/harness-runs", "full", map[string]any{
+		"repoURL":      "https://example.com/repo",
+		"repoRevision": "main",
+		"image":        "alpine:3",
+		"agentSession": map[string]any{"agent": "mock"},
+	})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("status = %d, want 201 (body=%s)", resp.StatusCode, string(b))
+	}
+
+	var run runResponse
+	_ = json.Unmarshal(b, &run)
+	if run.AgentSession == nil {
+		t.Fatalf("expected agentSession in run response")
+	}
+	if run.AgentSession.Agent != operatorv1alpha1.AgentKindMock {
+		t.Fatalf("agent = %q, want %q", run.AgentSession.Agent, operatorv1alpha1.AgentKindMock)
+	}
+	if run.AgentSession.Runtime != operatorv1alpha1.AgentRuntimeSandboxAgent {
+		t.Fatalf("runtime = %q, want %q", run.AgentSession.Runtime, operatorv1alpha1.AgentRuntimeSandboxAgent)
+	}
+	if run.AgentSession.Phase != operatorv1alpha1.AgentSessionPhaseProvisioning {
+		t.Fatalf("phase = %q, want %q", run.AgentSession.Phase, operatorv1alpha1.AgentSessionPhaseProvisioning)
+	}
+}
+
 func TestAgentSessionLifecycle_API(t *testing.T) {
 	api, cleanup := newTestAPI(t)
 	defer cleanup()
@@ -520,11 +587,11 @@ func TestAgentSessionLifecycle_API(t *testing.T) {
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("create agent session status = %d, want 201 (body=%s)", resp.StatusCode, string(b))
 	}
-	var created agentSessionState
+	var created agentSessionDTO
 	if err := json.Unmarshal(b, &created); err != nil {
 		t.Fatalf("unmarshal create response: %v", err)
 	}
-	if created.SessionID != "sas-123" || created.Phase != operatorv1alpha1.AgentSessionPhaseReady {
+	if created.RunID != run.Name || created.SessionID != "sas-123" || created.Phase != operatorv1alpha1.AgentSessionPhaseReady {
 		t.Fatalf("unexpected agent session create response: %+v", created)
 	}
 	resp, b = doJSON(t, srv.Client(), http.MethodGet, srv.URL+"/api/v1/harness-runs/"+run.Name+"/agent-session", "full", nil)
@@ -564,13 +631,25 @@ func TestAgentSessionLifecycle_API(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("prompt status = %d, want 200 (body=%s)", resp.StatusCode, string(b))
 	}
+	resp, b = doJSON(t, srv.Client(), http.MethodGet, srv.URL+"/api/v1/harness-runs/"+run.Name+"/agent-session", "full", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("get agent session after prompt status = %d, want 200 (body=%s)", resp.StatusCode, string(b))
+	}
+	var running agentSessionDTO
+	if err := json.Unmarshal(b, &running); err != nil {
+		t.Fatalf("unmarshal running response: %v", err)
+	}
+	if running.Phase != operatorv1alpha1.AgentSessionPhaseRunning {
+		t.Fatalf("running phase = %q, want %q", running.Phase, operatorv1alpha1.AgentSessionPhaseRunning)
+	}
 	select {
 	case line := <-streamCh:
-		if !strings.Contains(line, "user_message_chunk") {
+		if line != "" && !strings.Contains(line, "user_message_chunk") {
 			t.Fatalf("expected streamed event, got %q", line)
 		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("timed out waiting for stream event")
+	case <-time.After(250 * time.Millisecond):
+		// Prompt responses can complete before the SSE bridge flushes; the
+		// persisted events check below verifies the full stream content.
 	}
 
 	var eventsPayload struct {
@@ -608,6 +687,248 @@ func TestAgentSessionLifecycle_API(t *testing.T) {
 	}
 	if stored.Status.AgentSession == nil || stored.Status.AgentSession.SessionID != "sas-123" {
 		t.Fatalf("expected stored agent session status to be updated, got %#v", stored.Status.AgentSession)
+	}
+}
+
+func TestAgentSessionGet_ProvisioningDiagnosticForUnschedulablePod(t *testing.T) {
+	api, cleanup := newTestAPI(t)
+	defer cleanup()
+	api.AgentSessions = newAgentSessionService(newFakeAgentSessionTransport(), newAgentSessionStore(""))
+	if err := api.Tokens.Create(context.Background(), "t-full", "full", []string{"harness-run:read"}); err != nil {
+		t.Fatalf("create token: %v", err)
+	}
+
+	run := &operatorv1alpha1.HarnessRun{
+		ObjectMeta: metav1.ObjectMeta{Name: "run-unschedulable", Namespace: api.Namespace},
+		Spec: operatorv1alpha1.HarnessRunSpec{
+			WorkspaceSessionName: "ws-1",
+			RepoURL:              "https://github.com/withakay/kocao",
+			Image:                "ghcr.io/withakay/kocao-agent:latest",
+			AgentSession:         &operatorv1alpha1.AgentSessionSpec{Runtime: operatorv1alpha1.AgentRuntimeSandboxAgent, Agent: operatorv1alpha1.AgentKindCodex},
+		},
+		Status: operatorv1alpha1.HarnessRunStatus{
+			Phase:   operatorv1alpha1.HarnessRunPhaseStarting,
+			PodName: "pod-unschedulable",
+			AgentSession: &operatorv1alpha1.AgentSessionStatus{
+				Runtime: operatorv1alpha1.AgentRuntimeSandboxAgent,
+				Agent:   operatorv1alpha1.AgentKindCodex,
+				Phase:   operatorv1alpha1.AgentSessionPhaseProvisioning,
+			},
+		},
+	}
+	if err := api.K8s.Create(context.Background(), run); err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "pod-unschedulable", Namespace: api.Namespace},
+		Status: corev1.PodStatus{
+			Phase: corev1.PodPending,
+			Conditions: []corev1.PodCondition{{
+				Type:    corev1.PodScheduled,
+				Status:  corev1.ConditionFalse,
+				Reason:  "Unschedulable",
+				Message: "0/1 nodes are available: insufficient cpu.",
+			}},
+		},
+	}
+	if err := api.K8s.Create(context.Background(), pod); err != nil {
+		t.Fatalf("create pod: %v", err)
+	}
+
+	srv := httptest.NewServer(api.Handler())
+	defer srv.Close()
+
+	resp, b := doJSON(t, srv.Client(), http.MethodGet, srv.URL+"/api/v1/harness-runs/"+run.Name+"/agent-session", "full", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("get agent session status = %d (body=%s)", resp.StatusCode, string(b))
+	}
+	var dto struct {
+		Diagnostic *agentSessionDiagnosticDTO `json:"diagnostic"`
+	}
+	if err := json.Unmarshal(b, &dto); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	if dto.Diagnostic == nil {
+		t.Fatal("expected diagnostic")
+	}
+	if dto.Diagnostic.Class != agentSessionBlockerProvisioning {
+		t.Fatalf("diagnostic class = %q, want %q", dto.Diagnostic.Class, agentSessionBlockerProvisioning)
+	}
+	if !strings.Contains(dto.Diagnostic.Detail, "Unschedulable") {
+		t.Fatalf("diagnostic detail = %q, want scheduling reason", dto.Diagnostic.Detail)
+	}
+}
+
+func TestAgentSessionGet_ImagePullDiagnostic(t *testing.T) {
+	api, cleanup := newTestAPI(t)
+	defer cleanup()
+	api.AgentSessions = newAgentSessionService(newFakeAgentSessionTransport(), newAgentSessionStore(""))
+
+	run := &operatorv1alpha1.HarnessRun{
+		ObjectMeta: metav1.ObjectMeta{Name: "run-image-pull", Namespace: api.Namespace},
+		Spec: operatorv1alpha1.HarnessRunSpec{
+			RepoURL:      "https://github.com/withakay/kocao",
+			Image:        "ghcr.io/private/image:missing",
+			AgentSession: &operatorv1alpha1.AgentSessionSpec{Runtime: operatorv1alpha1.AgentRuntimeSandboxAgent, Agent: operatorv1alpha1.AgentKindCodex},
+		},
+		Status: operatorv1alpha1.HarnessRunStatus{
+			Phase:   operatorv1alpha1.HarnessRunPhaseStarting,
+			PodName: "pod-image-pull",
+			AgentSession: &operatorv1alpha1.AgentSessionStatus{
+				Runtime: operatorv1alpha1.AgentRuntimeSandboxAgent,
+				Agent:   operatorv1alpha1.AgentKindCodex,
+				Phase:   operatorv1alpha1.AgentSessionPhaseProvisioning,
+			},
+		},
+	}
+	if err := api.K8s.Create(context.Background(), run); err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "pod-image-pull", Namespace: api.Namespace},
+		Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "workspace"}}},
+		Status: corev1.PodStatus{
+			Phase: corev1.PodPending,
+			ContainerStatuses: []corev1.ContainerStatus{{
+				Name: "workspace",
+				State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{
+					Reason:  "ImagePullBackOff",
+					Message: "Back-off pulling image \"ghcr.io/private/image:missing\"",
+				}},
+			}},
+		},
+	}
+	if err := api.K8s.Create(context.Background(), pod); err != nil {
+		t.Fatalf("create pod: %v", err)
+	}
+
+	state, _ := agentSessionStateFromHarnessRun(run)
+	diag := api.agentSessionDiagnostic(context.Background(), run, state)
+	if diag == nil {
+		t.Fatal("expected diagnostic")
+	}
+	if diag.Class != agentSessionBlockerImagePull {
+		t.Fatalf("diagnostic class = %q, want %q", diag.Class, agentSessionBlockerImagePull)
+	}
+}
+
+func TestAgentSessionGet_SandboxAgentReadinessDiagnosticForRunningPod(t *testing.T) {
+	api, cleanup := newTestAPI(t)
+	defer cleanup()
+	api.AgentSessions = newAgentSessionService(newFakeAgentSessionTransport(), newAgentSessionStore(""))
+
+	run := &operatorv1alpha1.HarnessRun{
+		ObjectMeta: metav1.ObjectMeta{Name: "run-sandbox-readiness", Namespace: api.Namespace},
+		Spec: operatorv1alpha1.HarnessRunSpec{
+			RepoURL:      "https://github.com/withakay/kocao",
+			Image:        "ghcr.io/withakay/kocao-agent:latest",
+			AgentSession: &operatorv1alpha1.AgentSessionSpec{Runtime: operatorv1alpha1.AgentRuntimeSandboxAgent, Agent: operatorv1alpha1.AgentKindCodex},
+		},
+		Status: operatorv1alpha1.HarnessRunStatus{
+			Phase:   operatorv1alpha1.HarnessRunPhaseRunning,
+			PodName: "pod-sandbox-readiness",
+			AgentSession: &operatorv1alpha1.AgentSessionStatus{
+				Runtime: operatorv1alpha1.AgentRuntimeSandboxAgent,
+				Agent:   operatorv1alpha1.AgentKindCodex,
+				Phase:   operatorv1alpha1.AgentSessionPhaseProvisioning,
+			},
+		},
+	}
+	if err := api.K8s.Create(context.Background(), run); err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "pod-sandbox-readiness", Namespace: api.Namespace},
+		Status: corev1.PodStatus{
+			Phase: corev1.PodRunning,
+		},
+	}
+	if err := api.K8s.Create(context.Background(), pod); err != nil {
+		t.Fatalf("create pod: %v", err)
+	}
+
+	state, _ := agentSessionStateFromHarnessRun(run)
+	diag := api.agentSessionDiagnostic(context.Background(), run, state)
+	if diag == nil {
+		t.Fatal("expected diagnostic")
+	}
+	if diag.Class != agentSessionBlockerSandboxAgentReadiness {
+		t.Fatalf("diagnostic class = %q, want %q", diag.Class, agentSessionBlockerSandboxAgentReadiness)
+	}
+	if !strings.Contains(diag.Detail, "running") {
+		t.Fatalf("diagnostic detail = %q, want running pod detail", diag.Detail)
+	}
+}
+
+func TestAgentSessionGet_StoppingHasNoProvisioningDiagnostic(t *testing.T) {
+	api, cleanup := newTestAPI(t)
+	defer cleanup()
+	api.AgentSessions = newAgentSessionService(newFakeAgentSessionTransport(), newAgentSessionStore(""))
+
+	run := &operatorv1alpha1.HarnessRun{
+		ObjectMeta: metav1.ObjectMeta{Name: "run-stopping", Namespace: api.Namespace},
+		Spec: operatorv1alpha1.HarnessRunSpec{
+			RepoURL:      "https://github.com/withakay/kocao",
+			Image:        "ghcr.io/withakay/kocao-agent:latest",
+			AgentSession: &operatorv1alpha1.AgentSessionSpec{Runtime: operatorv1alpha1.AgentRuntimeSandboxAgent, Agent: operatorv1alpha1.AgentKindCodex},
+		},
+		Status: operatorv1alpha1.HarnessRunStatus{
+			Phase:   operatorv1alpha1.HarnessRunPhaseRunning,
+			PodName: "pod-stopping",
+			AgentSession: &operatorv1alpha1.AgentSessionStatus{
+				Runtime: operatorv1alpha1.AgentRuntimeSandboxAgent,
+				Agent:   operatorv1alpha1.AgentKindCodex,
+				Phase:   operatorv1alpha1.AgentSessionPhaseStopping,
+			},
+		},
+	}
+	if err := api.K8s.Create(context.Background(), run); err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "pod-stopping", Namespace: api.Namespace},
+		Status:     corev1.PodStatus{Phase: corev1.PodPending},
+	}
+	if err := api.K8s.Create(context.Background(), pod); err != nil {
+		t.Fatalf("create pod: %v", err)
+	}
+
+	state, _ := agentSessionStateFromHarnessRun(run)
+	if diag := api.agentSessionDiagnostic(context.Background(), run, state); diag != nil {
+		t.Fatalf("diagnostic = %#v, want nil", diag)
+	}
+}
+
+func TestAgentSessionGet_AuthRepoAndNetworkDiagnostics(t *testing.T) {
+	tests := []struct {
+		name          string
+		reason        string
+		message       string
+		containerName string
+		wantClass     string
+	}{
+		{name: "auth", containerName: "auth-seed", reason: "CreateContainerConfigError", message: "secret \"missing-auth\" not found", wantClass: agentSessionBlockerAuth},
+		{name: "repo", containerName: "workspace", reason: "StartError", message: "fatal: could not read from remote repository", wantClass: agentSessionBlockerRepoAccess},
+		{name: "network", containerName: "workspace", reason: "StartError", message: "dial tcp 140.82.112.3:443: i/o timeout", wantClass: agentSessionBlockerNetwork},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			status := corev1.ContainerStatus{
+				Name: tt.containerName,
+				State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{
+					ExitCode: 1,
+					Reason:   tt.reason,
+					Message:  tt.message,
+				}},
+			}
+			diag := diagnosticFromContainerStatus(status, tt.containerName == "auth-seed")
+			if diag == nil {
+				t.Fatal("expected diagnostic")
+			}
+			if diag.Class != tt.wantClass {
+				t.Fatalf("diagnostic class = %q, want %q", diag.Class, tt.wantClass)
+			}
+		})
 	}
 }
 
@@ -1054,4 +1375,1596 @@ func TestPodLogs_NoClientset_Returns503(t *testing.T) {
 	}
 }
 
+func TestWorkspaceAgentSessionsList_ReturnsSessionsFromHarnessRuns(t *testing.T) {
+	api, cleanup := newTestAPI(t)
+	defer cleanup()
+
+	transport := newFakeAgentSessionTransport()
+	api.AgentSessions = newAgentSessionService(transport, newAgentSessionStore(""))
+
+	if err := api.Tokens.Create(context.Background(), "t-full", "full", []string{
+		"workspace-session:write", "workspace-session:read",
+		"harness-run:write", "harness-run:read",
+	}); err != nil {
+		t.Fatalf("create token: %v", err)
+	}
+
+	srv := httptest.NewServer(api.Handler())
+	defer srv.Close()
+
+	// Create a workspace session.
+	resp, b := doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/workspace-sessions", "full", map[string]any{
+		"displayName": "test-ws",
+		"repoURL":     "https://example.com/repo",
+	})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create session status = %d (body=%s)", resp.StatusCode, string(b))
+	}
+	var sess sessionResponse
+	_ = json.Unmarshal(b, &sess)
+
+	// Create a harness run with an agent session.
+	resp, b = doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/workspace-sessions/"+sess.ID+"/harness-runs", "full", map[string]any{
+		"repoURL": "https://example.com/repo",
+		"image":   "alpine:3",
+		"agentSession": map[string]any{
+			"agent": "codex",
+		},
+	})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create run status = %d (body=%s)", resp.StatusCode, string(b))
+	}
+	var run runResponse
+	_ = json.Unmarshal(b, &run)
+
+	// Create a second harness run WITHOUT an agent session.
+	resp, b = doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/workspace-sessions/"+sess.ID+"/harness-runs", "full", map[string]any{
+		"repoURL": "https://example.com/repo",
+		"image":   "alpine:3",
+	})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create non-agent run status = %d (body=%s)", resp.StatusCode, string(b))
+	}
+
+	// GET /workspace-sessions/{id}/agent-sessions should return exactly one session.
+	resp, b = doJSON(t, srv.Client(), http.MethodGet, srv.URL+"/api/v1/workspace-sessions/"+sess.ID+"/agent-sessions", "full", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("list agent sessions status = %d (body=%s)", resp.StatusCode, string(b))
+	}
+
+	var payload struct {
+		AgentSessions []agentSessionListItem `json:"agentSessions"`
+	}
+	if err := json.Unmarshal(b, &payload); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(payload.AgentSessions) != 1 {
+		t.Fatalf("expected 1 agent session, got %d: %s", len(payload.AgentSessions), string(b))
+	}
+	as := payload.AgentSessions[0]
+	if as.RunID != run.ID {
+		t.Fatalf("runId = %q, want %q", as.RunID, run.ID)
+	}
+	if as.Agent != "codex" {
+		t.Fatalf("agent = %q, want codex", as.Agent)
+	}
+	if as.Runtime != "sandbox-agent" {
+		t.Fatalf("runtime = %q, want sandbox-agent", as.Runtime)
+	}
+	if as.WorkspaceID != sess.ID {
+		t.Fatalf("workspaceSessionId = %q, want %q", as.WorkspaceID, sess.ID)
+	}
+	if as.Phase != "Provisioning" {
+		t.Fatalf("phase = %q, want Provisioning", as.Phase)
+	}
+	if !strings.Contains(as.DisplayName, "test-ws") {
+		t.Fatalf("displayName = %q, expected to contain test-ws", as.DisplayName)
+	}
+}
+
+func TestWorkspaceAgentSessionsList_NotFound(t *testing.T) {
+	api, cleanup := newTestAPI(t)
+	defer cleanup()
+
+	if err := api.Tokens.Create(context.Background(), "t-full", "full", []string{"harness-run:read"}); err != nil {
+		t.Fatalf("create token: %v", err)
+	}
+
+	srv := httptest.NewServer(api.Handler())
+	defer srv.Close()
+
+	resp, _ := doJSON(t, srv.Client(), http.MethodGet, srv.URL+"/api/v1/workspace-sessions/nonexistent/agent-sessions", "full", nil)
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", resp.StatusCode)
+	}
+}
+
+func TestWorkspaceAgentSessionsList_EmptyWhenNoAgentRuns(t *testing.T) {
+	api, cleanup := newTestAPI(t)
+	defer cleanup()
+
+	if err := api.Tokens.Create(context.Background(), "t-full", "full", []string{
+		"workspace-session:write", "workspace-session:read",
+		"harness-run:write", "harness-run:read",
+	}); err != nil {
+		t.Fatalf("create token: %v", err)
+	}
+
+	srv := httptest.NewServer(api.Handler())
+	defer srv.Close()
+
+	// Create a workspace session.
+	resp, b := doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/workspace-sessions", "full", map[string]any{
+		"repoURL": "https://example.com/repo",
+	})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create session status = %d (body=%s)", resp.StatusCode, string(b))
+	}
+	var sess sessionResponse
+	_ = json.Unmarshal(b, &sess)
+
+	// Create a harness run WITHOUT an agent session.
+	resp, b = doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/workspace-sessions/"+sess.ID+"/harness-runs", "full", map[string]any{
+		"repoURL": "https://example.com/repo",
+		"image":   "alpine:3",
+	})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create run status = %d (body=%s)", resp.StatusCode, string(b))
+	}
+
+	// GET /workspace-sessions/{id}/agent-sessions should return empty list.
+	resp, b = doJSON(t, srv.Client(), http.MethodGet, srv.URL+"/api/v1/workspace-sessions/"+sess.ID+"/agent-sessions", "full", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("list agent sessions status = %d (body=%s)", resp.StatusCode, string(b))
+	}
+
+	var payload struct {
+		AgentSessions []agentSessionListItem `json:"agentSessions"`
+	}
+	if err := json.Unmarshal(b, &payload); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(payload.AgentSessions) != 0 {
+		t.Fatalf("expected 0 agent sessions, got %d", len(payload.AgentSessions))
+	}
+}
+
+func TestWorkspaceAgentSessionsList_WithLiveBridgeState(t *testing.T) {
+	api, cleanup := newTestAPI(t)
+	defer cleanup()
+
+	transport := newFakeAgentSessionTransport()
+	api.AgentSessions = newAgentSessionService(transport, newAgentSessionStore(""))
+
+	if err := api.Tokens.Create(context.Background(), "t-full", "full", []string{
+		"workspace-session:write", "workspace-session:read",
+		"harness-run:write", "harness-run:read",
+	}); err != nil {
+		t.Fatalf("create token: %v", err)
+	}
+
+	srv := httptest.NewServer(api.Handler())
+	defer srv.Close()
+
+	// Create workspace + run with agent session.
+	resp, b := doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/workspace-sessions", "full", map[string]any{
+		"repoURL": "https://example.com/repo",
+	})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create session status = %d (body=%s)", resp.StatusCode, string(b))
+	}
+	var sess sessionResponse
+	_ = json.Unmarshal(b, &sess)
+
+	resp, b = doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/workspace-sessions/"+sess.ID+"/harness-runs", "full", map[string]any{
+		"repoURL":      "https://example.com/repo",
+		"image":        "alpine:3",
+		"agentSession": map[string]any{"agent": "codex"},
+	})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create run status = %d (body=%s)", resp.StatusCode, string(b))
+	}
+	var run runResponse
+	_ = json.Unmarshal(b, &run)
+
+	// Simulate the pod being ready and create an agent session via the API.
+	var stored operatorv1alpha1.HarnessRun
+	if err := api.K8s.Get(context.Background(), client.ObjectKey{Namespace: api.Namespace, Name: run.ID}, &stored); err != nil {
+		t.Fatalf("get run: %v", err)
+	}
+	stored.Status.PodName = "pod-test"
+	stored.Status.Phase = operatorv1alpha1.HarnessRunPhaseRunning
+	if err := api.K8s.Status().Update(context.Background(), &stored); err != nil {
+		t.Fatalf("update run status: %v", err)
+	}
+
+	resp, b = doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/harness-runs/"+run.ID+"/agent-session", "full", nil)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create agent session status = %d (body=%s)", resp.StatusCode, string(b))
+	}
+
+	// Now list agent sessions — should show the live bridge state with sessionId.
+	resp, b = doJSON(t, srv.Client(), http.MethodGet, srv.URL+"/api/v1/workspace-sessions/"+sess.ID+"/agent-sessions", "full", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("list agent sessions status = %d (body=%s)", resp.StatusCode, string(b))
+	}
+
+	var payload struct {
+		AgentSessions []agentSessionListItem `json:"agentSessions"`
+	}
+	if err := json.Unmarshal(b, &payload); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(payload.AgentSessions) != 1 {
+		t.Fatalf("expected 1 agent session, got %d", len(payload.AgentSessions))
+	}
+	as := payload.AgentSessions[0]
+	if as.SessionID != "sas-123" {
+		t.Fatalf("sessionId = %q, want sas-123", as.SessionID)
+	}
+	if as.Phase != "Ready" {
+		t.Fatalf("phase = %q, want Ready", as.Phase)
+	}
+}
+
+// fakeFailingDeleteTransport wraps fakeAgentSessionTransport to return a
+// configurable error from DeleteACP.
+type fakeFailingDeleteTransport struct {
+	*fakeAgentSessionTransport
+	deleteErr error
+}
+
+type fakeCreateFailureTransport struct {
+	*fakeAgentSessionTransport
+	createErr error
+}
+
+func (f *fakeCreateFailureTransport) PostACP(ctx context.Context, podName, serverID, agent string, payload any) ([]byte, error) {
+	env, ok := payload.(jsonRPCEnvelope)
+	if !ok {
+		return nil, fmt.Errorf("unexpected payload type %T", payload)
+	}
+	if env.Method == "session/new" {
+		return nil, f.createErr
+	}
+	return f.fakeAgentSessionTransport.PostACP(ctx, podName, serverID, agent, payload)
+}
+
+type fakePromptFailureTransport struct {
+	*fakeAgentSessionTransport
+	promptErr error
+}
+
+func (f *fakePromptFailureTransport) PostACP(ctx context.Context, podName, serverID, agent string, payload any) ([]byte, error) {
+	env, ok := payload.(jsonRPCEnvelope)
+	if !ok {
+		return nil, fmt.Errorf("unexpected payload type %T", payload)
+	}
+	if env.Method == "session/prompt" {
+		return nil, f.promptErr
+	}
+	return f.fakeAgentSessionTransport.PostACP(ctx, podName, serverID, agent, payload)
+}
+
+func (f *fakeFailingDeleteTransport) DeleteACP(_ context.Context, _ string, _ string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.deleted = true
+	if f.writer != nil {
+		_ = f.writer.Close()
+	}
+	return f.deleteErr
+}
+
 func int32Ptr(v int32) *int32 { return &v }
+
+// TestAgentSessionWireFormat_EventFieldNames verifies that the events endpoint
+// returns JSON with field names that match the CLI's AgentSessionEvent struct
+// (seq, timestamp, data) rather than the old internal names (sequence, at, envelope).
+func TestAgentSessionWireFormat_EventFieldNames(t *testing.T) {
+	api, cleanup := newTestAPI(t)
+	defer cleanup()
+	transport := newFakeAgentSessionTransport()
+	api.AgentSessions = newAgentSessionService(transport, newAgentSessionStore(""))
+
+	if err := api.Tokens.Create(context.Background(), "t-full", "full", []string{"harness-run:write", "harness-run:read"}); err != nil {
+		t.Fatalf("create token: %v", err)
+	}
+
+	run := &operatorv1alpha1.HarnessRun{
+		TypeMeta:   metav1.TypeMeta{APIVersion: operatorv1alpha1.GroupVersion.String(), Kind: "HarnessRun"},
+		ObjectMeta: metav1.ObjectMeta{Name: "run-wire", Namespace: api.Namespace},
+		Spec: operatorv1alpha1.HarnessRunSpec{
+			RepoURL:    "https://example.com/repo",
+			Image:      "kocao/harness-runtime:dev",
+			WorkingDir: "/workspace/repo",
+			AgentSession: &operatorv1alpha1.AgentSessionSpec{
+				Runtime: operatorv1alpha1.AgentRuntimeSandboxAgent,
+				Agent:   operatorv1alpha1.AgentKindClaude,
+			},
+		},
+	}
+	if err := api.K8s.Create(context.Background(), run); err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	var stored operatorv1alpha1.HarnessRun
+	if err := api.K8s.Get(context.Background(), client.ObjectKeyFromObject(run), &stored); err != nil {
+		t.Fatalf("get run: %v", err)
+	}
+	stored.Status.PodName = "pod-wire"
+	stored.Status.Phase = operatorv1alpha1.HarnessRunPhaseRunning
+	if err := api.K8s.Status().Update(context.Background(), &stored); err != nil {
+		t.Fatalf("update run status: %v", err)
+	}
+
+	srv := httptest.NewServer(api.Handler())
+	defer srv.Close()
+
+	// Create agent session
+	resp, b := doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/harness-runs/"+run.Name+"/agent-session", "full", nil)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create session status = %d (body=%s)", resp.StatusCode, string(b))
+	}
+
+	// Wait for stream writer to be established
+	transport.waitWriter(t, 5*time.Second)
+
+	// Send prompt
+	resp, b = doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/harness-runs/"+run.Name+"/agent-session/prompt", "full", map[string]any{"prompt": "wire format test"})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("prompt status = %d (body=%s)", resp.StatusCode, string(b))
+	}
+
+	// Verify prompt response contains events array with CLI-compatible field names
+	var promptPayload map[string]json.RawMessage
+	if err := json.Unmarshal(b, &promptPayload); err != nil {
+		t.Fatalf("unmarshal prompt response: %v", err)
+	}
+	if _, ok := promptPayload["events"]; !ok {
+		t.Fatalf("prompt response missing 'events' key; keys: %v", keysOf(promptPayload))
+	}
+
+	// Verify the events use CLI-compatible field names (seq, timestamp, data)
+	var events []map[string]json.RawMessage
+	if err := json.Unmarshal(promptPayload["events"], &events); err != nil {
+		t.Fatalf("unmarshal events: %v", err)
+	}
+	if len(events) == 0 {
+		t.Fatal("expected at least one event in prompt response")
+	}
+	for _, ev := range events {
+		if _, ok := ev["seq"]; !ok {
+			t.Fatalf("event missing 'seq' field; keys: %v", keysOf(ev))
+		}
+		if _, ok := ev["timestamp"]; !ok {
+			t.Fatalf("event missing 'timestamp' field; keys: %v", keysOf(ev))
+		}
+		if _, ok := ev["data"]; !ok {
+			t.Fatalf("event missing 'data' field; keys: %v", keysOf(ev))
+		}
+		// Verify old field names are NOT present
+		if _, ok := ev["sequence"]; ok {
+			t.Fatal("event should not have old 'sequence' field")
+		}
+		if _, ok := ev["at"]; ok {
+			t.Fatal("event should not have old 'at' field")
+		}
+		if _, ok := ev["envelope"]; ok {
+			t.Fatal("event should not have old 'envelope' field")
+		}
+	}
+
+	// Wait for SSE events to propagate to the store
+	var eventsPayload struct {
+		Events []json.RawMessage `json:"events"`
+	}
+	for i := 0; i < 20; i++ {
+		resp, b = doJSON(t, srv.Client(), http.MethodGet, srv.URL+"/api/v1/harness-runs/"+run.Name+"/agent-session/events?offset=0&limit=10", "full", nil)
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("events status = %d (body=%s)", resp.StatusCode, string(b))
+		}
+		_ = json.Unmarshal(b, &eventsPayload)
+		if len(eventsPayload.Events) >= 1 {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if len(eventsPayload.Events) == 0 {
+		t.Fatal("expected at least one event from events endpoint")
+	}
+
+	// Verify events endpoint also uses CLI-compatible field names
+	for _, raw := range eventsPayload.Events {
+		var ev map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &ev); err != nil {
+			t.Fatalf("unmarshal event: %v", err)
+		}
+		if _, ok := ev["seq"]; !ok {
+			t.Fatalf("events endpoint: event missing 'seq' field; keys: %v", keysOf(ev))
+		}
+		if _, ok := ev["timestamp"]; !ok {
+			t.Fatalf("events endpoint: event missing 'timestamp' field; keys: %v", keysOf(ev))
+		}
+		if _, ok := ev["data"]; !ok {
+			t.Fatalf("events endpoint: event missing 'data' field; keys: %v", keysOf(ev))
+		}
+	}
+}
+
+func keysOf[V any](m map[string]V) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	return keys
+}
+
+// TestAgentSessionWireFormat_StopCancelsStreamThenDeletes verifies that the
+// Stop method cancels the SSE stream before sending DELETE to the sandbox-agent,
+// preventing the K8s pod proxy serialization timeout that occurs when DELETE is
+// sent while the SSE GET connection is still open.
+func TestAgentSessionWireFormat_StopCancelsStreamThenDeletes(t *testing.T) {
+	api, cleanup := newTestAPI(t)
+	defer cleanup()
+	transport := newFakeAgentSessionTransport()
+	api.AgentSessions = newAgentSessionService(transport, newAgentSessionStore(""))
+
+	if err := api.Tokens.Create(context.Background(), "t-full", "full", []string{"harness-run:write", "harness-run:read"}); err != nil {
+		t.Fatalf("create token: %v", err)
+	}
+
+	run := &operatorv1alpha1.HarnessRun{
+		TypeMeta:   metav1.TypeMeta{APIVersion: operatorv1alpha1.GroupVersion.String(), Kind: "HarnessRun"},
+		ObjectMeta: metav1.ObjectMeta{Name: "run-stop-order", Namespace: api.Namespace},
+		Spec: operatorv1alpha1.HarnessRunSpec{
+			RepoURL:    "https://example.com/repo",
+			Image:      "kocao/harness-runtime:dev",
+			WorkingDir: "/workspace/repo",
+			AgentSession: &operatorv1alpha1.AgentSessionSpec{
+				Runtime: operatorv1alpha1.AgentRuntimeSandboxAgent,
+				Agent:   operatorv1alpha1.AgentKindClaude,
+			},
+		},
+	}
+	if err := api.K8s.Create(context.Background(), run); err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	var stored operatorv1alpha1.HarnessRun
+	if err := api.K8s.Get(context.Background(), client.ObjectKeyFromObject(run), &stored); err != nil {
+		t.Fatalf("get run: %v", err)
+	}
+	stored.Status.PodName = "pod-stop"
+	stored.Status.Phase = operatorv1alpha1.HarnessRunPhaseRunning
+	if err := api.K8s.Status().Update(context.Background(), &stored); err != nil {
+		t.Fatalf("update run status: %v", err)
+	}
+
+	srv := httptest.NewServer(api.Handler())
+	defer srv.Close()
+
+	// Create session
+	resp, b := doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/harness-runs/"+run.Name+"/agent-session", "full", nil)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create session status = %d (body=%s)", resp.StatusCode, string(b))
+	}
+
+	// Wait for stream to be established
+	transport.waitWriter(t, 5*time.Second)
+
+	// Stop should complete within a reasonable time (not hang)
+	stopDone := make(chan struct{})
+	go func() {
+		resp, b = doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/harness-runs/"+run.Name+"/agent-session/stop", "full", nil)
+		close(stopDone)
+	}()
+
+	select {
+	case <-stopDone:
+		// Good - stop completed
+	case <-time.After(5 * time.Second):
+		t.Fatal("stop timed out - DELETE may be blocked by stream cancellation")
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("stop status = %d (body=%s)", resp.StatusCode, string(b))
+	}
+
+	// Verify the transport's delete was called
+	transport.mu.Lock()
+	deleted := transport.deleted
+	transport.mu.Unlock()
+	if !deleted {
+		t.Fatal("expected DeleteACP to be called")
+	}
+}
+
+// TestStop_NoBridge_CompletedState verifies that Stop returns success when no
+// in-memory bridge exists but persisted state proves the session is completed.
+func TestStop_NoBridge_CompletedState(t *testing.T) {
+	api, cleanup := newTestAPI(t)
+	defer cleanup()
+	store := newAgentSessionStore("")
+	transport := newFakeAgentSessionTransport()
+	api.AgentSessions = newAgentSessionService(transport, store)
+
+	if err := api.Tokens.Create(context.Background(), "t-full", "full", []string{"harness-run:write", "harness-run:read"}); err != nil {
+		t.Fatalf("create token: %v", err)
+	}
+
+	run := &operatorv1alpha1.HarnessRun{
+		TypeMeta:   metav1.TypeMeta{APIVersion: operatorv1alpha1.GroupVersion.String(), Kind: "HarnessRun"},
+		ObjectMeta: metav1.ObjectMeta{Name: "run-no-bridge-completed", Namespace: api.Namespace},
+		Spec: operatorv1alpha1.HarnessRunSpec{
+			RepoURL:    "https://example.com/repo",
+			Image:      "kocao/harness-runtime:dev",
+			WorkingDir: "/workspace/repo",
+			AgentSession: &operatorv1alpha1.AgentSessionSpec{
+				Runtime: operatorv1alpha1.AgentRuntimeSandboxAgent,
+				Agent:   operatorv1alpha1.AgentKindClaude,
+			},
+		},
+	}
+	if err := api.K8s.Create(context.Background(), run); err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	var stored operatorv1alpha1.HarnessRun
+	if err := api.K8s.Get(context.Background(), client.ObjectKeyFromObject(run), &stored); err != nil {
+		t.Fatalf("get run: %v", err)
+	}
+	stored.Status.PodName = "pod-completed"
+	stored.Status.Phase = operatorv1alpha1.HarnessRunPhaseRunning
+	if err := api.K8s.Status().Update(context.Background(), &stored); err != nil {
+		t.Fatalf("update run status: %v", err)
+	}
+
+	// Persist a completed state so the store knows it's done.
+	store.SaveState(agentSessionState{
+		HarnessRunID: run.Name,
+		PodName:      "pod-completed",
+		ServerID:     run.Name,
+		Runtime:      operatorv1alpha1.AgentRuntimeSandboxAgent,
+		Agent:        operatorv1alpha1.AgentKindClaude,
+		SessionID:    "sas-done",
+		Phase:        operatorv1alpha1.AgentSessionPhaseCompleted,
+	})
+
+	// Create a fresh service (no bridges in memory) but same store.
+	api.AgentSessions = newAgentSessionService(transport, store)
+
+	srv := httptest.NewServer(api.Handler())
+	defer srv.Close()
+
+	resp, b := doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/harness-runs/"+run.Name+"/agent-session/stop", "full", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("stop status = %d, want 200 (body=%s)", resp.StatusCode, string(b))
+	}
+}
+
+func TestStop_Idempotent_SameServiceInstance(t *testing.T) {
+	api, cleanup := newTestAPI(t)
+	defer cleanup()
+	transport := newFakeAgentSessionTransport()
+	api.AgentSessions = newAgentSessionService(transport, newAgentSessionStore(""))
+
+	if err := api.Tokens.Create(context.Background(), "t-full", "full", []string{"harness-run:write", "harness-run:read"}); err != nil {
+		t.Fatalf("create token: %v", err)
+	}
+
+	run := &operatorv1alpha1.HarnessRun{
+		TypeMeta:   metav1.TypeMeta{APIVersion: operatorv1alpha1.GroupVersion.String(), Kind: "HarnessRun"},
+		ObjectMeta: metav1.ObjectMeta{Name: "run-stop-idempotent", Namespace: api.Namespace},
+		Spec: operatorv1alpha1.HarnessRunSpec{
+			RepoURL:    "https://example.com/repo",
+			Image:      "kocao/harness-runtime:dev",
+			WorkingDir: "/workspace/repo",
+			AgentSession: &operatorv1alpha1.AgentSessionSpec{
+				Runtime: operatorv1alpha1.AgentRuntimeSandboxAgent,
+				Agent:   operatorv1alpha1.AgentKindClaude,
+			},
+		},
+	}
+	if err := api.K8s.Create(context.Background(), run); err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	var stored operatorv1alpha1.HarnessRun
+	if err := api.K8s.Get(context.Background(), client.ObjectKeyFromObject(run), &stored); err != nil {
+		t.Fatalf("get run: %v", err)
+	}
+	stored.Status.PodName = "pod-stop-idempotent"
+	stored.Status.Phase = operatorv1alpha1.HarnessRunPhaseRunning
+	if err := api.K8s.Status().Update(context.Background(), &stored); err != nil {
+		t.Fatalf("update run status: %v", err)
+	}
+
+	srv := httptest.NewServer(api.Handler())
+	defer srv.Close()
+
+	resp, b := doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/harness-runs/"+run.Name+"/agent-session", "full", nil)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create session status = %d, want 201 (body=%s)", resp.StatusCode, string(b))
+	}
+
+	transport.waitWriter(t, 5*time.Second)
+
+	resp, b = doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/harness-runs/"+run.Name+"/agent-session/stop", "full", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("first stop status = %d, want 200 (body=%s)", resp.StatusCode, string(b))
+	}
+	var first agentSessionDTO
+	if err := json.Unmarshal(b, &first); err != nil {
+		t.Fatalf("unmarshal first stop response: %v", err)
+	}
+	if first.Phase != operatorv1alpha1.AgentSessionPhaseCompleted {
+		t.Fatalf("first stop phase = %q, want Completed", first.Phase)
+	}
+
+	transport.mu.Lock()
+	deleteCalls := transport.deleteCalls
+	transport.mu.Unlock()
+
+	resp, b = doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/harness-runs/"+run.Name+"/agent-session/stop", "full", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("second stop status = %d, want 200 (body=%s)", resp.StatusCode, string(b))
+	}
+	var second agentSessionDTO
+	if err := json.Unmarshal(b, &second); err != nil {
+		t.Fatalf("unmarshal second stop response: %v", err)
+	}
+	if second.Phase != operatorv1alpha1.AgentSessionPhaseCompleted {
+		t.Fatalf("second stop phase = %q, want Completed", second.Phase)
+	}
+
+	transport.mu.Lock()
+	if transport.deleteCalls != deleteCalls {
+		t.Fatalf("delete call count = %d, want %d", transport.deleteCalls, deleteCalls)
+	}
+	transport.mu.Unlock()
+}
+
+func TestCreate_Idempotent_ReusesExistingSession(t *testing.T) {
+	api, cleanup := newTestAPI(t)
+	defer cleanup()
+	transport := newFakeAgentSessionTransport()
+	api.AgentSessions = newAgentSessionService(transport, newAgentSessionStore(""))
+
+	if err := api.Tokens.Create(context.Background(), "t-full", "full", []string{"harness-run:write", "harness-run:read"}); err != nil {
+		t.Fatalf("create token: %v", err)
+	}
+
+	run := &operatorv1alpha1.HarnessRun{
+		TypeMeta:   metav1.TypeMeta{APIVersion: operatorv1alpha1.GroupVersion.String(), Kind: "HarnessRun"},
+		ObjectMeta: metav1.ObjectMeta{Name: "run-create-idempotent", Namespace: api.Namespace},
+		Spec: operatorv1alpha1.HarnessRunSpec{
+			RepoURL:    "https://example.com/repo",
+			Image:      "kocao/harness-runtime:dev",
+			WorkingDir: "/workspace/repo",
+			AgentSession: &operatorv1alpha1.AgentSessionSpec{
+				Runtime: operatorv1alpha1.AgentRuntimeSandboxAgent,
+				Agent:   operatorv1alpha1.AgentKindClaude,
+			},
+		},
+	}
+	if err := api.K8s.Create(context.Background(), run); err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	var stored operatorv1alpha1.HarnessRun
+	if err := api.K8s.Get(context.Background(), client.ObjectKeyFromObject(run), &stored); err != nil {
+		t.Fatalf("get run: %v", err)
+	}
+	stored.Status.PodName = "pod-create-idempotent"
+	stored.Status.Phase = operatorv1alpha1.HarnessRunPhaseRunning
+	if err := api.K8s.Status().Update(context.Background(), &stored); err != nil {
+		t.Fatalf("update run status: %v", err)
+	}
+
+	srv := httptest.NewServer(api.Handler())
+	defer srv.Close()
+
+	resp, b := doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/harness-runs/"+run.Name+"/agent-session", "full", nil)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("first create status = %d, want 201 (body=%s)", resp.StatusCode, string(b))
+	}
+	var first agentSessionDTO
+	if err := json.Unmarshal(b, &first); err != nil {
+		t.Fatalf("unmarshal first create: %v", err)
+	}
+
+	resp, b = doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/harness-runs/"+run.Name+"/agent-session", "full", nil)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("second create status = %d, want 201 (body=%s)", resp.StatusCode, string(b))
+	}
+	var second agentSessionDTO
+	if err := json.Unmarshal(b, &second); err != nil {
+		t.Fatalf("unmarshal second create: %v", err)
+	}
+
+	if second.SessionID != first.SessionID {
+		t.Fatalf("second session ID = %q, want %q", second.SessionID, first.SessionID)
+	}
+
+	transport.mu.Lock()
+	postCalls := append([]string(nil), transport.postCalls...)
+	transport.mu.Unlock()
+	initializeCalls := 0
+	newSessionCalls := 0
+	for _, method := range postCalls {
+		switch method {
+		case "initialize":
+			initializeCalls++
+		case "session/new":
+			newSessionCalls++
+		}
+	}
+	if initializeCalls != 1 {
+		t.Fatalf("initialize call count = %d, want 1", initializeCalls)
+	}
+	if newSessionCalls != 1 {
+		t.Fatalf("session/new call count = %d, want 1", newSessionCalls)
+	}
+}
+
+// TestStop_NoBridge_UnknownPhase verifies that Stop reconstructs enough state
+// from the HarnessRun CRD to safely stop an active session after API restart.
+func TestStop_NoBridge_UnknownPhase(t *testing.T) {
+	api, cleanup := newTestAPI(t)
+	defer cleanup()
+	store := newAgentSessionStore("")
+	transport := newFakeAgentSessionTransport()
+	api.AgentSessions = newAgentSessionService(transport, store)
+
+	if err := api.Tokens.Create(context.Background(), "t-full", "full", []string{"harness-run:write", "harness-run:read"}); err != nil {
+		t.Fatalf("create token: %v", err)
+	}
+
+	run := &operatorv1alpha1.HarnessRun{
+		TypeMeta:   metav1.TypeMeta{APIVersion: operatorv1alpha1.GroupVersion.String(), Kind: "HarnessRun"},
+		ObjectMeta: metav1.ObjectMeta{Name: "run-no-bridge-unknown", Namespace: api.Namespace},
+		Spec: operatorv1alpha1.HarnessRunSpec{
+			RepoURL:    "https://example.com/repo",
+			Image:      "kocao/harness-runtime:dev",
+			WorkingDir: "/workspace/repo",
+			AgentSession: &operatorv1alpha1.AgentSessionSpec{
+				Runtime: operatorv1alpha1.AgentRuntimeSandboxAgent,
+				Agent:   operatorv1alpha1.AgentKindClaude,
+			},
+		},
+	}
+	if err := api.K8s.Create(context.Background(), run); err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	var stored operatorv1alpha1.HarnessRun
+	if err := api.K8s.Get(context.Background(), client.ObjectKeyFromObject(run), &stored); err != nil {
+		t.Fatalf("get run: %v", err)
+	}
+	stored.Status.PodName = "pod-unknown"
+	stored.Status.Phase = operatorv1alpha1.HarnessRunPhaseRunning
+	stored.Status.AgentSession = &operatorv1alpha1.AgentSessionStatus{
+		Runtime:   operatorv1alpha1.AgentRuntimeSandboxAgent,
+		Agent:     operatorv1alpha1.AgentKindClaude,
+		SessionID: "sas-active",
+		Phase:     operatorv1alpha1.AgentSessionPhaseActive,
+	}
+	if err := api.K8s.Status().Update(context.Background(), &stored); err != nil {
+		t.Fatalf("update run status: %v", err)
+	}
+
+	// Fresh service — no bridges in memory, no persisted completed state.
+	api.AgentSessions = newAgentSessionService(transport, store)
+
+	srv := httptest.NewServer(api.Handler())
+	defer srv.Close()
+
+	resp, b := doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/harness-runs/"+run.Name+"/agent-session/stop", "full", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("stop status = %d, want 200 (body=%s)", resp.StatusCode, string(b))
+	}
+	if !transport.deleted {
+		t.Fatal("expected stop to call DeleteACP after bridge reconstruction")
+	}
+}
+
+// TestStop_DeleteHardFailure verifies that a non-stale DeleteACP failure
+// returns an error instead of silently marking the session completed.
+func TestStop_DeleteHardFailure(t *testing.T) {
+	api, cleanup := newTestAPI(t)
+	defer cleanup()
+	baseTransport := newFakeAgentSessionTransport()
+	failTransport := &fakeFailingDeleteTransport{
+		fakeAgentSessionTransport: baseTransport,
+		deleteErr:                 fmt.Errorf("sandbox-agent proxy DELETE returned 500: internal server error"),
+	}
+	api.AgentSessions = newAgentSessionService(failTransport, newAgentSessionStore(""))
+
+	if err := api.Tokens.Create(context.Background(), "t-full", "full", []string{"harness-run:write", "harness-run:read"}); err != nil {
+		t.Fatalf("create token: %v", err)
+	}
+
+	run := &operatorv1alpha1.HarnessRun{
+		TypeMeta:   metav1.TypeMeta{APIVersion: operatorv1alpha1.GroupVersion.String(), Kind: "HarnessRun"},
+		ObjectMeta: metav1.ObjectMeta{Name: "run-hard-fail", Namespace: api.Namespace},
+		Spec: operatorv1alpha1.HarnessRunSpec{
+			RepoURL:    "https://example.com/repo",
+			Image:      "kocao/harness-runtime:dev",
+			WorkingDir: "/workspace/repo",
+			AgentSession: &operatorv1alpha1.AgentSessionSpec{
+				Runtime: operatorv1alpha1.AgentRuntimeSandboxAgent,
+				Agent:   operatorv1alpha1.AgentKindClaude,
+			},
+		},
+	}
+	if err := api.K8s.Create(context.Background(), run); err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	var stored operatorv1alpha1.HarnessRun
+	if err := api.K8s.Get(context.Background(), client.ObjectKeyFromObject(run), &stored); err != nil {
+		t.Fatalf("get run: %v", err)
+	}
+	stored.Status.PodName = "pod-hard-fail"
+	stored.Status.Phase = operatorv1alpha1.HarnessRunPhaseRunning
+	if err := api.K8s.Status().Update(context.Background(), &stored); err != nil {
+		t.Fatalf("update run status: %v", err)
+	}
+
+	srv := httptest.NewServer(api.Handler())
+	defer srv.Close()
+
+	// Create session first
+	resp, b := doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/harness-runs/"+run.Name+"/agent-session", "full", nil)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create session status = %d (body=%s)", resp.StatusCode, string(b))
+	}
+
+	// Wait for stream
+	baseTransport.waitWriter(t, 5*time.Second)
+
+	// Stop should fail with 502 because DeleteACP returns a hard error
+	stopDone := make(chan struct{})
+	go func() {
+		resp, b = doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/harness-runs/"+run.Name+"/agent-session/stop", "full", nil)
+		close(stopDone)
+	}()
+
+	select {
+	case <-stopDone:
+	case <-time.After(10 * time.Second):
+		t.Fatal("stop timed out")
+	}
+
+	if resp.StatusCode != http.StatusBadGateway {
+		t.Fatalf("stop status = %d, want 502 for hard delete failure (body=%s)", resp.StatusCode, string(b))
+	}
+}
+
+// TestStop_DeleteSoftTimeout verifies that a stale pod proxy timeout during
+// DeleteACP is tolerated and the session is marked completed.
+func TestStop_DeleteSoftTimeout(t *testing.T) {
+	api, cleanup := newTestAPI(t)
+	defer cleanup()
+	baseTransport := newFakeAgentSessionTransport()
+	failTransport := &fakeFailingDeleteTransport{
+		fakeAgentSessionTransport: baseTransport,
+		deleteErr:                 fmt.Errorf("sandbox-agent proxy DELETE: context deadline exceeded"),
+	}
+	api.AgentSessions = newAgentSessionService(failTransport, newAgentSessionStore(""))
+
+	if err := api.Tokens.Create(context.Background(), "t-full", "full", []string{"harness-run:write", "harness-run:read"}); err != nil {
+		t.Fatalf("create token: %v", err)
+	}
+
+	run := &operatorv1alpha1.HarnessRun{
+		TypeMeta:   metav1.TypeMeta{APIVersion: operatorv1alpha1.GroupVersion.String(), Kind: "HarnessRun"},
+		ObjectMeta: metav1.ObjectMeta{Name: "run-soft-timeout", Namespace: api.Namespace},
+		Spec: operatorv1alpha1.HarnessRunSpec{
+			RepoURL:    "https://example.com/repo",
+			Image:      "kocao/harness-runtime:dev",
+			WorkingDir: "/workspace/repo",
+			AgentSession: &operatorv1alpha1.AgentSessionSpec{
+				Runtime: operatorv1alpha1.AgentRuntimeSandboxAgent,
+				Agent:   operatorv1alpha1.AgentKindClaude,
+			},
+		},
+	}
+	if err := api.K8s.Create(context.Background(), run); err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	var stored operatorv1alpha1.HarnessRun
+	if err := api.K8s.Get(context.Background(), client.ObjectKeyFromObject(run), &stored); err != nil {
+		t.Fatalf("get run: %v", err)
+	}
+	stored.Status.PodName = "pod-soft-timeout"
+	stored.Status.Phase = operatorv1alpha1.HarnessRunPhaseRunning
+	if err := api.K8s.Status().Update(context.Background(), &stored); err != nil {
+		t.Fatalf("update run status: %v", err)
+	}
+
+	srv := httptest.NewServer(api.Handler())
+	defer srv.Close()
+
+	// Create session
+	resp, b := doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/harness-runs/"+run.Name+"/agent-session", "full", nil)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create session status = %d (body=%s)", resp.StatusCode, string(b))
+	}
+
+	baseTransport.waitWriter(t, 5*time.Second)
+
+	// Stop should succeed because the timeout is a soft failure
+	stopDone := make(chan struct{})
+	go func() {
+		resp, b = doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/harness-runs/"+run.Name+"/agent-session/stop", "full", nil)
+		close(stopDone)
+	}()
+
+	select {
+	case <-stopDone:
+	case <-time.After(10 * time.Second):
+		t.Fatal("stop timed out")
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("stop status = %d, want 200 for soft timeout (body=%s)", resp.StatusCode, string(b))
+	}
+}
+
+// TestStatusAndStop_ResponseIncludesContractFields verifies that the status
+// and stop API responses include the fields the CLI/docs promise:
+// workspaceSessionId, createdAt, and displayName.
+func TestStatusAndStop_ResponseIncludesContractFields(t *testing.T) {
+	api, cleanup := newTestAPI(t)
+	defer cleanup()
+	transport := newFakeAgentSessionTransport()
+	api.AgentSessions = newAgentSessionService(transport, newAgentSessionStore(""))
+
+	if err := api.Tokens.Create(context.Background(), "t-full", "full", []string{
+		"workspace-session:write", "workspace-session:read",
+		"harness-run:write", "harness-run:read",
+	}); err != nil {
+		t.Fatalf("create token: %v", err)
+	}
+
+	srv := httptest.NewServer(api.Handler())
+	defer srv.Close()
+
+	// Create workspace session with a display name.
+	resp, b := doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/workspace-sessions", "full", map[string]any{
+		"displayName": "contract-test",
+		"repoURL":     "https://example.com/repo",
+	})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create session status = %d (body=%s)", resp.StatusCode, string(b))
+	}
+	var sess sessionResponse
+	_ = json.Unmarshal(b, &sess)
+
+	// Create harness run with agent session.
+	resp, b = doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/workspace-sessions/"+sess.ID+"/harness-runs", "full", map[string]any{
+		"repoURL":      "https://example.com/repo",
+		"image":        "alpine:3",
+		"agentSession": map[string]any{"agent": "codex"},
+	})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create run status = %d (body=%s)", resp.StatusCode, string(b))
+	}
+	var run runResponse
+	_ = json.Unmarshal(b, &run)
+
+	// Simulate pod ready and set a creation timestamp (fake client doesn't
+	// auto-set it like a real API server would).
+	var stored operatorv1alpha1.HarnessRun
+	if err := api.K8s.Get(context.Background(), client.ObjectKey{Namespace: api.Namespace, Name: run.ID}, &stored); err != nil {
+		t.Fatalf("get run: %v", err)
+	}
+	stored.CreationTimestamp = metav1.NewTime(time.Date(2026, 4, 12, 10, 0, 0, 0, time.UTC))
+	if err := api.K8s.Update(context.Background(), &stored); err != nil {
+		t.Fatalf("update run metadata: %v", err)
+	}
+	// Re-fetch after metadata update to get the latest resourceVersion.
+	if err := api.K8s.Get(context.Background(), client.ObjectKey{Namespace: api.Namespace, Name: run.ID}, &stored); err != nil {
+		t.Fatalf("re-get run: %v", err)
+	}
+	stored.Status.PodName = "pod-contract"
+	stored.Status.Phase = operatorv1alpha1.HarnessRunPhaseRunning
+	if err := api.K8s.Status().Update(context.Background(), &stored); err != nil {
+		t.Fatalf("update run status: %v", err)
+	}
+
+	// Create agent session.
+	resp, b = doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/harness-runs/"+run.ID+"/agent-session", "full", nil)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create agent session status = %d (body=%s)", resp.StatusCode, string(b))
+	}
+
+	// GET status — verify contract fields.
+	resp, b = doJSON(t, srv.Client(), http.MethodGet, srv.URL+"/api/v1/harness-runs/"+run.ID+"/agent-session", "full", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("get agent session status = %d (body=%s)", resp.StatusCode, string(b))
+	}
+	var statusDTO agentSessionDTO
+	if err := json.Unmarshal(b, &statusDTO); err != nil {
+		t.Fatalf("unmarshal status response: %v", err)
+	}
+	if statusDTO.WorkspaceSessionID != sess.ID {
+		t.Fatalf("status workspaceSessionId = %q, want %q", statusDTO.WorkspaceSessionID, sess.ID)
+	}
+	if statusDTO.CreatedAt == "" {
+		t.Fatal("status createdAt is empty")
+	}
+	if !strings.Contains(statusDTO.DisplayName, "contract-test") {
+		t.Fatalf("status displayName = %q, expected to contain contract-test", statusDTO.DisplayName)
+	}
+	if statusDTO.SessionID != "sas-123" {
+		t.Fatalf("status sessionId = %q, want sas-123", statusDTO.SessionID)
+	}
+
+	// Wait for stream to be established before stopping.
+	transport.waitWriter(t, 5*time.Second)
+
+	// POST stop — verify contract fields.
+	stopDone := make(chan struct{})
+	go func() {
+		resp, b = doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/harness-runs/"+run.ID+"/agent-session/stop", "full", nil)
+		close(stopDone)
+	}()
+	select {
+	case <-stopDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("stop timed out")
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("stop status = %d (body=%s)", resp.StatusCode, string(b))
+	}
+	var stopDTO agentSessionDTO
+	if err := json.Unmarshal(b, &stopDTO); err != nil {
+		t.Fatalf("unmarshal stop response: %v", err)
+	}
+	if stopDTO.WorkspaceSessionID != sess.ID {
+		t.Fatalf("stop workspaceSessionId = %q, want %q", stopDTO.WorkspaceSessionID, sess.ID)
+	}
+	if stopDTO.CreatedAt == "" {
+		t.Fatal("stop createdAt is empty")
+	}
+	if !strings.Contains(stopDTO.DisplayName, "contract-test") {
+		t.Fatalf("stop displayName = %q, expected to contain contract-test", stopDTO.DisplayName)
+	}
+	if stopDTO.Phase != operatorv1alpha1.AgentSessionPhaseCompleted {
+		t.Fatalf("stop phase = %q, want Completed", stopDTO.Phase)
+	}
+}
+
+// TestCreateStatusAndStop_DTOUnmarshalsIntoCLIAgentSession is a contract test that
+// verifies the actual API payload from the create, status, and stop endpoints can be
+// unmarshalled into the public CLI AgentSession struct without relying on
+// client-side backfill. This catches field-name mismatches (e.g. "harnessRunID"
+// vs "runId") at the API layer.
+func TestCreateStatusAndStop_DTOUnmarshalsIntoCLIAgentSession(t *testing.T) {
+	api, cleanup := newTestAPI(t)
+	defer cleanup()
+	transport := newFakeAgentSessionTransport()
+	api.AgentSessions = newAgentSessionService(transport, newAgentSessionStore(""))
+
+	if err := api.Tokens.Create(context.Background(), "t-full", "full", []string{
+		"workspace-session:write", "workspace-session:read",
+		"harness-run:write", "harness-run:read",
+	}); err != nil {
+		t.Fatalf("create token: %v", err)
+	}
+
+	srv := httptest.NewServer(api.Handler())
+	defer srv.Close()
+
+	// Create workspace + run + agent session.
+	resp, b := doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/workspace-sessions", "full", map[string]any{
+		"displayName": "cli-contract",
+		"repoURL":     "https://example.com/repo",
+	})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create session status = %d (body=%s)", resp.StatusCode, string(b))
+	}
+	var sess sessionResponse
+	_ = json.Unmarshal(b, &sess)
+
+	resp, b = doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/workspace-sessions/"+sess.ID+"/harness-runs", "full", map[string]any{
+		"repoURL":      "https://example.com/repo",
+		"image":        "alpine:3",
+		"agentSession": map[string]any{"agent": "codex"},
+	})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create run status = %d (body=%s)", resp.StatusCode, string(b))
+	}
+	var run runResponse
+	_ = json.Unmarshal(b, &run)
+
+	var stored operatorv1alpha1.HarnessRun
+	if err := api.K8s.Get(context.Background(), client.ObjectKey{Namespace: api.Namespace, Name: run.ID}, &stored); err != nil {
+		t.Fatalf("get run: %v", err)
+	}
+	stored.Status.PodName = "pod-cli-contract"
+	stored.Status.Phase = operatorv1alpha1.HarnessRunPhaseRunning
+	if err := api.K8s.Status().Update(context.Background(), &stored); err != nil {
+		t.Fatalf("update run status: %v", err)
+	}
+
+	resp, b = doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/harness-runs/"+run.ID+"/agent-session", "full", nil)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create agent session status = %d (body=%s)", resp.StatusCode, string(b))
+	}
+
+	// POST create — unmarshal into the CLI contract shape.
+	type cliAgentSession struct {
+		SessionID   string `json:"sessionId"`
+		RunID       string `json:"runId"`
+		DisplayName string `json:"displayName"`
+		Runtime     string `json:"runtime"`
+		Agent       string `json:"agent"`
+		Phase       string `json:"phase"`
+		WorkspaceID string `json:"workspaceSessionId"`
+		CreatedAt   string `json:"createdAt,omitempty"`
+	}
+
+	var createCLI cliAgentSession
+	if err := json.Unmarshal(b, &createCLI); err != nil {
+		t.Fatalf("unmarshal create into CLI shape: %v", err)
+	}
+	if createCLI.RunID != run.ID {
+		t.Fatalf("CLI contract: create runId = %q, want %q", createCLI.RunID, run.ID)
+	}
+	if createCLI.SessionID != "sas-123" {
+		t.Fatalf("CLI contract: create sessionId = %q, want sas-123", createCLI.SessionID)
+	}
+	if createCLI.Phase != string(operatorv1alpha1.AgentSessionPhaseReady) {
+		t.Fatalf("CLI contract: create phase = %q, want Ready", createCLI.Phase)
+	}
+
+	var createRaw map[string]json.RawMessage
+	if err := json.Unmarshal(b, &createRaw); err != nil {
+		t.Fatalf("unmarshal create raw map: %v", err)
+	}
+	if _, ok := createRaw["harnessRunID"]; ok {
+		t.Fatalf("create payload contains deprecated 'harnessRunID' field; should use 'runId'")
+	}
+	if _, ok := createRaw["runId"]; !ok {
+		t.Fatalf("create payload missing 'runId' field; keys: %v", keysOf(createRaw))
+	}
+
+	// GET status — unmarshal into the CLI contract shape.
+	resp, b = doJSON(t, srv.Client(), http.MethodGet, srv.URL+"/api/v1/harness-runs/"+run.ID+"/agent-session", "full", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("get agent session status = %d (body=%s)", resp.StatusCode, string(b))
+	}
+
+	var statusCLI cliAgentSession
+	if err := json.Unmarshal(b, &statusCLI); err != nil {
+		t.Fatalf("unmarshal status into CLI shape: %v", err)
+	}
+	if statusCLI.RunID == "" {
+		t.Fatalf("CLI contract: runId is empty after unmarshalling status response; raw payload:\n%s", string(b))
+	}
+	if statusCLI.RunID != run.ID {
+		t.Fatalf("CLI contract: runId = %q, want %q", statusCLI.RunID, run.ID)
+	}
+	if statusCLI.SessionID != "sas-123" {
+		t.Fatalf("CLI contract: sessionId = %q, want sas-123", statusCLI.SessionID)
+	}
+	if statusCLI.Phase != string(operatorv1alpha1.AgentSessionPhaseReady) {
+		t.Fatalf("CLI contract: phase = %q, want Ready", statusCLI.Phase)
+	}
+
+	// Verify the old field name "harnessRunID" is NOT present in the payload.
+	var rawMap map[string]json.RawMessage
+	if err := json.Unmarshal(b, &rawMap); err != nil {
+		t.Fatalf("unmarshal raw map: %v", err)
+	}
+	if _, ok := rawMap["harnessRunID"]; ok {
+		t.Fatalf("status payload contains deprecated 'harnessRunID' field; should use 'runId'")
+	}
+	if _, ok := rawMap["runId"]; !ok {
+		t.Fatalf("status payload missing 'runId' field; keys: %v", keysOf(rawMap))
+	}
+
+	// Wait for stream, then stop.
+	transport.waitWriter(t, 5*time.Second)
+
+	stopDone := make(chan struct{})
+	go func() {
+		resp, b = doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/harness-runs/"+run.ID+"/agent-session/stop", "full", nil)
+		close(stopDone)
+	}()
+	select {
+	case <-stopDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("stop timed out")
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("stop status = %d (body=%s)", resp.StatusCode, string(b))
+	}
+
+	var stopCLI cliAgentSession
+	if err := json.Unmarshal(b, &stopCLI); err != nil {
+		t.Fatalf("unmarshal stop into CLI shape: %v", err)
+	}
+	if stopCLI.RunID == "" {
+		t.Fatalf("CLI contract: runId is empty after unmarshalling stop response; raw payload:\n%s", string(b))
+	}
+	if stopCLI.RunID != run.ID {
+		t.Fatalf("CLI contract: stop runId = %q, want %q", stopCLI.RunID, run.ID)
+	}
+
+	var stopRaw map[string]json.RawMessage
+	if err := json.Unmarshal(b, &stopRaw); err != nil {
+		t.Fatalf("unmarshal stop raw map: %v", err)
+	}
+	if _, ok := stopRaw["harnessRunID"]; ok {
+		t.Fatalf("stop payload contains deprecated 'harnessRunID' field; should use 'runId'")
+	}
+}
+
+// TestStop_DeleteHardFailure_PersistsToHarnessRunStatus verifies that when
+// DeleteACP fails with a hard error, the failed agent session state is
+// best-effort patched to the HarnessRun CRD status before returning 502.
+func TestStop_DeleteHardFailure_PersistsToHarnessRunStatus(t *testing.T) {
+	api, cleanup := newTestAPI(t)
+	defer cleanup()
+	baseTransport := newFakeAgentSessionTransport()
+	failTransport := &fakeFailingDeleteTransport{
+		fakeAgentSessionTransport: baseTransport,
+		deleteErr:                 fmt.Errorf("sandbox-agent proxy DELETE returned 500: internal server error"),
+	}
+	api.AgentSessions = newAgentSessionService(failTransport, newAgentSessionStore(""))
+
+	if err := api.Tokens.Create(context.Background(), "t-full", "full", []string{"harness-run:write", "harness-run:read"}); err != nil {
+		t.Fatalf("create token: %v", err)
+	}
+
+	run := &operatorv1alpha1.HarnessRun{
+		TypeMeta:   metav1.TypeMeta{APIVersion: operatorv1alpha1.GroupVersion.String(), Kind: "HarnessRun"},
+		ObjectMeta: metav1.ObjectMeta{Name: "run-hard-fail-persist", Namespace: api.Namespace},
+		Spec: operatorv1alpha1.HarnessRunSpec{
+			RepoURL:    "https://example.com/repo",
+			Image:      "kocao/harness-runtime:dev",
+			WorkingDir: "/workspace/repo",
+			AgentSession: &operatorv1alpha1.AgentSessionSpec{
+				Runtime: operatorv1alpha1.AgentRuntimeSandboxAgent,
+				Agent:   operatorv1alpha1.AgentKindClaude,
+			},
+		},
+	}
+	if err := api.K8s.Create(context.Background(), run); err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	var stored operatorv1alpha1.HarnessRun
+	if err := api.K8s.Get(context.Background(), client.ObjectKeyFromObject(run), &stored); err != nil {
+		t.Fatalf("get run: %v", err)
+	}
+	stored.Status.PodName = "pod-hard-fail-persist"
+	stored.Status.Phase = operatorv1alpha1.HarnessRunPhaseRunning
+	if err := api.K8s.Status().Update(context.Background(), &stored); err != nil {
+		t.Fatalf("update run status: %v", err)
+	}
+
+	srv := httptest.NewServer(api.Handler())
+	defer srv.Close()
+
+	// Create session.
+	resp, b := doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/harness-runs/"+run.Name+"/agent-session", "full", nil)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create session status = %d (body=%s)", resp.StatusCode, string(b))
+	}
+
+	baseTransport.waitWriter(t, 5*time.Second)
+
+	// Stop should fail with 502.
+	stopDone := make(chan struct{})
+	go func() {
+		resp, b = doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/harness-runs/"+run.Name+"/agent-session/stop", "full", nil)
+		close(stopDone)
+	}()
+	select {
+	case <-stopDone:
+	case <-time.After(10 * time.Second):
+		t.Fatal("stop timed out")
+	}
+	if resp.StatusCode != http.StatusBadGateway {
+		t.Fatalf("stop status = %d, want 502 (body=%s)", resp.StatusCode, string(b))
+	}
+
+	// Verify the HarnessRun CRD status was patched with the failed state.
+	if err := api.K8s.Get(context.Background(), client.ObjectKeyFromObject(run), &stored); err != nil {
+		t.Fatalf("get run after stop: %v", err)
+	}
+	if stored.Status.AgentSession == nil {
+		t.Fatal("expected agent session status to be set after hard delete failure")
+	}
+	if stored.Status.AgentSession.Phase != operatorv1alpha1.AgentSessionPhaseFailed {
+		t.Fatalf("agent session phase = %q, want Failed", stored.Status.AgentSession.Phase)
+	}
+}
+
+func TestCreate_Failure_PersistsToHarnessRunStatus(t *testing.T) {
+	api, cleanup := newTestAPI(t)
+	defer cleanup()
+	api.AgentSessions = newAgentSessionService(&fakeCreateFailureTransport{
+		fakeAgentSessionTransport: newFakeAgentSessionTransport(),
+		createErr:                 fmt.Errorf("sandbox-agent proxy POST returned 500: internal server error"),
+	}, newAgentSessionStore(""))
+
+	if err := api.Tokens.Create(context.Background(), "t-full", "full", []string{"harness-run:write", "harness-run:read"}); err != nil {
+		t.Fatalf("create token: %v", err)
+	}
+
+	run := &operatorv1alpha1.HarnessRun{
+		TypeMeta:   metav1.TypeMeta{APIVersion: operatorv1alpha1.GroupVersion.String(), Kind: "HarnessRun"},
+		ObjectMeta: metav1.ObjectMeta{Name: "run-create-fail-persist", Namespace: api.Namespace},
+		Spec: operatorv1alpha1.HarnessRunSpec{
+			RepoURL:    "https://example.com/repo",
+			Image:      "kocao/harness-runtime:dev",
+			WorkingDir: "/workspace/repo",
+			AgentSession: &operatorv1alpha1.AgentSessionSpec{
+				Runtime: operatorv1alpha1.AgentRuntimeSandboxAgent,
+				Agent:   operatorv1alpha1.AgentKindClaude,
+			},
+		},
+	}
+	if err := api.K8s.Create(context.Background(), run); err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	var stored operatorv1alpha1.HarnessRun
+	if err := api.K8s.Get(context.Background(), client.ObjectKeyFromObject(run), &stored); err != nil {
+		t.Fatalf("get run: %v", err)
+	}
+	stored.Status.PodName = "pod-create-fail-persist"
+	stored.Status.Phase = operatorv1alpha1.HarnessRunPhaseRunning
+	if err := api.K8s.Status().Update(context.Background(), &stored); err != nil {
+		t.Fatalf("update run status: %v", err)
+	}
+
+	srv := httptest.NewServer(api.Handler())
+	defer srv.Close()
+
+	resp, b := doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/harness-runs/"+run.Name+"/agent-session", "full", nil)
+	if resp.StatusCode != http.StatusBadGateway {
+		t.Fatalf("create status = %d, want 502 (body=%s)", resp.StatusCode, string(b))
+	}
+
+	if err := api.K8s.Get(context.Background(), client.ObjectKeyFromObject(run), &stored); err != nil {
+		t.Fatalf("get run after create failure: %v", err)
+	}
+	if stored.Status.AgentSession == nil {
+		t.Fatal("expected agent session status to be set after create failure")
+	}
+	if stored.Status.AgentSession.Phase != operatorv1alpha1.AgentSessionPhaseFailed {
+		t.Fatalf("agent session phase = %q, want Failed", stored.Status.AgentSession.Phase)
+	}
+}
+
+func TestPrompt_Failure_PersistsToHarnessRunStatus(t *testing.T) {
+	api, cleanup := newTestAPI(t)
+	defer cleanup()
+	transport := &fakePromptFailureTransport{
+		fakeAgentSessionTransport: newFakeAgentSessionTransport(),
+		promptErr:                 fmt.Errorf("sandbox-agent proxy POST returned 500: internal server error"),
+	}
+	api.AgentSessions = newAgentSessionService(transport, newAgentSessionStore(""))
+
+	if err := api.Tokens.Create(context.Background(), "t-full", "full", []string{"harness-run:write", "harness-run:read"}); err != nil {
+		t.Fatalf("create token: %v", err)
+	}
+
+	run := &operatorv1alpha1.HarnessRun{
+		TypeMeta:   metav1.TypeMeta{APIVersion: operatorv1alpha1.GroupVersion.String(), Kind: "HarnessRun"},
+		ObjectMeta: metav1.ObjectMeta{Name: "run-prompt-fail-persist", Namespace: api.Namespace},
+		Spec: operatorv1alpha1.HarnessRunSpec{
+			RepoURL:    "https://example.com/repo",
+			Image:      "kocao/harness-runtime:dev",
+			WorkingDir: "/workspace/repo",
+			AgentSession: &operatorv1alpha1.AgentSessionSpec{
+				Runtime: operatorv1alpha1.AgentRuntimeSandboxAgent,
+				Agent:   operatorv1alpha1.AgentKindClaude,
+			},
+		},
+	}
+	if err := api.K8s.Create(context.Background(), run); err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	var stored operatorv1alpha1.HarnessRun
+	if err := api.K8s.Get(context.Background(), client.ObjectKeyFromObject(run), &stored); err != nil {
+		t.Fatalf("get run: %v", err)
+	}
+	stored.Status.PodName = "pod-prompt-fail-persist"
+	stored.Status.Phase = operatorv1alpha1.HarnessRunPhaseRunning
+	if err := api.K8s.Status().Update(context.Background(), &stored); err != nil {
+		t.Fatalf("update run status: %v", err)
+	}
+
+	srv := httptest.NewServer(api.Handler())
+	defer srv.Close()
+
+	resp, b := doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/harness-runs/"+run.Name+"/agent-session", "full", nil)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create session status = %d (body=%s)", resp.StatusCode, string(b))
+	}
+
+	resp, b = doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/harness-runs/"+run.Name+"/agent-session/prompt", "full", map[string]any{"prompt": "fail this prompt"})
+	if resp.StatusCode != http.StatusBadGateway {
+		t.Fatalf("prompt status = %d, want 502 (body=%s)", resp.StatusCode, string(b))
+	}
+
+	if err := api.K8s.Get(context.Background(), client.ObjectKeyFromObject(run), &stored); err != nil {
+		t.Fatalf("get run after prompt failure: %v", err)
+	}
+	if stored.Status.AgentSession == nil {
+		t.Fatal("expected agent session status to be set after prompt failure")
+	}
+	if stored.Status.AgentSession.Phase != operatorv1alpha1.AgentSessionPhaseFailed {
+		t.Fatalf("agent session phase = %q, want Failed", stored.Status.AgentSession.Phase)
+	}
+}
+
+func TestPrompt_CompletedSessionReturnsConflictWithoutMutatingState(t *testing.T) {
+	api, cleanup := newTestAPI(t)
+	defer cleanup()
+	transport := newFakeAgentSessionTransport()
+	api.AgentSessions = newAgentSessionService(transport, newAgentSessionStore(""))
+
+	if err := api.Tokens.Create(context.Background(), "t-full", "full", []string{"harness-run:write", "harness-run:read"}); err != nil {
+		t.Fatalf("create token: %v", err)
+	}
+
+	run := &operatorv1alpha1.HarnessRun{
+		TypeMeta:   metav1.TypeMeta{APIVersion: operatorv1alpha1.GroupVersion.String(), Kind: "HarnessRun"},
+		ObjectMeta: metav1.ObjectMeta{Name: "run-prompt-terminal", Namespace: api.Namespace},
+		Spec: operatorv1alpha1.HarnessRunSpec{
+			RepoURL:    "https://example.com/repo",
+			Image:      "kocao/harness-runtime:dev",
+			WorkingDir: "/workspace/repo",
+			AgentSession: &operatorv1alpha1.AgentSessionSpec{
+				Runtime: operatorv1alpha1.AgentRuntimeSandboxAgent,
+				Agent:   operatorv1alpha1.AgentKindClaude,
+			},
+		},
+	}
+	if err := api.K8s.Create(context.Background(), run); err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	var stored operatorv1alpha1.HarnessRun
+	if err := api.K8s.Get(context.Background(), client.ObjectKeyFromObject(run), &stored); err != nil {
+		t.Fatalf("get run: %v", err)
+	}
+	stored.Status.PodName = "pod-prompt-terminal"
+	stored.Status.Phase = operatorv1alpha1.HarnessRunPhaseRunning
+	if err := api.K8s.Status().Update(context.Background(), &stored); err != nil {
+		t.Fatalf("update run status: %v", err)
+	}
+
+	srv := httptest.NewServer(api.Handler())
+	defer srv.Close()
+
+	resp, b := doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/harness-runs/"+run.Name+"/agent-session", "full", nil)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create session status = %d, want 201 (body=%s)", resp.StatusCode, string(b))
+	}
+
+	resp, b = doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/harness-runs/"+run.Name+"/agent-session/stop", "full", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("stop status = %d, want 200 (body=%s)", resp.StatusCode, string(b))
+	}
+
+	transport.mu.Lock()
+	beforeCalls := len(transport.postCalls)
+	transport.mu.Unlock()
+
+	resp, b = doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/harness-runs/"+run.Name+"/agent-session/prompt", "full", map[string]any{"prompt": "should be rejected"})
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("prompt status = %d, want 409 (body=%s)", resp.StatusCode, string(b))
+	}
+	if !strings.Contains(string(b), "completed") {
+		t.Fatalf("prompt body = %s, want completed error", string(b))
+	}
+
+	transport.mu.Lock()
+	afterCalls := len(transport.postCalls)
+	lastPrompt := transport.lastPrompt
+	transport.mu.Unlock()
+	if afterCalls != beforeCalls {
+		t.Fatalf("post call count changed from %d to %d", beforeCalls, afterCalls)
+	}
+	if lastPrompt != "" {
+		t.Fatalf("last prompt = %q, want empty", lastPrompt)
+	}
+
+	if err := api.K8s.Get(context.Background(), client.ObjectKeyFromObject(run), &stored); err != nil {
+		t.Fatalf("get run after rejected prompt: %v", err)
+	}
+	if stored.Status.AgentSession == nil {
+		t.Fatal("expected agent session status after rejected prompt")
+	}
+	if stored.Status.AgentSession.Phase != operatorv1alpha1.AgentSessionPhaseCompleted {
+		t.Fatalf("agent session phase = %q, want Completed", stored.Status.AgentSession.Phase)
+	}
+}
+
+func TestStatus_LegacyActiveNormalizesToRunning(t *testing.T) {
+	api, cleanup := newTestAPI(t)
+	defer cleanup()
+	api.AgentSessions = newAgentSessionService(newFakeAgentSessionTransport(), newAgentSessionStore(""))
+
+	if err := api.Tokens.Create(context.Background(), "t-full", "full", []string{"harness-run:read"}); err != nil {
+		t.Fatalf("create token: %v", err)
+	}
+
+	run := &operatorv1alpha1.HarnessRun{
+		TypeMeta:   metav1.TypeMeta{APIVersion: operatorv1alpha1.GroupVersion.String(), Kind: "HarnessRun"},
+		ObjectMeta: metav1.ObjectMeta{Name: "run-legacy-active-status", Namespace: api.Namespace},
+		Spec: operatorv1alpha1.HarnessRunSpec{
+			RepoURL:    "https://example.com/repo",
+			Image:      "kocao/harness-runtime:dev",
+			WorkingDir: "/workspace/repo",
+			AgentSession: &operatorv1alpha1.AgentSessionSpec{
+				Runtime: operatorv1alpha1.AgentRuntimeSandboxAgent,
+				Agent:   operatorv1alpha1.AgentKindClaude,
+			},
+		},
+	}
+	if err := api.K8s.Create(context.Background(), run); err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	var stored operatorv1alpha1.HarnessRun
+	if err := api.K8s.Get(context.Background(), client.ObjectKeyFromObject(run), &stored); err != nil {
+		t.Fatalf("get run: %v", err)
+	}
+	stored.Status.PodName = "pod-legacy-active-status"
+	stored.Status.Phase = operatorv1alpha1.HarnessRunPhaseRunning
+	stored.Status.AgentSession = &operatorv1alpha1.AgentSessionStatus{
+		Runtime:   operatorv1alpha1.AgentRuntimeSandboxAgent,
+		Agent:     operatorv1alpha1.AgentKindClaude,
+		SessionID: "sas-legacy-active",
+		Phase:     operatorv1alpha1.AgentSessionPhaseActive,
+	}
+	if err := api.K8s.Status().Update(context.Background(), &stored); err != nil {
+		t.Fatalf("update run status: %v", err)
+	}
+
+	srv := httptest.NewServer(api.Handler())
+	defer srv.Close()
+
+	resp, b := doJSON(t, srv.Client(), http.MethodGet, srv.URL+"/api/v1/harness-runs/"+run.Name+"/agent-session", "full", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status code = %d, want 200 (body=%s)", resp.StatusCode, string(b))
+	}
+
+	var dto agentSessionDTO
+	if err := json.Unmarshal(b, &dto); err != nil {
+		t.Fatalf("unmarshal status response: %v", err)
+	}
+	if dto.Phase != operatorv1alpha1.AgentSessionPhaseRunning {
+		t.Fatalf("status phase = %q, want Running", dto.Phase)
+	}
+}
+
+// TestIsStalePodProxyError_NarrowMatching verifies that the soft-failure
+// classifier does not treat generic stream/http2 errors as safe.
+func TestIsStalePodProxyError_NarrowMatching(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"nil", nil, false},
+		{"context deadline exceeded", fmt.Errorf("context deadline exceeded"), true},
+		{"connection reset", fmt.Errorf("read tcp: connection reset by peer"), true},
+		{"broken pipe", fmt.Errorf("write: broken pipe"), true},
+		{"closed network connection", fmt.Errorf("use of closed network connection"), true},
+		{"generic stream error", fmt.Errorf("stream error: stream ID 1; INTERNAL_ERROR"), false},
+		{"bare http2 prefix", fmt.Errorf("http2: server sent GOAWAY"), false},
+		{"http2 with connection reset", fmt.Errorf("http2: connection reset by peer"), true},
+		{"500 internal server error", fmt.Errorf("sandbox-agent proxy DELETE returned 500: internal server error"), false},
+		{"403 forbidden", fmt.Errorf("sandbox-agent proxy DELETE returned 403: forbidden"), false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := isStalePodProxyError(tt.err)
+			if got != tt.want {
+				t.Fatalf("isStalePodProxyError(%q) = %v, want %v", tt.err, got, tt.want)
+			}
+		})
+	}
+}

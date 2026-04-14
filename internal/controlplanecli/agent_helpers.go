@@ -42,6 +42,13 @@ func formatAgentSessionCreatedAt(t time.Time) string {
 	return t.Format(time.RFC3339)
 }
 
+func formatAgentSessionBlocker(diag *AgentSessionDiagnostic) string {
+	if diag == nil || strings.TrimSpace(diag.Class) == "" {
+		return "-"
+	}
+	return diag.Class
+}
+
 func writeAgentSessionSummary(w io.Writer, heading string, session *AgentSession) error {
 	if heading != "" {
 		if _, err := fmt.Fprintln(w, heading); err != nil {
@@ -66,6 +73,19 @@ func writeAgentSessionSummary(w io.Writer, heading string, session *AgentSession
 	for _, line := range lines {
 		if _, err := fmt.Fprintf(w, "  %-10s %s\n", line.label+":", line.value); err != nil {
 			return err
+		}
+	}
+	if session.Diagnostic != nil {
+		if _, err := fmt.Fprintf(w, "  %-10s %s\n", "Blocker:", valueOrDash(session.Diagnostic.Class)); err != nil {
+			return err
+		}
+		if _, err := fmt.Fprintf(w, "  %-10s %s\n", "Summary:", valueOrDash(session.Diagnostic.Summary)); err != nil {
+			return err
+		}
+		if strings.TrimSpace(session.Diagnostic.Detail) != "" {
+			if _, err := fmt.Fprintf(w, "  %-10s %s\n", "Detail:", session.Diagnostic.Detail); err != nil {
+				return err
+			}
 		}
 	}
 	return nil

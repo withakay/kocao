@@ -32,6 +32,9 @@ help:
 		"  deploy-restart      Apply overlay + restart control-plane pods" \
 		"  deploy-wait         Wait for control-plane rollout" \
 		"  kind-refresh        Build + load + deploy-restart for kind" \
+		"  images-live-agent   Build API/operator/web/harness/sidecar images" \
+		"  kind-load-images-live-agent Load API/operator/web/harness/sidecar images into kind" \
+		"  test-agent-live-kind Run live agent lifecycle verification in kind" \
 		"  undeploy            Delete kustomize overlay" \
 		"  harness-smoke       Build + smoke-test harness image" \
 		"  web-install         Install web deps (pnpm)" \
@@ -96,6 +99,9 @@ images:
 	docker build -f build/Dockerfile.harness -t "$(HARNESS_IMAGE):$(IMAGE_TAG)" .
 	docker build -f build/Dockerfile.sidecar -t "$(SIDECAR_IMAGE):$(IMAGE_TAG)" .
 
+.PHONY: images-live-agent
+images-live-agent: images
+
 .PHONY: kind-load-images
 kind-load-images: tools
 	KIND_CLUSTER_NAME="$(KIND_CLUSTER_NAME)" KIND_BIN="$(KIND)" bash ./hack/kind/load-image.sh "$(API_IMAGE):$(IMAGE_TAG)"
@@ -103,6 +109,9 @@ kind-load-images: tools
 	KIND_CLUSTER_NAME="$(KIND_CLUSTER_NAME)" KIND_BIN="$(KIND)" bash ./hack/kind/load-image.sh "$(WEB_IMAGE):$(IMAGE_TAG)"
 	KIND_CLUSTER_NAME="$(KIND_CLUSTER_NAME)" KIND_BIN="$(KIND)" bash ./hack/kind/load-image.sh "$(HARNESS_IMAGE):$(IMAGE_TAG)"
 	KIND_CLUSTER_NAME="$(KIND_CLUSTER_NAME)" KIND_BIN="$(KIND)" bash ./hack/kind/load-image.sh "$(SIDECAR_IMAGE):$(IMAGE_TAG)"
+
+.PHONY: kind-load-images-live-agent
+kind-load-images-live-agent: kind-load-images
 
 .PHONY: harness-smoke
 harness-smoke:
@@ -133,6 +142,10 @@ kind-refresh: images kind-load-images deploy-restart
 .PHONY: undeploy
 undeploy:
 	kubectl delete -k deploy/overlays/dev-kind
+
+.PHONY: test-agent-live-kind
+test-agent-live-kind:
+	bash ./test/live/agent_session_lifecycle_kind.sh
 
 .PHONY: web-install
 web-install:
