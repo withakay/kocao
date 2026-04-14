@@ -385,6 +385,7 @@ const (
 	AgentKindClaude   AgentKind = "claude"
 	AgentKindCodex    AgentKind = "codex"
 	AgentKindPi       AgentKind = "pi"
+	AgentKindMock     AgentKind = "mock"
 )
 
 type AgentSessionPhase string
@@ -519,12 +520,12 @@ func (in *AgentSessionSpec) Validate() error {
 		return fmt.Errorf("agentSession.runtime must be %q", AgentRuntimeSandboxAgent)
 	}
 	switch in.Agent {
-	case AgentKindOpenCode, AgentKindClaude, AgentKindCodex, AgentKindPi:
+	case AgentKindOpenCode, AgentKindClaude, AgentKindCodex, AgentKindPi, AgentKindMock:
 		return nil
 	case "":
 		return fmt.Errorf("agentSession.agent is required when agentSession is set")
 	default:
-		return fmt.Errorf("agentSession.agent must be one of %q, %q, %q, %q", AgentKindOpenCode, AgentKindClaude, AgentKindCodex, AgentKindPi)
+		return fmt.Errorf("agentSession.agent must be one of %q, %q, %q, %q, %q", AgentKindOpenCode, AgentKindClaude, AgentKindCodex, AgentKindPi, AgentKindMock)
 	}
 }
 
@@ -550,6 +551,8 @@ func NormalizeAgentKind(raw string) AgentKind {
 		return AgentKindCodex
 	case string(AgentKindPi):
 		return AgentKindPi
+	case string(AgentKindMock):
+		return AgentKindMock
 	default:
 		return AgentKind(normalized)
 	}

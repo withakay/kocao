@@ -20,6 +20,120 @@ KOCAO_LIVE_TEST_REPO_URL=${KOCAO_LIVE_TEST_REPO_URL:-https://github.com/withakay
 KOCAO_LIVE_TEST_AGENT=${KOCAO_LIVE_TEST_AGENT:-mock}
 KOCAO_LIVE_TEST_BAD_IMAGE=${KOCAO_LIVE_TEST_BAD_IMAGE:-kocao/harness-runtime:missing-live-ci}
 
+read -r -d '' ACP_FIXTURE_SCRIPT <<'EOF' || true
+import json
+import queue
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+SESSION_ID = "live-sas-123"
+history = []
+subscribers = []
+lock = threading.Lock()
+
+
+def broadcast(event):
+    payload = json.dumps(event, separators=(",", ":"))
+    with lock:
+        history.append(payload)
+        current = list(subscribers)
+    for sub in current:
+        sub.put(payload)
+
+
+def close_streams():
+    with lock:
+        current = list(subscribers)
+    for sub in current:
+        sub.put(False)
+
+
+class Handler(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+
+    def do_POST(self):
+        length = int(self.headers.get("Content-Length", "0"))
+        body = self.rfile.read(length) if length else b"{}"
+        env = json.loads(body.decode("utf-8"))
+        method = env.get("method")
+        req_id = env.get("id")
+
+        if method == "initialize":
+            response = {"jsonrpc": "2.0", "id": req_id, "result": {"authMethods": []}}
+        elif method == "session/new":
+            params = env.get("params") or {}
+            broadcast({"jsonrpc": "2.0", "method": "session/new", "params": {"sessionId": SESSION_ID, "cwd": params.get("cwd", "/workspace/repo")}})
+            response = {"jsonrpc": "2.0", "id": req_id, "result": {"sessionId": SESSION_ID}}
+        elif method == "session/prompt":
+            params = env.get("params") or {}
+            prompt_parts = params.get("prompt") or []
+            prompt_text = ""
+            if prompt_parts:
+                prompt_text = str(prompt_parts[0].get("text", ""))
+            broadcast({"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": SESSION_ID, "sessionUpdate": "user_message_chunk", "content": {"type": "text", "text": prompt_text}}})
+            broadcast({"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": SESSION_ID, "sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": f"echo: {prompt_text}"}}})
+            response = {"jsonrpc": "2.0", "id": req_id, "result": {"stopReason": "completed"}}
+        else:
+            response = {"jsonrpc": "2.0", "id": req_id, "result": {}}
+
+        payload = json.dumps(response, separators=(",", ":")).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
+
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Connection", "keep-alive")
+        self.end_headers()
+
+        sub = queue.Queue()
+        with lock:
+            snapshot = list(history)
+            subscribers.append(sub)
+        try:
+            for payload in snapshot:
+                self.wfile.write(f"data: {payload}\n\n".encode("utf-8"))
+            self.wfile.flush()
+            while True:
+                try:
+                    payload = sub.get(timeout=1)
+                except queue.Empty:
+                    payload = None
+                if payload is None:
+                    self.wfile.write(b": keepalive\n\n")
+                    self.wfile.flush()
+                    continue
+                if payload is False:
+                    break
+                self.wfile.write(f"data: {payload}\n\n".encode("utf-8"))
+                self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+        finally:
+            with lock:
+                if sub in subscribers:
+                    subscribers.remove(sub)
+
+    def do_DELETE(self):
+        close_streams()
+        payload = b"{}"
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
+
+    def log_message(self, format, *args):
+        return
+
+
+ThreadingHTTPServer(("0.0.0.0", 2468), Handler).serve_forever()
+EOF
+
 PORT_FORWARD_PID=""
 PORT_FORWARD_LOG=""
 START_STDERR=""
@@ -85,13 +199,24 @@ wait_for_http_ok() {
 	return 1
 }
 
+wait_for_api_service_endpoint() {
+	for _ in $(seq 1 60); do
+		if kubectl -n "${K8S_NAMESPACE}" get endpoints control-plane-api -o json | jq -e '([.subsets[]?.addresses[]?] | length) > 0' >/dev/null 2>&1; then
+			return 0
+		fi
+		sleep 2
+	done
+	return 1
+}
+
 start_port_forward() {
 	stop_port_forward
-	local pod_name
-	pod_name=$(kubectl -n "${K8S_NAMESPACE}" get pods -l app=control-plane-api -o jsonpath='{.items[0].metadata.name}')
-	[[ -n "${pod_name}" ]] || fail "control-plane-api pod not found"
+	if ! wait_for_api_service_endpoint; then
+		kubectl -n "${K8S_NAMESPACE}" get endpoints control-plane-api -o yaml >&2 || true
+		fail "control-plane-api service never published a ready endpoint"
+	fi
 	PORT_FORWARD_LOG=$(mktemp -t kocao-port-forward.XXXXXX.log)
-	kubectl -n "${K8S_NAMESPACE}" port-forward "pod/${pod_name}" 18080:8080 >"${PORT_FORWARD_LOG}" 2>&1 &
+	kubectl -n "${K8S_NAMESPACE}" port-forward service/control-plane-api 18080:80 >"${PORT_FORWARD_LOG}" 2>&1 &
 	PORT_FORWARD_PID=$!
 	if ! wait_for_http_ok "${KOCAO_API_URL}/healthz" 60; then
 		cat "${PORT_FORWARD_LOG}" >&2 || true
@@ -161,6 +286,36 @@ wait_for_failed_session() {
 	return 1
 }
 
+wait_for_active_session() {
+	local run_id=$1
+	local status_file=$2
+	for _ in $(seq 1 90); do
+		trigger_agent_session_create "${run_id}"
+		if "${ROOT_DIR}/bin/kocao" --api-url "${KOCAO_API_URL}" --token "${KOCAO_TOKEN}" agent status "${run_id}" --output json >"${status_file}" 2>/dev/null; then
+			if jq -e '.phase == "Ready" or .phase == "Running"' "${status_file}" >/dev/null; then
+				return 0
+			fi
+		fi
+		sleep 2
+	done
+	return 1
+}
+
+wait_for_logs_contains() {
+	local run_id=$1
+	local output_file=$2
+	local pattern=$3
+	for _ in $(seq 1 60); do
+		if "${ROOT_DIR}/bin/kocao" --api-url "${KOCAO_API_URL}" --token "${KOCAO_TOKEN}" agent logs "${run_id}" --output json >"${output_file}" 2>/dev/null; then
+			if grep -q -- "${pattern}" "${output_file}"; then
+				return 0
+			fi
+		fi
+		sleep 2
+	done
+	return 1
+}
+
 require_command docker
 require_command curl
 require_command jq
@@ -168,6 +323,7 @@ require_command kubectl
 require_command go
 
 TMPDIR_PATH=$(mktemp -d -t kocao-agent-live.XXXXXX)
+RUN_SUFFIX=$(date +%s)-$$
 kind_config="${TMPDIR_PATH}/kind-config.yaml"
 cat >"${kind_config}" <<'EOF'
 kind: Cluster
@@ -190,6 +346,7 @@ make -C "${ROOT_DIR}" kind-load-images-live-agent KIND_CLUSTER_NAME="${KIND_CLUS
 
 log "deploying control plane"
 make -C "${ROOT_DIR}" deploy
+kubectl -n "${K8S_NAMESPACE}" rollout restart deploy/control-plane-api deploy/control-plane-operator
 make -C "${ROOT_DIR}" deploy-wait
 
 log "starting API port-forward"
@@ -199,6 +356,7 @@ tmpdir=${TMPDIR_PATH}
 status_json="${tmpdir}/status.json"
 list_json="${tmpdir}/list.json"
 logs_jsonl="${tmpdir}/logs.jsonl"
+exec_json="${tmpdir}/exec.json"
 stop_json="${tmpdir}/stop.json"
 repeat_stop_json="${tmpdir}/stop-repeat.json"
 diag_status_json="${tmpdir}/diag-status.json"
@@ -209,47 +367,72 @@ run_json="${tmpdir}/run.json"
 
 START_STDERR="${tmpdir}/start.stderr"
 
-log "creating live mock-backed harness run"
-api_request POST /api/v1/workspace-sessions "$(jq -nc --arg repo "${KOCAO_LIVE_TEST_REPO_URL}" '{displayName:"live-ci-bootstrap",repoURL:$repo}')" >"${workspace_json}"
+log "creating healthy ACP fixture harness run"
+api_request POST /api/v1/workspace-sessions "$(jq -nc --arg repo "${KOCAO_LIVE_TEST_REPO_URL}" --arg display_name "live-ci-healthy-${RUN_SUFFIX}" '{displayName:$display_name,repoURL:$repo}')" >"${workspace_json}"
 workspace_id=$(json_field "${workspace_json}" '.id')
 
-api_request POST "/api/v1/workspace-sessions/${workspace_id}/harness-runs" "$(jq -nc --arg repo "${KOCAO_LIVE_TEST_REPO_URL}" --arg image "${HARNESS_IMAGE}:${IMAGE_TAG}" --arg agent "${KOCAO_LIVE_TEST_AGENT}" '{repoURL:$repo,repoRevision:"main",image:$image,egressMode:"full",agentSession:{agent:$agent}}')" >"${run_json}"
+api_request POST "/api/v1/workspace-sessions/${workspace_id}/harness-runs" "$(jq -nc \
+	--arg repo "${KOCAO_LIVE_TEST_REPO_URL}" \
+	--arg image "${HARNESS_IMAGE}:${IMAGE_TAG}" \
+	--arg agent "${KOCAO_LIVE_TEST_AGENT}" \
+	--arg script "${ACP_FIXTURE_SCRIPT}" \
+	'{repoURL:$repo,repoRevision:"main",image:$image,egressMode:"full",command:["python3","-u","-c"],args:[$script],agentSession:{agent:$agent}}')" >"${run_json}"
 run_id=$(json_field "${run_json}" '.id')
 
-log "waiting for bootstrap session lifecycle to surface"
-if ! wait_for_failed_session "${run_id}" "${status_json}"; then
+if ! wait_for_active_session "${run_id}" "${status_json}"; then
 	api_request GET "/api/v1/harness-runs/${run_id}/agent-session" >"${diag_api_json}" || true
 	kubectl -n "${K8S_NAMESPACE}" get pods -o wide >&2 || true
 	kubectl -n "${K8S_NAMESPACE}" logs deploy/control-plane-api -c api --tail=200 >&2 || true
-	fail "timed out waiting for failed bootstrap lifecycle"
+	kubectl -n "${K8S_NAMESPACE}" logs "$(kubectl -n "${K8S_NAMESPACE}" get pods -l "kocao.withakay.github.com/run=${run_id}" -o jsonpath='{.items[0].metadata.name}')" --tail=200 >&2 || true
+	fail "timed out waiting for healthy agent lifecycle"
 fi
 
-assert_jq "${status_json}" --arg run_id "${run_id}" '.runId == $run_id and .phase == "Failed" and .agent == "mock"' 'status did not surface failed bootstrap session'
+assert_jq "${status_json}" --arg run_id "${run_id}" '.runId == $run_id and (.phase == "Ready" or .phase == "Running") and .agent == "mock" and (.sessionId | length > 0)' 'agent status did not surface healthy lifecycle state'
 
 "${ROOT_DIR}/bin/kocao" --api-url "${KOCAO_API_URL}" --token "${KOCAO_TOKEN}" agent list --output json >"${list_json}"
-assert_jq "${list_json}" --arg run_id "${run_id}" 'map(select(.runId == $run_id and .phase == "Failed" and .agent == "mock")) | length == 1' 'agent list did not include failed bootstrap session'
+assert_jq "${list_json}" --arg run_id "${run_id}" 'map(select(.runId == $run_id and (.phase == "Ready" or .phase == "Running") and .agent == "mock" and (.sessionId | length > 0))) | length == 1' 'agent list did not include healthy mock session'
 
-log "verifying live ACP event logs"
-"${ROOT_DIR}/bin/kocao" --api-url "${KOCAO_API_URL}" --token "${KOCAO_TOKEN}" agent logs "${run_id}" --output json >"${logs_jsonl}"
-grep -q 'session/new' "${logs_jsonl}" || fail 'agent logs did not include bootstrap session/new traffic'
+log "sending prompt through live agent session"
+"${ROOT_DIR}/bin/kocao" --api-url "${KOCAO_API_URL}" --token "${KOCAO_TOKEN}" agent exec "${run_id}" --prompt 'hello live kind' --output json >"${exec_json}"
+assert_jq "${exec_json}" --arg prompt 'hello live kind' '.events | length > 0 and any(.[]; (.data | tostring | contains($prompt)) or (.data | tostring | contains("echo: " + $prompt)))' 'agent exec did not return prompt response events'
 
-log "restarting control-plane deployments to verify failed lifecycle durability"
+log "verifying live agent logs for session creation and prompt traffic"
+if ! wait_for_logs_contains "${run_id}" "${logs_jsonl}" 'session/new'; then
+	fail 'agent logs did not include healthy session/new traffic'
+fi
+if ! wait_for_logs_contains "${run_id}" "${logs_jsonl}" 'hello live kind'; then
+	fail 'agent logs did not include prompt traffic from healthy session'
+fi
+
+log "restarting control-plane deployments to verify healthy lifecycle durability"
 kubectl -n "${K8S_NAMESPACE}" rollout restart deploy/control-plane-api deploy/control-plane-operator
 make -C "${ROOT_DIR}" deploy-wait
 start_port_forward
 
-"${ROOT_DIR}/bin/kocao" --api-url "${KOCAO_API_URL}" --token "${KOCAO_TOKEN}" agent status "${run_id}" --output json >"${status_json}"
-assert_jq "${status_json}" --arg run_id "${run_id}" '.runId == $run_id and .phase == "Failed"' 'failed bootstrap status did not survive control-plane restart'
+if ! wait_for_active_session "${run_id}" "${status_json}"; then
+	api_request GET "/api/v1/harness-runs/${run_id}/agent-session" >"${diag_api_json}" || true
+	kubectl -n "${K8S_NAMESPACE}" get pods -o wide >&2 || true
+	kubectl -n "${K8S_NAMESPACE}" logs deploy/control-plane-api -c api --tail=200 >&2 || true
+	fail "healthy agent lifecycle did not survive control-plane restart"
+fi
+assert_jq "${status_json}" --arg run_id "${run_id}" '.runId == $run_id and (.phase == "Ready" or .phase == "Running") and (.sessionId | length > 0)' 'healthy agent status did not survive control-plane restart'
+
+"${ROOT_DIR}/bin/kocao" --api-url "${KOCAO_API_URL}" --token "${KOCAO_TOKEN}" agent list --output json >"${list_json}"
+assert_jq "${list_json}" --arg run_id "${run_id}" 'map(select(.runId == $run_id and (.phase == "Ready" or .phase == "Running") and (.sessionId | length > 0))) | length == 1' 'agent list did not preserve healthy session after restart'
+
+if ! wait_for_logs_contains "${run_id}" "${logs_jsonl}" 'hello live kind'; then
+	fail 'agent logs did not preserve healthy prompt traffic after restart'
+fi
 
 log "stopping session and asserting terminal lifecycle"
 "${ROOT_DIR}/bin/kocao" --api-url "${KOCAO_API_URL}" --token "${KOCAO_TOKEN}" agent stop "${run_id}" --json >"${stop_json}"
-assert_jq "${stop_json}" '.status == "stopped" and .session.phase == "Failed"' 'stop did not preserve failed lifecycle view'
+assert_jq "${stop_json}" '.status == "stopped" and .session.phase == "Completed"' 'stop did not complete healthy lifecycle view'
 
 "${ROOT_DIR}/bin/kocao" --api-url "${KOCAO_API_URL}" --token "${KOCAO_TOKEN}" agent stop "${run_id}" --json >"${repeat_stop_json}"
-assert_jq "${repeat_stop_json}" '.status == "stopped" and .session.phase == "Failed"' 'repeat stop was not idempotent'
+assert_jq "${repeat_stop_json}" '.status == "stopped" and .session.phase == "Completed"' 'repeat stop was not idempotent for healthy session'
 
 log "creating bad-image run for provisioning diagnostics"
-api_request POST /api/v1/workspace-sessions "$(jq -nc --arg repo "${KOCAO_LIVE_TEST_REPO_URL}" '{displayName:"live-ci-diagnostics",repoURL:$repo}')" >"${workspace_json}"
+api_request POST /api/v1/workspace-sessions "$(jq -nc --arg repo "${KOCAO_LIVE_TEST_REPO_URL}" --arg display_name "live-ci-diagnostics-${RUN_SUFFIX}" '{displayName:$display_name,repoURL:$repo}')" >"${workspace_json}"
 workspace_id=$(json_field "${workspace_json}" '.id')
 
 api_request POST "/api/v1/workspace-sessions/${workspace_id}/harness-runs" "$(jq -nc --arg repo "${KOCAO_LIVE_TEST_REPO_URL}" --arg image "${KOCAO_LIVE_TEST_BAD_IMAGE}" '{repoURL:$repo,repoRevision:"main",image:$image,egressMode:"full",agentSession:{agent:"mock"}}')" >"${run_json}"
