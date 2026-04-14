@@ -298,7 +298,7 @@ func runRemoteAgentTaskDispatchCommand(args []string, cfg Config, stdout io.Writ
 	if err != nil {
 		return err
 	}
-	task, err := client.DispatchRemoteAgentTask(context.Background(), RemoteAgentTaskCreateRequest{
+	task, err := client.CreateRemoteAgentTask(context.Background(), RemoteAgentTaskCreateRequest{
 		Target:         target,
 		Prompt:         promptText,
 		TimeoutSeconds: int32(*timeoutSeconds),
@@ -371,13 +371,13 @@ func runRemoteAgentTaskTranscriptCommand(args []string, cfg Config, stdout io.Wr
 		return err
 	}
 	if format == "json" {
-		return writeJSON(stdout, map[string]any{"taskId": taskID, "transcript": transcript})
+		return writeJSON(stdout, transcript)
 	}
-	if len(transcript) == 0 {
+	if len(transcript.Transcript) == 0 {
 		_, _ = fmt.Fprintf(stdout, "task %s has no transcript entries\n", taskID)
 		return nil
 	}
-	return writeRemoteAgentTranscriptTable(stdout, transcript)
+	return writeRemoteAgentTranscriptTable(stdout, transcript.Transcript)
 }
 
 func runRemoteAgentTaskArtifactsCommand(args []string, cfg Config, stdout io.Writer, stderr io.Writer) error {
@@ -401,18 +401,18 @@ func runRemoteAgentTaskArtifactsCommand(args []string, cfg Config, stdout io.Wri
 	if err != nil {
 		return err
 	}
-	inputs, outputs, err := client.GetRemoteAgentTaskArtifacts(context.Background(), taskID)
+	artifacts, err := client.GetRemoteAgentTaskArtifacts(context.Background(), taskID)
 	if err != nil {
 		return err
 	}
 	if format == "json" {
-		return writeJSON(stdout, map[string]any{"taskId": taskID, "inputArtifacts": inputs, "outputArtifacts": outputs})
+		return writeJSON(stdout, artifacts)
 	}
-	if len(inputs) == 0 && len(outputs) == 0 {
+	if len(artifacts.InputArtifacts) == 0 && len(artifacts.OutputArtifacts) == 0 {
 		_, _ = fmt.Fprintf(stdout, "task %s has no artifacts\n", taskID)
 		return nil
 	}
-	return writeRemoteAgentArtifactsTable(stdout, inputs, outputs)
+	return writeRemoteAgentArtifactsTable(stdout, artifacts.InputArtifacts, artifacts.OutputArtifacts)
 }
 
 func writeRemoteAgentsUsage(w io.Writer) {
@@ -751,7 +751,7 @@ func writeRemoteAgentTranscriptTable(w io.Writer, transcript []RemoteAgentTransc
 	return tw.Flush()
 }
 
-func writeRemoteAgentArtifactsTable(w io.Writer, inputs []RemoteAgentArtifact, outputs []RemoteAgentArtifact) error {
+func writeRemoteAgentArtifactsTable(w io.Writer, inputs []RemoteAgentArtifactRef, outputs []RemoteAgentArtifactRef) error {
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
 	if _, err := fmt.Fprintln(tw, "SCOPE\tNAME\tKIND\tMEDIA TYPE\tSIZE\tPATH/URI\tCREATED"); err != nil {
 		return err
@@ -769,7 +769,7 @@ func writeRemoteAgentArtifactsTable(w io.Writer, inputs []RemoteAgentArtifact, o
 	return tw.Flush()
 }
 
-func writeRemoteAgentArtifactRow(w io.Writer, scope string, artifact RemoteAgentArtifact) error {
+func writeRemoteAgentArtifactRow(w io.Writer, scope string, artifact RemoteAgentArtifactRef) error {
 	location := strings.TrimSpace(artifact.Path)
 	if location == "" {
 		location = strings.TrimSpace(artifact.URI)
