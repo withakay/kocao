@@ -11,7 +11,7 @@ import (
 	"github.com/withakay/kocao/internal/controlplanecli"
 )
 
-func TestRemoteAgentOrchestrationE2E_MultiAgentWorkflowViaCLI(t *testing.T) {
+func TestRemoteAgentOrchestrationContract_MultiAgentWorkflowViaCLIAndAPI(t *testing.T) {
 	api, cleanup := newTestAPI(t)
 	defer cleanup()
 
@@ -51,14 +51,15 @@ func TestRemoteAgentOrchestrationE2E_MultiAgentWorkflowViaCLI(t *testing.T) {
 	}
 
 	type workflowStep struct {
-		agent         string
-		prompt        string
-		summary       string
-		outcome       string
-		artifactName  string
-		artifactKind  remoteAgentArtifactKind
-		artifactPath  string
-		assistantText string
+		agent          string
+		prompt         string
+		summary        string
+		outcome        string
+		inputArtifacts []remoteAgentArtifactCreateRequest
+		artifactName   string
+		artifactKind   remoteAgentArtifactKind
+		artifactPath   string
+		assistantText  string
 	}
 
 	steps := []workflowStep{
@@ -73,20 +74,30 @@ func TestRemoteAgentOrchestrationE2E_MultiAgentWorkflowViaCLI(t *testing.T) {
 			assistantText: "Likely root cause narrowed to orchestration state handling during retries.",
 		},
 		{
-			agent:         "implementer",
-			prompt:        "Implement the fix described in research-notes.md.",
-			summary:       "Implementation completed",
-			outcome:       "patch-ready",
+			agent:   "implementer",
+			prompt:  "Implement the fix described in research-notes.md.",
+			summary: "Implementation completed",
+			outcome: "patch-ready",
+			inputArtifacts: []remoteAgentArtifactCreateRequest{{
+				Name: "research-notes.md",
+				Kind: remoteAgentArtifactKindReport,
+				Path: "/workspace/research-notes.md",
+			}},
 			artifactName:  "fix.patch",
 			artifactKind:  remoteAgentArtifactKindPatch,
 			artifactPath:  "/workspace/fix.patch",
 			assistantText: "Patched the retry state transition and added validation coverage.",
 		},
 		{
-			agent:         "reviewer",
-			prompt:        "Review fix.patch and confirm whether it is ready to merge.",
-			summary:       "Review completed",
-			outcome:       "approved-with-comments",
+			agent:   "reviewer",
+			prompt:  "Review fix.patch and confirm whether it is ready to merge.",
+			summary: "Review completed",
+			outcome: "approved-with-comments",
+			inputArtifacts: []remoteAgentArtifactCreateRequest{{
+				Name: "fix.patch",
+				Kind: remoteAgentArtifactKindPatch,
+				Path: "/workspace/fix.patch",
+			}},
 			artifactName:  "review.md",
 			artifactKind:  remoteAgentArtifactKindReport,
 			artifactPath:  "/workspace/review.md",
@@ -95,20 +106,37 @@ func TestRemoteAgentOrchestrationE2E_MultiAgentWorkflowViaCLI(t *testing.T) {
 	}
 
 	tasksByAgent := make(map[string]remoteAgentTask, len(steps))
-	for _, step := range steps {
-		stdout, stderr, code := runRemoteAgentWorkflowCLI(t, srv.URL,
-			"remote-agents", "tasks", "dispatch",
-			"--agent", step.agent,
-			"--pool", "workflow",
-			"--prompt", step.prompt,
-			"--output", "json",
-		)
-		if code != 0 {
-			t.Fatalf("dispatch %s exit code = %d stderr=%s", step.agent, code, stderr)
-		}
+	for i, step := range steps {
 		var task remoteAgentTask
-		if err := json.Unmarshal(stdout, &task); err != nil {
-			t.Fatalf("unmarshal dispatched task for %s: %v (stdout=%s)", step.agent, err, string(stdout))
+		if i == 0 {
+			stdout, stderr, code := runRemoteAgentWorkflowCLI(t, srv.URL,
+				"remote-agents", "tasks", "dispatch",
+				"--agent", step.agent,
+				"--pool", "workflow",
+				"--prompt", step.prompt,
+				"--output", "json",
+			)
+			if code != 0 {
+				t.Fatalf("dispatch %s via CLI exit code = %d stderr=%s", step.agent, code, stderr)
+			}
+			if err := json.Unmarshal(stdout, &task); err != nil {
+				t.Fatalf("unmarshal dispatched task for %s: %v (stdout=%s)", step.agent, err, string(stdout))
+			}
+		} else {
+			resp, body := doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/remote-agent-tasks", "orchestration", map[string]any{
+				"target": map[string]any{
+					"agentName": step.agent,
+					"poolName":  "workflow",
+				},
+				"prompt":         step.prompt,
+				"inputArtifacts": step.inputArtifacts,
+			})
+			if resp.StatusCode != http.StatusCreated {
+				t.Fatalf("dispatch %s via API status = %d, want 201 (body=%s)", step.agent, resp.StatusCode, string(body))
+			}
+			if err := json.Unmarshal(body, &task); err != nil {
+				t.Fatalf("unmarshal API-dispatched task for %s: %v (body=%s)", step.agent, err, string(body))
+			}
 		}
 		if task.AgentName != step.agent || task.State != remoteAgentTaskStateAssigned {
 			t.Fatalf("unexpected dispatched task for %s: %+v", step.agent, task)
@@ -177,6 +205,17 @@ func TestRemoteAgentOrchestrationE2E_MultiAgentWorkflowViaCLI(t *testing.T) {
 		if task.Result == nil || task.Result.Summary != step.summary || task.Result.OutputArtifactCount != 1 || task.Result.TranscriptEntries != 2 {
 			t.Fatalf("unexpected task result for %s: %+v", step.agent, task.Result)
 		}
+		if len(task.InputArtifacts) != len(step.inputArtifacts) || len(task.OutputArtifacts) != 1 {
+			t.Fatalf("unexpected artifact linkage for %s: inputs=%+v outputs=%+v", step.agent, task.InputArtifacts, task.OutputArtifacts)
+		}
+		for i, input := range step.inputArtifacts {
+			if task.InputArtifacts[i].Name != input.Name || task.InputArtifacts[i].Kind != input.Kind || task.InputArtifacts[i].Path != input.Path {
+				t.Fatalf("unexpected input artifact %d for %s: %+v", i, step.agent, task.InputArtifacts[i])
+			}
+		}
+		if task.OutputArtifacts[0].Name != step.artifactName || task.OutputArtifacts[0].Kind != step.artifactKind || task.OutputArtifacts[0].Path != step.artifactPath {
+			t.Fatalf("unexpected output artifact for %s: %+v", step.agent, task.OutputArtifacts[0])
+		}
 
 		stdout, stderr, code = runRemoteAgentWorkflowCLI(t, srv.URL,
 			"remote-agents", "tasks", "transcript", taskID, "--output", "json",
@@ -209,8 +248,16 @@ func TestRemoteAgentOrchestrationE2E_MultiAgentWorkflowViaCLI(t *testing.T) {
 		if err := json.Unmarshal(stdout, &artifacts); err != nil {
 			t.Fatalf("unmarshal artifacts %s: %v (stdout=%s)", taskID, err, string(stdout))
 		}
-		if len(artifacts.InputArtifacts) != 0 || len(artifacts.OutputArtifacts) != 1 || artifacts.OutputArtifacts[0].Name != step.artifactName {
+		if len(artifacts.InputArtifacts) != len(step.inputArtifacts) || len(artifacts.OutputArtifacts) != 1 {
 			t.Fatalf("unexpected artifacts for %s: %+v", step.agent, artifacts)
+		}
+		for i, input := range step.inputArtifacts {
+			if artifacts.InputArtifacts[i].Name != input.Name || artifacts.InputArtifacts[i].Kind != input.Kind || artifacts.InputArtifacts[i].Path != input.Path {
+				t.Fatalf("unexpected input artifact payload %d for %s: %+v", i, step.agent, artifacts.InputArtifacts[i])
+			}
+		}
+		if artifacts.OutputArtifacts[0].Name != step.artifactName || artifacts.OutputArtifacts[0].Kind != step.artifactKind || artifacts.OutputArtifacts[0].Path != step.artifactPath {
+			t.Fatalf("unexpected output artifact payload for %s: %+v", step.agent, artifacts.OutputArtifacts[0])
 		}
 	}
 

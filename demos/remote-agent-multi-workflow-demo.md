@@ -1,14 +1,17 @@
-# Remote Agent Multi-Workflow Demo
+# Remote Agent Multi-Workflow Contract Demo
 
-*2026-04-14T15:00:00Z - reviewer / implementer / researcher orchestration walkthrough*
+*2026-04-14T15:00:00Z - CLI+API contract walkthrough for researcher / implementer / reviewer task chaining*
 
-This demo shows one coordinated remote-agent workflow where three named agents own different tasks:
+This demo documents the contract exercised by `TestRemoteAgentOrchestrationContract_MultiAgentWorkflowViaCLIAndAPI`.
+It does not claim live harness execution, Kind coverage, or showboat verification.
+
+The workflow used in the test is:
 
 - `researcher` investigates the bug and produces notes
-- `implementer` turns the notes into a patch
-- `reviewer` checks the patch and emits review comments
+- `implementer` receives `research-notes.md` as an explicit input artifact and turns it into a patch
+- `reviewer` receives `fix.patch` as an explicit input artifact and emits review comments
 
-The important contract is that each task keeps its own identity, status, transcript, and artifact list even though the work belongs to one larger workflow.
+The important contract is that each task keeps its own identity, status, transcript, and input/output artifact list even though the larger workflow is only modeled through API and CLI boundaries.
 
 ## 1. Create the logical pool and named agents
 
@@ -29,34 +32,53 @@ for agent in researcher implementer reviewer; do
 done
 ```
 
-## 2. Dispatch the workflow tasks through the CLI
+## 2. Dispatch the initial task through the CLI
 
 ```bash
 kocao remote-agents tasks dispatch \
   --agent researcher --pool workflow \
   --prompt "Research the regression and summarize the likely root cause." \
   --output json
-
-kocao remote-agents tasks dispatch \
-  --agent implementer --pool workflow \
-  --prompt "Implement the fix described in research-notes.md." \
-  --output json
-
-kocao remote-agents tasks dispatch \
-  --agent reviewer --pool workflow \
-  --prompt "Review fix.patch and confirm whether it is ready to merge." \
-  --output json
 ```
 
 ```output
 {"id":"task-research","agentName":"researcher","poolName":"workflow","state":"assigned"}
-{"id":"task-implement","agentName":"implementer","poolName":"workflow","state":"assigned"}
-{"id":"task-review","agentName":"reviewer","poolName":"workflow","state":"assigned"}
 ```
 
-At this point the workflow has three independent task records instead of one shared opaque job.
+## 3. Dispatch the linked follow-up tasks through the API
 
-## 3. Inspect the coordinated workflow state
+```bash
+curl -fsS -X POST "$KOCAO_API_URL/api/v1/remote-agent-tasks" \
+  -H "Authorization: Bearer $KOCAO_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "target": {"agentName": "implementer", "poolName": "workflow"},
+    "prompt": "Implement the fix described in research-notes.md.",
+    "inputArtifacts": [
+      {"name": "research-notes.md", "kind": "report", "path": "/workspace/research-notes.md"}
+    ]
+  }'
+
+curl -fsS -X POST "$KOCAO_API_URL/api/v1/remote-agent-tasks" \
+  -H "Authorization: Bearer $KOCAO_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "target": {"agentName": "reviewer", "poolName": "workflow"},
+    "prompt": "Review fix.patch and confirm whether it is ready to merge.",
+    "inputArtifacts": [
+      {"name": "fix.patch", "kind": "patch", "path": "/workspace/fix.patch"}
+    ]
+  }'
+```
+
+```output
+{"id":"task-implement","agentName":"implementer","poolName":"workflow","state":"assigned","inputArtifacts":[{"name":"research-notes.md","kind":"report","path":"/workspace/research-notes.md"}]}
+{"id":"task-review","agentName":"reviewer","poolName":"workflow","state":"assigned","inputArtifacts":[{"name":"fix.patch","kind":"patch","path":"/workspace/fix.patch"}]}
+```
+
+At this point the workflow has three independent task records, and the follow-up steps explicitly declare which prior artifact they consume.
+
+## 4. Inspect the coordinated workflow state
 
 ```bash
 kocao remote-agents tasks list --output json
@@ -70,9 +92,9 @@ kocao remote-agents tasks list --output json
 ]
 ```
 
-The orchestration layer keeps per-agent status boundaries intact, which is the core multi-agent coordination guarantee.
+The contract guarantee here is narrower than a live orchestration runtime: the API and CLI preserve per-agent status boundaries and linked task metadata.
 
-## 4. Retrieve transcripts after completion
+## 5. Retrieve transcripts after completion
 
 ```bash
 kocao remote-agents tasks transcript task-research --output json
@@ -86,9 +108,9 @@ kocao remote-agents tasks transcript task-review --output json
 {"taskId":"task-review","transcript":[{"role":"user","text":"Review fix.patch and confirm whether it is ready to merge."},{"role":"assistant","text":"Patch looks correct; add one assertion for transcript retention before merge."}]}
 ```
 
-This is the persistent transcript contract: transcripts remain available even after the live task is done.
+This is the persistent transcript contract: transcripts remain available after the modeled task completion.
 
-## 5. Retrieve output artifacts for each agent
+## 6. Retrieve artifact linkage for each agent
 
 ```bash
 kocao remote-agents tasks artifacts task-research --output json
@@ -97,9 +119,9 @@ kocao remote-agents tasks artifacts task-review --output json
 ```
 
 ```output
-{"taskId":"task-research","outputArtifacts":[{"name":"research-notes.md","kind":"report","path":"/workspace/research-notes.md"}]}
-{"taskId":"task-implement","outputArtifacts":[{"name":"fix.patch","kind":"patch","path":"/workspace/fix.patch"}]}
-{"taskId":"task-review","outputArtifacts":[{"name":"review.md","kind":"report","path":"/workspace/review.md"}]}
+{"taskId":"task-research","inputArtifacts":[],"outputArtifacts":[{"name":"research-notes.md","kind":"report","path":"/workspace/research-notes.md"}]}
+{"taskId":"task-implement","inputArtifacts":[{"name":"research-notes.md","kind":"report","path":"/workspace/research-notes.md"}],"outputArtifacts":[{"name":"fix.patch","kind":"patch","path":"/workspace/fix.patch"}]}
+{"taskId":"task-review","inputArtifacts":[{"name":"fix.patch","kind":"patch","path":"/workspace/fix.patch"}],"outputArtifacts":[{"name":"review.md","kind":"report","path":"/workspace/review.md"}]}
 ```
 
-Each output stays attached to the task that produced it, so operators can trace how the workflow progressed from research to implementation to review.
+Each task advertises both the artifact it consumed and the artifact it produced, so the researcher -> implementer -> reviewer chain is validated at the contract level without claiming live runtime execution.

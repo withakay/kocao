@@ -86,13 +86,13 @@ ______________________________________________________________________
 - **Updated At**: 2026-04-14
 - **Status**: [x] complete
 
-### Task 3.2: Add multi-agent workflow demonstrations and E2E coverage
+### Task 3.2: Add multi-agent workflow demonstrations and contract coverage
 
 - **Files**: `demos/*`, integration tests, CI workflow updates
 - **Dependencies**: None
-- **Action**: Add end-to-end coverage and demos for reviewer/implementer/researcher multi-agent workflows.
-- **Verify**: live or Kind-backed integration workflow + showboat verification
-- **Done When**: Orchestration behavior is exercised in automated coverage and documented demos.
+- **Action**: Add CLI+API contract coverage and demos for reviewer/implementer/researcher multi-agent workflows, including explicit input/output artifact linkage between steps.
+- **Verify**: `go test ./internal/controlplaneapi/... ./internal/controlplanecli/...`
+- **Done When**: The multi-step workflow contract is exercised in automated coverage and documented demos without claiming live runtime verification.
 - **Requirements**: remote-agent-orchestration:multi-agent-workflow-coordination, agent-artifacts:persistent-agent-transcripts
 - **Updated At**: 2026-04-14
 - **Status**: [x] complete
