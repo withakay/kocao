@@ -1612,8 +1612,128 @@ func TestWorkspaceAgentSessionsList_WithLiveBridgeState(t *testing.T) {
 	if as.SessionID != "sas-123" {
 		t.Fatalf("sessionId = %q, want sas-123", as.SessionID)
 	}
+	if as.ImageProfile == nil || as.ImageProfile.SelectedProfile != operatorv1alpha1.HarnessImageProfileWeb {
+		t.Fatalf("agent session list imageProfile = %#v, want selectedProfile web", as.ImageProfile)
+	}
 	if as.Phase != "Ready" {
 		t.Fatalf("phase = %q, want Ready", as.Phase)
+	}
+}
+
+func TestCreateHarnessRunImageProfileSelectionPolicies(t *testing.T) {
+	api, cleanup := newTestAPI(t)
+	defer cleanup()
+
+	if err := api.Tokens.Create(context.Background(), "t-full", "full", []string{
+		"workspace-session:write", "workspace-session:read",
+		"harness-run:write", "harness-run:read",
+	}); err != nil {
+		t.Fatalf("create token: %v", err)
+	}
+
+	srv := httptest.NewServer(api.Handler())
+	defer srv.Close()
+
+	resp, b := doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/workspace-sessions", "full", map[string]any{
+		"repoURL": "https://example.com/repo",
+	})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create session status = %d (body=%s)", resp.StatusCode, string(b))
+	}
+	var sess sessionResponse
+	_ = json.Unmarshal(b, &sess)
+
+	tests := []struct {
+		name              string
+		imageProfile      map[string]any
+		wantRequested     operatorv1alpha1.HarnessImageProfile
+		wantPolicy        operatorv1alpha1.HarnessImageProfileSelectionPolicy
+		wantSelected      operatorv1alpha1.HarnessImageProfile
+		wantSource        operatorv1alpha1.HarnessImageProfileSelectionSource
+		wantReason        string
+		wantStoredProfile operatorv1alpha1.HarnessImageProfile
+		wantStoredPolicy  operatorv1alpha1.HarnessImageProfileSelectionPolicy
+	}{
+		{
+			name:             "preferred minimal policy selects base",
+			imageProfile:     map[string]any{"selectionPolicy": "preferred-minimal"},
+			wantPolicy:       operatorv1alpha1.HarnessImageProfileSelectionPolicyPreferredMinimal,
+			wantSelected:     operatorv1alpha1.HarnessImageProfileBase,
+			wantSource:       operatorv1alpha1.HarnessImageProfileSelectionSourcePolicy,
+			wantReason:       "policy-preferred-minimal",
+			wantStoredPolicy: operatorv1alpha1.HarnessImageProfileSelectionPolicyPreferredMinimal,
+		},
+		{
+			name:             "omitted profile falls back to compatibility",
+			wantPolicy:       operatorv1alpha1.HarnessImageProfileSelectionPolicyAuto,
+			wantSelected:     operatorv1alpha1.HarnessImageProfileFull,
+			wantSource:       operatorv1alpha1.HarnessImageProfileSelectionSourceFallback,
+			wantReason:       "auto-inference-pending",
+			wantStoredPolicy: operatorv1alpha1.HarnessImageProfileSelectionPolicyAuto,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			request := map[string]any{
+				"repoURL": "https://example.com/repo",
+				"image":   "alpine:3",
+			}
+			if tt.imageProfile != nil {
+				request["imageProfile"] = tt.imageProfile
+			}
+
+			resp, b := doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/workspace-sessions/"+sess.ID+"/harness-runs", "full", request)
+			if resp.StatusCode != http.StatusCreated {
+				t.Fatalf("create run status = %d (body=%s)", resp.StatusCode, string(b))
+			}
+
+			var run runResponse
+			if err := json.Unmarshal(b, &run); err != nil {
+				t.Fatalf("unmarshal run response: %v", err)
+			}
+			if run.ImageProfile == nil {
+				t.Fatal("run imageProfile missing from response")
+			}
+			if run.ImageProfile.RequestedProfile != tt.wantRequested {
+				t.Fatalf("requestedProfile = %q, want %q", run.ImageProfile.RequestedProfile, tt.wantRequested)
+			}
+			if run.ImageProfile.SelectionPolicy != tt.wantPolicy {
+				t.Fatalf("selectionPolicy = %q, want %q", run.ImageProfile.SelectionPolicy, tt.wantPolicy)
+			}
+			if run.ImageProfile.SelectedProfile != tt.wantSelected {
+				t.Fatalf("selectedProfile = %q, want %q", run.ImageProfile.SelectedProfile, tt.wantSelected)
+			}
+			if run.ImageProfile.SelectionSource != tt.wantSource {
+				t.Fatalf("selectionSource = %q, want %q", run.ImageProfile.SelectionSource, tt.wantSource)
+			}
+			if run.ImageProfile.FallbackProfile != operatorv1alpha1.HarnessImageProfileFull {
+				t.Fatalf("fallbackProfile = %q, want full", run.ImageProfile.FallbackProfile)
+			}
+			if run.ImageProfile.Reason != tt.wantReason {
+				t.Fatalf("reason = %q, want %q", run.ImageProfile.Reason, tt.wantReason)
+			}
+
+			var stored operatorv1alpha1.HarnessRun
+			if err := api.K8s.Get(context.Background(), client.ObjectKey{Namespace: api.Namespace, Name: run.ID}, &stored); err != nil {
+				t.Fatalf("get stored run: %v", err)
+			}
+			if stored.Status.ImageProfile == nil {
+				t.Fatal("stored status imageProfile missing")
+			}
+			if stored.Status.ImageProfile.SelectedProfile != tt.wantSelected {
+				t.Fatalf("stored selectedProfile = %q, want %q", stored.Status.ImageProfile.SelectedProfile, tt.wantSelected)
+			}
+			if stored.Spec.ImageProfile == nil {
+				t.Fatal("stored spec imageProfile missing")
+			}
+			if stored.Spec.ImageProfile.Profile != tt.wantStoredProfile {
+				t.Fatalf("stored spec profile = %q, want %q", stored.Spec.ImageProfile.Profile, tt.wantStoredProfile)
+			}
+			if stored.Spec.ImageProfile.SelectionPolicy != tt.wantStoredPolicy {
+				t.Fatalf("stored spec policy = %q, want %q", stored.Spec.ImageProfile.SelectionPolicy, tt.wantStoredPolicy)
+			}
+		})
 	}
 }
 

@@ -66,8 +66,8 @@ ______________________________________________________________________
 - **Verify**: `go test ./internal/controlplaneapi/... ./internal/controlplanecli/... ./cmd/kocao/...`
 - **Done When**: Clients can request or observe harness image profiles reliably.
 - **Requirements**: harness-image-profiles:deterministic-profile-selection, control-plane-api:image-profile-selection-surface
-- **Updated At**: 2026-04-13
-- **Status**: [ ] pending
+- **Updated At**: 2026-04-14
+- **Status**: [x] complete
 
 ______________________________________________________________________
 

@@ -544,15 +544,16 @@ func (a *API) handleSessionDelete(w http.ResponseWriter, r *http.Request, id str
 // agentSessionListItem is the per-session JSON shape returned by the
 // workspace-level agent-sessions list endpoint.
 type agentSessionListItem struct {
-	SessionID   string                     `json:"sessionId"`
-	RunID       string                     `json:"runId"`
-	DisplayName string                     `json:"displayName,omitempty"`
-	Runtime     string                     `json:"runtime,omitempty"`
-	Agent       string                     `json:"agent,omitempty"`
-	Phase       string                     `json:"phase,omitempty"`
-	WorkspaceID string                     `json:"workspaceSessionId,omitempty"`
-	CreatedAt   string                     `json:"createdAt,omitempty"`
-	Diagnostic  *agentSessionDiagnosticDTO `json:"diagnostic,omitempty"`
+	SessionID    string                                      `json:"sessionId"`
+	RunID        string                                      `json:"runId"`
+	DisplayName  string                                      `json:"displayName,omitempty"`
+	ImageProfile *operatorv1alpha1.HarnessImageProfileStatus `json:"imageProfile,omitempty"`
+	Runtime      string                                      `json:"runtime,omitempty"`
+	Agent        string                                      `json:"agent,omitempty"`
+	Phase        string                                      `json:"phase,omitempty"`
+	WorkspaceID  string                                      `json:"workspaceSessionId,omitempty"`
+	CreatedAt    string                                      `json:"createdAt,omitempty"`
+	Diagnostic   *agentSessionDiagnosticDTO                  `json:"diagnostic,omitempty"`
 }
 
 // handleWorkspaceAgentSessionsList returns all agent sessions associated with
@@ -585,8 +586,9 @@ func (a *API) handleWorkspaceAgentSessionsList(w http.ResponseWriter, r *http.Re
 		}
 
 		item := agentSessionListItem{
-			RunID:       run.Name,
-			WorkspaceID: workspaceSessionID,
+			RunID:        run.Name,
+			WorkspaceID:  workspaceSessionID,
+			ImageProfile: harnessImageProfileStatusForRun(run),
 		}
 		state, _ := agentSessionStateFromHarnessRun(run)
 
@@ -1009,7 +1011,16 @@ func (a *API) handleRunResumePost(w http.ResponseWriter, r *http.Request, id str
 		TypeMeta:   metav1.TypeMeta{APIVersion: operatorv1alpha1.GroupVersion.String(), Kind: "HarnessRun"},
 		ObjectMeta: metav1.ObjectMeta{Name: newID, Namespace: a.Namespace, Labels: map[string]string{"kocao.withakay.github.com/resumed-from": id}},
 		Spec:       run.Spec,
-		Status:     operatorv1alpha1.HarnessRunStatus{AgentSession: resumedAgentSession},
+		Status: operatorv1alpha1.HarnessRunStatus{
+			AgentSession: resumedAgentSession,
+			ImageProfile: harnessImageProfileStatusForRun(&run),
+		},
+	}
+	if len(run.Annotations) != 0 {
+		copy.Annotations = make(map[string]string, len(run.Annotations))
+		for key, value := range run.Annotations {
+			copy.Annotations[key] = value
+		}
 	}
 	copy.Spec.TTLSecondsAfterFinished = run.Spec.TTLSecondsAfterFinished
 	if err := a.K8s.Create(r.Context(), copy); err != nil {

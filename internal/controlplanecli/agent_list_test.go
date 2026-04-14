@@ -9,6 +9,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	operatorv1alpha1 "github.com/withakay/kocao/internal/operator/api/v1alpha1"
 )
 
 func TestAgentList_TableOutput(t *testing.T) {
@@ -29,6 +31,7 @@ func TestAgentList_TableOutput(t *testing.T) {
 						"sessionId":          "as-1",
 						"runId":              "run-1",
 						"displayName":        "demo",
+						"imageProfile":       map[string]any{"selectionPolicy": "auto", "selectedProfile": "go", "selectionSource": "explicit", "fallbackProfile": "full", "reason": "explicit-request"},
 						"runtime":            "opencode",
 						"agent":              "claude",
 						"phase":              "Running",
@@ -70,6 +73,9 @@ func TestAgentList_TableOutput(t *testing.T) {
 	if !strings.Contains(out, "AGENT") {
 		t.Errorf("missing AGENT header, got:\n%s", out)
 	}
+	if !strings.Contains(out, "PROFILE") {
+		t.Errorf("missing PROFILE header, got:\n%s", out)
+	}
 	if !strings.Contains(out, "PHASE") {
 		t.Errorf("missing PHASE header, got:\n%s", out)
 	}
@@ -92,6 +98,9 @@ func TestAgentList_TableOutput(t *testing.T) {
 	if !strings.Contains(out, "claude") {
 		t.Errorf("missing agent claude, got:\n%s", out)
 	}
+	if !strings.Contains(out, "go (explicit)") {
+		t.Errorf("missing profile selection, got:\n%s", out)
+	}
 	if !strings.Contains(out, "Running") {
 		t.Errorf("missing phase Running, got:\n%s", out)
 	}
@@ -103,8 +112,12 @@ func TestAgentList_TableOutput(t *testing.T) {
 func TestWriteAgentSessionsTable_IncludesBlockerColumn(t *testing.T) {
 	var out bytes.Buffer
 	err := writeAgentSessionsTable(&out, []AgentSession{{
-		SessionID:   "sess-123",
-		RunID:       "run-123",
+		SessionID: "sess-123",
+		RunID:     "run-123",
+		ImageProfile: &operatorv1alpha1.HarnessImageProfileStatus{
+			SelectedProfile: operatorv1alpha1.HarnessImageProfileBase,
+			SelectionSource: operatorv1alpha1.HarnessImageProfileSelectionSourcePolicy,
+		},
 		Agent:       "codex",
 		Phase:       "Provisioning",
 		WorkspaceID: "ws-123",
@@ -121,8 +134,10 @@ func TestWriteAgentSessionsTable_IncludesBlockerColumn(t *testing.T) {
 	got := out.String()
 	for _, want := range []string{
 		"SESSION ID",
+		"PROFILE",
 		"BLOCKER",
 		"sess-123",
+		"base (policy)",
 		"Provisioning",
 		"sandbox-agent-readiness",
 	} {
@@ -149,6 +164,7 @@ func TestAgentList_JSONOutput(t *testing.T) {
 					{
 						"sessionId":          "as-1",
 						"runId":              "run-1",
+						"imageProfile":       map[string]any{"selectionPolicy": "compatibility", "selectedProfile": "full", "selectionSource": "policy", "fallbackProfile": "full", "reason": "policy-compatibility"},
 						"agent":              "claude",
 						"phase":              "Running",
 						"workspaceSessionId": "ws-1",
@@ -181,6 +197,9 @@ func TestAgentList_JSONOutput(t *testing.T) {
 	}
 	if result[0].Agent != "claude" {
 		t.Fatalf("Agent = %q, want claude", result[0].Agent)
+	}
+	if result[0].ImageProfile == nil || result[0].ImageProfile.SelectedProfile != "full" {
+		t.Fatalf("ImageProfile = %#v, want selectedProfile full", result[0].ImageProfile)
 	}
 }
 
