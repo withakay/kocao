@@ -512,6 +512,21 @@ export const api = {
     return apiFetch<PodLogs>(`/api/v1/pods/${encodeURIComponent(podName)}/logs${suffix}`, { token })
   },
 
+  listRemoteAgentPools: (token: string) =>
+    apiFetch<{ remoteAgentPools: RemoteAgentPool[] }>('/api/v1/remote-agent-pools', { token }),
+  listRemoteAgents: (token: string) =>
+    apiFetch<{ remoteAgents: RemoteAgent[] }>('/api/v1/remote-agents', { token }),
+  getRemoteAgent: (token: string, agentID: string) =>
+    apiFetch<RemoteAgent>(`/api/v1/remote-agents/${encodeURIComponent(agentID)}`, { token }),
+  listRemoteAgentTasks: (token: string) =>
+    apiFetch<{ remoteAgentTasks: RemoteAgentTask[] }>('/api/v1/remote-agent-tasks', { token }),
+  getRemoteAgentTask: (token: string, taskID: string) =>
+    apiFetch<RemoteAgentTaskDetail>(`/api/v1/remote-agent-tasks/${encodeURIComponent(taskID)}`, { token }),
+  getRemoteAgentTaskTranscript: (token: string, taskID: string) =>
+    apiFetch<RemoteAgentTaskTranscriptResponse>(`/api/v1/remote-agent-tasks/${encodeURIComponent(taskID)}/transcript`, { token }),
+  getRemoteAgentTaskArtifacts: (token: string, taskID: string) =>
+    apiFetch<RemoteAgentTaskArtifactsResponse>(`/api/v1/remote-agent-tasks/${encodeURIComponent(taskID)}/artifacts`, { token }),
+
   createAttachToken: (token: string, workspaceSessionID: string, role: 'viewer' | 'driver', mode: 'exclusive' | 'collab' = 'exclusive') =>
     apiFetch<{ token: string; expiresAt: string; workspaceSessionID: string; clientID: string; role: string; mode?: string }>(
       `/api/v1/workspace-sessions/${encodeURIComponent(workspaceSessionID)}/attach-token`,

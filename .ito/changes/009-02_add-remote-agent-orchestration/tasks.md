@@ -83,8 +83,8 @@ ______________________________________________________________________
 - **Verify**: `pnpm -C web test && pnpm -C web lint`
 - **Done When**: Operators can inspect remote-agent activity from the UI.
 - **Requirements**: web-ui:remote-agent-operations-dashboard
-- **Updated At**: 2026-04-13
-- **Status**: [ ] pending
+- **Updated At**: 2026-04-14
+- **Status**: [x] complete
 
 ### Task 3.2: Add multi-agent workflow demonstrations and E2E coverage
 

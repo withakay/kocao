@@ -35,6 +35,10 @@ export function SidebarNav() {
             <ClusterIcon />
             Cluster
           </Link>
+          <Link className={linkClass('/remote-agents')} to="/remote-agents/tasks">
+            <RemoteAgentsIcon />
+            Remote Agents
+          </Link>
           <Link className={linkClass('/symphony')} to="/symphony">
             <SymphonyIcon />
             Symphony
@@ -101,6 +105,17 @@ function SymphonyIcon() {
       <circle cx="18" cy="18" r="2" fill="currentColor" />
       <path d="M7.5 11l8-4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
       <path d="M7.5 13l8 4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+    </svg>
+  )
+}
+
+function RemoteAgentsIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+      <circle cx="8" cy="8" r="3" stroke="currentColor" strokeWidth="2" />
+      <circle cx="17" cy="7" r="2.5" stroke="currentColor" strokeWidth="2" />
+      <path d="M3 19c0-2.8 2.4-5 5.2-5h.3c2.8 0 5.2 2.2 5.2 5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+      <path d="M14.5 18c.3-1.8 1.9-3.1 3.8-3.1h.2c1.4 0 2.7.7 3.5 1.8" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
     </svg>
   )
 }

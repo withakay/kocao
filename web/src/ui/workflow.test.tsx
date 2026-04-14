@@ -728,6 +728,82 @@ describe('shell-layout', () => {
 
     unmount()
   })
+
+  it('renders remote-agent dashboard route with task detail, transcript, and artifacts', async () => {
+    sessionStorage.setItem('kocao.apiToken', 't-full')
+    window.location.hash = '#/remote-agents/tasks'
+
+    server.use(
+      http.get('/api/v1/remote-agents', () => HttpResponse.json({
+        remoteAgents: [
+          {
+            id: 'agent-reviewer',
+            name: 'reviewer',
+            displayName: 'Reviewer',
+            poolName: 'backend',
+            availability: 'busy',
+            currentTaskId: 'task-42',
+            lastActivityAt: '2026-04-14T09:00:00Z',
+            workspaceSessionId: 'ws-42',
+          },
+        ],
+      })),
+      http.get('/api/v1/remote-agent-pools', () => HttpResponse.json({
+        remoteAgentPools: [{ id: 'pool-backend', name: 'backend' }],
+      })),
+      http.get('/api/v1/remote-agent-tasks', () => HttpResponse.json({
+        remoteAgentTasks: [
+          {
+            id: 'task-42',
+            state: 'completed',
+            agentId: 'agent-reviewer',
+            agentName: 'Reviewer',
+            poolName: 'backend',
+            workspaceSessionId: 'ws-42',
+            attempt: 1,
+            lastTransitionAt: '2026-04-14T09:10:00Z',
+            result: { summary: 'Patched worker retry handling', outcome: 'completed', transcriptEntries: 2, outputArtifactCount: 1 },
+          },
+        ],
+      })),
+      http.get('/api/v1/remote-agent-tasks/task-42', () => HttpResponse.json({
+        id: 'task-42',
+        state: 'completed',
+        agentId: 'agent-reviewer',
+        agentName: 'Reviewer',
+        poolName: 'backend',
+        workspaceSessionId: 'ws-42',
+        prompt: 'Review the orchestration patch',
+        attempt: 1,
+        lastTransitionAt: '2026-04-14T09:10:00Z',
+        currentSession: { sessionId: 'sess-9', podName: 'agent-reviewer-0', runtime: 'opencode' },
+        result: { summary: 'Patched worker retry handling', outcome: 'completed', transcriptEntries: 2, outputArtifactCount: 1 },
+      })),
+      http.get('/api/v1/remote-agent-tasks/task-42/transcript', () => HttpResponse.json({
+        taskId: 'task-42',
+        transcript: [
+          { sequence: 1, role: 'user', kind: 'prompt', text: 'Review the orchestration patch' },
+          { sequence: 2, role: 'agent', kind: 'summary', text: 'Patched worker retry handling' },
+        ],
+      })),
+      http.get('/api/v1/remote-agent-tasks/task-42/artifacts', () => HttpResponse.json({
+        taskId: 'task-42',
+        outputArtifacts: [
+          { id: 'artifact-1', name: 'review.md', kind: 'report', mediaType: 'text/markdown', sizeBytes: 128 },
+        ],
+      })),
+    )
+
+    const { unmount } = render(<App />)
+
+    await screen.findByRole('heading', { name: 'Remote Agents' })
+    await screen.findByText('task-42')
+    expect(await screen.findAllByText('Patched worker retry handling')).toHaveLength(2)
+    await screen.findByText('review.md')
+    await screen.findByRole('link', { name: 'Open full task detail' })
+
+    unmount()
+  })
 })
 
 
