@@ -666,6 +666,61 @@ func TestRemoteAgentOrchestrationService_RetryIgnoresTimedOutConflictingTask(t *
 	}
 }
 
+func TestRemoteAgentOrchestrationService_RetryExpiresTimedOutConflictingTaskAfterReload(t *testing.T) {
+	store := newRemoteAgentOrchestrationStore(filepath.Join(t.TempDir(), "orchestration.jsonl"))
+	service := newRemoteAgentOrchestrationService(store, "", nil, nil)
+
+	agent, err := service.CreateAgent(remoteAgentCreateRequest{Name: "reviewer"})
+	if err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	first, err := service.DispatchTask("tester", remoteAgentTaskCreateRequest{
+		Target: remoteAgentTaskTarget{AgentID: agent.ID},
+		Prompt: "Review this change",
+	})
+	if err != nil {
+		t.Fatalf("dispatch first task: %v", err)
+	}
+	if _, err := service.CancelTask(first.ID); err != nil {
+		t.Fatalf("cancel first task: %v", err)
+	}
+
+	conflicting, err := service.DispatchTask("tester", remoteAgentTaskCreateRequest{
+		Target:         remoteAgentTaskTarget{AgentID: agent.ID},
+		Prompt:         "Review conflicting change",
+		TimeoutSeconds: 1,
+	})
+	if err != nil {
+		t.Fatalf("dispatch conflicting task: %v", err)
+	}
+	ageRemoteAgentTaskForTimeout(t, service, conflicting.ID, 2*time.Second)
+
+	reloaded := newRemoteAgentOrchestrationService(store, "", nil, nil)
+	retried, err := reloaded.RetryTask(first.ID)
+	if err != nil {
+		t.Fatalf("retry task after reload: %v", err)
+	}
+	if retried.ID != first.ID || retried.State != remoteAgentTaskStateAssigned || retried.Attempt != 2 || retried.RetryCount != 1 {
+		t.Fatalf("unexpected retried task after reload: %+v", retried)
+	}
+
+	timedOut, ok := reloaded.GetTask(conflicting.ID)
+	if !ok {
+		t.Fatal("expected conflicting task to remain addressable after reload")
+	}
+	if timedOut.State != remoteAgentTaskStateTimedOut {
+		t.Fatalf("conflicting task state after reload = %s, want %s", timedOut.State, remoteAgentTaskStateTimedOut)
+	}
+
+	reloadedAgent, ok := reloaded.GetAgent(agent.ID)
+	if !ok {
+		t.Fatal("expected agent to remain addressable after reload")
+	}
+	if reloadedAgent.CurrentTaskID != first.ID || reloadedAgent.Availability != remoteAgentAvailabilityBusy {
+		t.Fatalf("expected agent reassigned to retried task after reload, got %+v", reloadedAgent)
+	}
+}
+
 func TestRemoteAgentOrchestrationAPIContract_RetryEndpointRequeuesTerminalTask(t *testing.T) {
 	api, cleanup := newTestAPI(t)
 	defer cleanup()
