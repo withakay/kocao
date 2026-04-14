@@ -66,8 +66,8 @@ ______________________________________________________________________
 - **Verify**: `go test ./cmd/kocao/... ./internal/controlplanecli/...`
 - **Done When**: CLI covers the orchestration lifecycle without requiring raw API calls.
 - **Requirements**: remote-agent-orchestration:named-remote-agents, remote-agent-orchestration:task-dispatch-lifecycle
-- **Updated At**: 2026-04-13
-- **Status**: [ ] pending
+- **Updated At**: 2026-04-14
+- **Status**: [x] complete
 
 ______________________________________________________________________
 

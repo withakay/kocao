@@ -171,6 +171,7 @@ func writeRootUsage(w io.Writer) {
 	_, _ = fmt.Fprintln(w, "  sessions   Manage workspace sessions")
 	_, _ = fmt.Fprintln(w, "  symphony   Manage Symphony projects")
 	_, _ = fmt.Fprintln(w, "  agent      Manage sandbox agents")
+	_, _ = fmt.Fprintln(w, "  remote-agents  Manage orchestrated remote agents and tasks")
 	_, _ = fmt.Fprintln(w, "")
 	_, _ = fmt.Fprintf(w, "Environment:\n  %s (default: http://127.0.0.1:8080)\n  %s\n  %s (example: 15s)\n  %s (true|false)\n", EnvAPIURL, EnvToken, EnvTimeout, EnvVerbose)
 }
