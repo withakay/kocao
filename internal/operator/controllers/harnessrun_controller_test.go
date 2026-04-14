@@ -312,6 +312,12 @@ func TestHarnessRunReconcile_MapsPodRunningToPhaseRunning(t *testing.T) {
 	}
 	pod.Status.Phase = corev1.PodRunning
 	pod.Status.StartTime = &metav1.Time{Time: time.Unix(11, 0)}
+	pod.Status.ContainerStatuses = []corev1.ContainerStatus{{
+		Name: "harness",
+		State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{
+			StartedAt: metav1.Time{Time: time.Unix(14, 0)},
+		}},
+	}}
 	if err := cl.Status().Update(context.Background(), &pod); err != nil {
 		t.Fatalf("update pod status: %v", err)
 	}
@@ -329,6 +335,12 @@ func TestHarnessRunReconcile_MapsPodRunningToPhaseRunning(t *testing.T) {
 	}
 	if updated.Status.StartTime == nil {
 		t.Fatalf("expected startTime to be set")
+	}
+	if updated.Status.StartupMetrics == nil {
+		t.Fatalf("expected startupMetrics to be set")
+	}
+	if updated.Status.StartupMetrics.ImagePullDurationMs != 3000 {
+		t.Fatalf("imagePullDurationMs = %d, want 3000", updated.Status.StartupMetrics.ImagePullDurationMs)
 	}
 }
 
@@ -390,6 +402,34 @@ func TestHarnessRunReconcile_TTLDeletesAfterCompletion(t *testing.T) {
 			t.Fatalf("expected harnessrun to be deleting or gone after TTL")
 		}
 		return
+	}
+}
+
+func TestObserveStartupMetricsFromPod_ZeroDurationOnlyRecordedOnce(t *testing.T) {
+	run := &operatorv1alpha1.HarnessRun{}
+	pod := &corev1.Pod{
+		Status: corev1.PodStatus{
+			StartTime: &metav1.Time{Time: time.Unix(11, 0)},
+			ContainerStatuses: []corev1.ContainerStatus{{
+				Name: "harness",
+				State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{
+					StartedAt: metav1.Time{Time: time.Unix(11, 0)},
+				}},
+			}},
+		},
+	}
+
+	if !observeStartupMetricsFromPod(run, pod) {
+		t.Fatal("expected first observation to record startup metrics")
+	}
+	if run.Status.StartupMetrics == nil {
+		t.Fatal("expected startup metrics to be initialized")
+	}
+	if run.Status.StartupMetrics.ImagePullDurationMs != 0 {
+		t.Fatalf("imagePullDurationMs = %d, want 0", run.Status.StartupMetrics.ImagePullDurationMs)
+	}
+	if observeStartupMetricsFromPod(run, pod) {
+		t.Fatal("expected zero-duration metrics to be stable on repeat observation")
 	}
 }
 

@@ -28,12 +28,24 @@ func TestAgentStart_Success(t *testing.T) {
 
 		// Create harness run
 		case r.URL.Path == "/api/v1/workspace-sessions/ws-100/harness-runs" && r.Method == http.MethodPost:
+			var req map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				t.Fatalf("decode harness run request: %v", err)
+			}
+			imageProfile, ok := req["imageProfile"].(map[string]any)
+			if !ok {
+				t.Fatal("expected imageProfile in harness run request")
+			}
+			if imageProfile["profile"] != "go" {
+				t.Fatalf("imageProfile.profile = %v, want go", imageProfile["profile"])
+			}
 			w.WriteHeader(http.StatusCreated)
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"id":                 "run-100",
 				"workspaceSessionID": "ws-100",
 				"repoURL":            "https://github.com/example/repo",
 				"image":              "kocao/harness-runtime:dev",
+				"imageProfile":       map[string]any{"requestedProfile": "go", "selectionPolicy": "auto", "selectedProfile": "go", "selectionSource": "explicit", "fallbackProfile": "full", "reason": "explicit-request"},
 				"phase":              "Starting",
 			})
 
@@ -44,6 +56,7 @@ func TestAgentStart_Success(t *testing.T) {
 				"sessionId":          "as-100",
 				"runId":              "run-100",
 				"agent":              "claude",
+				"imageProfile":       map[string]any{"requestedProfile": "go", "selectionPolicy": "auto", "selectedProfile": "go", "selectionSource": "explicit", "fallbackProfile": "full", "reason": "explicit-request"},
 				"phase":              "Starting",
 				"workspaceSessionId": "ws-100",
 			})
@@ -59,6 +72,7 @@ func TestAgentStart_Success(t *testing.T) {
 				"sessionId":          "as-100",
 				"runId":              "run-100",
 				"agent":              "claude",
+				"imageProfile":       map[string]any{"requestedProfile": "go", "selectionPolicy": "auto", "selectedProfile": "go", "selectionSource": "explicit", "fallbackProfile": "full", "reason": "explicit-request"},
 				"phase":              phase,
 				"workspaceSessionId": "ws-100",
 			})
@@ -77,6 +91,7 @@ func TestAgentStart_Success(t *testing.T) {
 		"agent", "start",
 		"--repo", "https://github.com/example/repo",
 		"--agent", "claude",
+		"--image-profile", "go",
 	}, &stdout, &stderr)
 
 	if code != 0 {
@@ -95,6 +110,9 @@ func TestAgentStart_Success(t *testing.T) {
 	}
 	if !strings.Contains(out, "Ready") {
 		t.Errorf("expected Ready phase in output, got:\n%s", out)
+	}
+	if !strings.Contains(out, "go (explicit)") {
+		t.Errorf("expected image profile in output, got:\n%s", out)
 	}
 
 	// Verify progress messages went to stderr

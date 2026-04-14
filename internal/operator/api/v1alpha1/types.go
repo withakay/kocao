@@ -18,6 +18,56 @@ const (
 
 type HarnessRunPhase string
 
+type HarnessImageProfile string
+
+const (
+	HarnessImageProfileBase HarnessImageProfile = "base"
+	HarnessImageProfileGo   HarnessImageProfile = "go"
+	HarnessImageProfileWeb  HarnessImageProfile = "web"
+	HarnessImageProfileFull HarnessImageProfile = "full"
+)
+
+type HarnessImageProfileSelectionPolicy string
+
+const (
+	HarnessImageProfileSelectionPolicyAuto             HarnessImageProfileSelectionPolicy = "auto"
+	HarnessImageProfileSelectionPolicyPreferredMinimal HarnessImageProfileSelectionPolicy = "preferred-minimal"
+	HarnessImageProfileSelectionPolicyCompatibility    HarnessImageProfileSelectionPolicy = "compatibility"
+)
+
+type HarnessImageProfileSelectionSource string
+
+const (
+	HarnessImageProfileSelectionSourceExplicit HarnessImageProfileSelectionSource = "explicit"
+	HarnessImageProfileSelectionSourcePolicy   HarnessImageProfileSelectionSource = "policy"
+	HarnessImageProfileSelectionSourceInferred HarnessImageProfileSelectionSource = "inferred"
+	HarnessImageProfileSelectionSourceFallback HarnessImageProfileSelectionSource = "fallback"
+)
+
+type HarnessImageProfileSpec struct {
+	Profile         HarnessImageProfile                `json:"profile,omitempty"`
+	SelectionPolicy HarnessImageProfileSelectionPolicy `json:"selectionPolicy,omitempty"`
+}
+
+type HarnessImageProfileStatus struct {
+	RequestedProfile HarnessImageProfile                `json:"requestedProfile,omitempty"`
+	SelectionPolicy  HarnessImageProfileSelectionPolicy `json:"selectionPolicy,omitempty"`
+	SelectedProfile  HarnessImageProfile                `json:"selectedProfile,omitempty"`
+	SelectionSource  HarnessImageProfileSelectionSource `json:"selectionSource,omitempty"`
+	FallbackProfile  HarnessImageProfile                `json:"fallbackProfile,omitempty"`
+	Reason           string                             `json:"reason,omitempty"`
+}
+
+type HarnessRunStartupMetricsStatus struct {
+	ImagePullStartedAt   *metav1.Time `json:"imagePullStartedAt,omitempty"`
+	ImagePullCompletedAt *metav1.Time `json:"imagePullCompletedAt,omitempty"`
+	ImagePullDurationMs  int64        `json:"imagePullDurationMs,omitempty"`
+	ReadyAt              *metav1.Time `json:"readyAt,omitempty"`
+	TimeToReadyMs        int64        `json:"timeToReadyMs,omitempty"`
+	FirstPromptAt        *metav1.Time `json:"firstPromptAt,omitempty"`
+	TimeToFirstPromptMs  int64        `json:"timeToFirstPromptMs,omitempty"`
+}
+
 const (
 	HarnessRunPhasePending   HarnessRunPhase = "Pending"
 	HarnessRunPhaseStarting  HarnessRunPhase = "Starting"
@@ -580,6 +630,9 @@ type HarnessRunSpec struct {
 
 	// Image is the container image used by the run Pod.
 	Image string `json:"image"`
+
+	// ImageProfile captures the requested harness image profile selection intent.
+	ImageProfile *HarnessImageProfileSpec `json:"imageProfile,omitempty"`
 	// Command overrides the container entrypoint.
 	Command []string `json:"command,omitempty"`
 	// Args are passed to the container.
@@ -617,13 +670,15 @@ type HarnessRunSpec struct {
 }
 
 type HarnessRunStatus struct {
-	ObservedGeneration int64               `json:"observedGeneration,omitempty"`
-	Phase              HarnessRunPhase     `json:"phase,omitempty"`
-	PodName            string              `json:"podName,omitempty"`
-	StartTime          *metav1.Time        `json:"startTime,omitempty"`
-	CompletionTime     *metav1.Time        `json:"completionTime,omitempty"`
-	Conditions         []metav1.Condition  `json:"conditions,omitempty"`
-	AgentSession       *AgentSessionStatus `json:"agentSession,omitempty"`
+	ObservedGeneration int64                           `json:"observedGeneration,omitempty"`
+	Phase              HarnessRunPhase                 `json:"phase,omitempty"`
+	PodName            string                          `json:"podName,omitempty"`
+	ImageProfile       *HarnessImageProfileStatus      `json:"imageProfile,omitempty"`
+	StartupMetrics     *HarnessRunStartupMetricsStatus `json:"startupMetrics,omitempty"`
+	StartTime          *metav1.Time                    `json:"startTime,omitempty"`
+	CompletionTime     *metav1.Time                    `json:"completionTime,omitempty"`
+	Conditions         []metav1.Condition              `json:"conditions,omitempty"`
+	AgentSession       *AgentSessionStatus             `json:"agentSession,omitempty"`
 }
 
 type HarnessRunList struct {

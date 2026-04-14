@@ -47,7 +47,7 @@ func TestMainSessionStatusIncludesRun(t *testing.T) {
 			if r.URL.Query().Get("workspaceSessionID") != "sess-1" {
 				t.Fatalf("workspaceSessionID query = %q", r.URL.Query().Get("workspaceSessionID"))
 			}
-			_ = json.NewEncoder(w).Encode(map[string]any{"harnessRuns": []map[string]any{{"id": "run-1", "phase": "Running", "podName": "pod-1"}}})
+			_ = json.NewEncoder(w).Encode(map[string]any{"harnessRuns": []map[string]any{{"id": "run-1", "phase": "Running", "podName": "pod-1", "imageProfile": map[string]any{"selectedProfile": "base", "selectionSource": "policy"}}}})
 		default:
 			http.NotFound(w, r)
 		}
@@ -62,6 +62,9 @@ func TestMainSessionStatusIncludesRun(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), "run-1") {
 		t.Fatalf("expected run in output, got: %s", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "base (policy)") {
+		t.Fatalf("expected image profile in output, got: %s", stdout.String())
 	}
 }
 

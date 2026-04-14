@@ -11,14 +11,17 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	operatorv1alpha1 "github.com/withakay/kocao/internal/operator/api/v1alpha1"
 )
 
 // agentStartResult holds the output data for a successful agent start.
 type agentStartResult struct {
-	SessionID string `json:"sessionId"`
-	RunID     string `json:"runId"`
-	Agent     string `json:"agent"`
-	Phase     string `json:"phase"`
+	SessionID    string                                      `json:"sessionId"`
+	RunID        string                                      `json:"runId"`
+	Agent        string                                      `json:"agent"`
+	Phase        string                                      `json:"phase"`
+	ImageProfile *operatorv1alpha1.HarnessImageProfileStatus `json:"imageProfile,omitempty"`
 }
 
 func runAgentStartCommand(args []string, cfg Config, stdout io.Writer, stderr io.Writer) error {
@@ -29,6 +32,8 @@ func runAgentStartCommand(args []string, cfg Config, stdout io.Writer, stderr io
 	workspace := fs.String("workspace", "", "reuse existing workspace session ID")
 	revision := fs.String("revision", "main", "repository revision")
 	image := fs.String("image", "kocao/harness-runtime:dev", "harness runtime image")
+	imageProfile := fs.String("image-profile", "", "harness image profile: base, go, web, full")
+	imageProfilePolicy := fs.String("image-profile-policy", "", "profile selection policy: auto, preferred-minimal, compatibility")
 	imagePullSecret := fs.String("image-pull-secret", "", "Kubernetes secret name for pulling the harness image")
 	egressMode := fs.String("egress-mode", "", "egress mode for the harness pod: restricted (default), full")
 	timeout := fs.Duration("timeout", 5*time.Minute, "timeout waiting for agent to become ready")
@@ -66,9 +71,13 @@ func runAgentStartCommand(args []string, cfg Config, stdout io.Writer, stderr io
 	if s := strings.TrimSpace(*imagePullSecret); s != "" {
 		pullSecrets = []string{s}
 	}
+	requestedImageProfile, err := parseImageProfileSelection(*imageProfile, *imageProfilePolicy)
+	if err != nil {
+		return err
+	}
 
 	_, _ = fmt.Fprintf(stderr, "Creating workspace session... ")
-	runID, err := client.StartAgent(ctx, *workspace, *repo, *revision, *agent, *image, pullSecrets, strings.TrimSpace(*egressMode))
+	runID, err := client.StartAgent(ctx, *workspace, *repo, *revision, *agent, *image, requestedImageProfile, pullSecrets, strings.TrimSpace(*egressMode))
 	if err != nil {
 		_, _ = fmt.Fprintln(stderr, "failed")
 		return fmt.Errorf("start agent: %w", err)
@@ -87,10 +96,11 @@ func runAgentStartCommand(args []string, cfg Config, stdout io.Writer, stderr io
 	_, _ = fmt.Fprintln(stderr, "ready")
 
 	result := agentStartResult{
-		SessionID: session.SessionID,
-		RunID:     session.RunID,
-		Agent:     session.Agent,
-		Phase:     session.Phase,
+		SessionID:    session.SessionID,
+		RunID:        session.RunID,
+		Agent:        session.Agent,
+		Phase:        session.Phase,
+		ImageProfile: session.ImageProfile,
 	}
 	if format == "json" {
 		return writeJSON(stdout, result)
@@ -100,6 +110,7 @@ func runAgentStartCommand(args []string, cfg Config, stdout io.Writer, stderr io
 	_, _ = fmt.Fprintf(stdout, "Run ID:      %s\n", result.RunID)
 	_, _ = fmt.Fprintf(stdout, "Agent:       %s\n", result.Agent)
 	_, _ = fmt.Fprintf(stdout, "Phase:       %s\n", result.Phase)
+	_, _ = fmt.Fprintf(stdout, "Profile:     %s\n", formatHarnessImageProfile(result.ImageProfile))
 	return nil
 }
 

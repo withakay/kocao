@@ -26,7 +26,11 @@ help:
 		"  kind-up             Create local kind cluster" \
 		"  kind-down           Delete local kind cluster" \
 		"  images              Build local Docker images" \
+		"  harness-images      Build all harness image profiles" \
 		"  kind-load-images    Load images into kind" \
+		"  kind-prepull-harness-profiles Build and load harness profiles into kind" \
+		"  registry-prepull-harness-profiles Pre-pull registry-backed harness profiles on any dev cluster" \
+		"  microk8s-prepull-harness-profiles Pre-pull registry-backed harness profiles on MicroK8s" \
 		"  seed-agent-secrets  Copy local OAuth auth into k8s secret" \
 		"  deploy              Apply kustomize overlay" \
 		"  deploy-restart      Apply overlay + restart control-plane pods" \
@@ -96,8 +100,12 @@ images:
 	docker build -f build/Dockerfile.api -t "$(API_IMAGE):$(IMAGE_TAG)" .
 	docker build -f build/Dockerfile.operator -t "$(OPERATOR_IMAGE):$(IMAGE_TAG)" .
 	docker build -f build/Dockerfile.web -t "$(WEB_IMAGE):$(IMAGE_TAG)" .
-	docker build -f build/Dockerfile.harness -t "$(HARNESS_IMAGE):$(IMAGE_TAG)" .
+	docker build -f build/Dockerfile.harness --target harness-profile-full -t "$(HARNESS_IMAGE):$(IMAGE_TAG)" .
 	docker build -f build/Dockerfile.sidecar -t "$(SIDECAR_IMAGE):$(IMAGE_TAG)" .
+
+.PHONY: harness-images
+harness-images:
+	bash ./build/harness/build-profiles.sh
 
 .PHONY: images-live-agent
 images-live-agent: images
@@ -113,10 +121,21 @@ kind-load-images: tools
 .PHONY: kind-load-images-live-agent
 kind-load-images-live-agent: kind-load-images
 
+.PHONY: kind-prepull-harness-profiles
+kind-prepull-harness-profiles: tools harness-images
+	KIND_CLUSTER_NAME="$(KIND_CLUSTER_NAME)" KIND_BIN="$(KIND)" bash ./hack/dev/prepull-harness-images.sh kind
+
+.PHONY: registry-prepull-harness-profiles
+registry-prepull-harness-profiles:
+	bash ./hack/dev/prepull-harness-images.sh registry
+
+.PHONY: microk8s-prepull-harness-profiles
+microk8s-prepull-harness-profiles:
+	bash ./hack/dev/prepull-harness-images.sh microk8s
+
 .PHONY: harness-smoke
-harness-smoke:
-	docker build -f build/Dockerfile.harness -t "$(HARNESS_IMAGE):$(IMAGE_TAG)" .
-	docker run --rm "$(HARNESS_IMAGE):$(IMAGE_TAG)" /usr/local/bin/kocao-harness-smoke
+harness-smoke: harness-images
+	bash ./build/harness/smoke-profiles.sh
 
 .PHONY: seed-agent-secrets
 seed-agent-secrets:

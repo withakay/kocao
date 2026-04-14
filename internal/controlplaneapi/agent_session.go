@@ -889,7 +889,7 @@ func (a *API) getHarnessRun(ctx context.Context, id string) (*operatorv1alpha1.H
 	return &run, nil
 }
 
-func (a *API) updateHarnessRunAgentSessionStatus(ctx context.Context, run *operatorv1alpha1.HarnessRun, state agentSessionState) {
+func (a *API) updateHarnessRunAgentSessionStatus(ctx context.Context, run *operatorv1alpha1.HarnessRun, state agentSessionState, markFirstPrompt bool) {
 	updated := run.DeepCopy()
 	updated.Status.AgentSession = &operatorv1alpha1.AgentSessionStatus{
 		Runtime:   state.Runtime,
@@ -897,11 +897,52 @@ func (a *API) updateHarnessRunAgentSessionStatus(ctx context.Context, run *opera
 		SessionID: state.SessionID,
 		Phase:     state.Phase,
 	}
+	observeStartupMetricsFromAgentState(updated, state, time.Now().UTC(), markFirstPrompt)
 	if err := a.K8s.Status().Patch(ctx, updated, client.MergeFrom(run)); err != nil {
 		slog.Error("failed to update agent session status", "run", run.Name, "error", err)
 		return
 	}
 	run.Status.AgentSession = updated.Status.AgentSession
+	run.Status.StartupMetrics = updated.Status.StartupMetrics
+}
+
+func observeStartupMetricsFromAgentState(run *operatorv1alpha1.HarnessRun, state agentSessionState, now time.Time, markFirstPrompt bool) {
+	if run == nil {
+		return
+	}
+	metrics := run.Status.StartupMetrics
+	if metrics == nil {
+		metrics = &operatorv1alpha1.HarnessRunStartupMetricsStatus{}
+		run.Status.StartupMetrics = metrics
+	}
+	if isAgentSessionReady(state.Phase) && metrics.ReadyAt == nil {
+		metrics.ReadyAt = &metav1.Time{Time: now.UTC()}
+		if !run.CreationTimestamp.IsZero() {
+			if duration := now.Sub(run.CreationTimestamp.Time); duration >= 0 {
+				metrics.TimeToReadyMs = duration.Milliseconds()
+			}
+		}
+	}
+	if markFirstPrompt && metrics.FirstPromptAt == nil {
+		metrics.FirstPromptAt = &metav1.Time{Time: now.UTC()}
+		if !run.CreationTimestamp.IsZero() {
+			if duration := now.Sub(run.CreationTimestamp.Time); duration >= 0 {
+				metrics.TimeToFirstPromptMs = duration.Milliseconds()
+			}
+		}
+	}
+}
+
+func isAgentSessionReady(phase operatorv1alpha1.AgentSessionPhase) bool {
+	switch operatorv1alpha1.NormalizeAgentSessionPhase(string(phase)) {
+	case operatorv1alpha1.AgentSessionPhaseReady,
+		operatorv1alpha1.AgentSessionPhaseRunning,
+		operatorv1alpha1.AgentSessionPhaseStopping,
+		operatorv1alpha1.AgentSessionPhaseCompleted:
+		return true
+	default:
+		return false
+	}
 }
 
 // agentSessionDTO is the response shape returned by the status and stop
@@ -912,18 +953,20 @@ func (a *API) updateHarnessRunAgentSessionStatus(ctx context.Context, run *opera
 // match the CLI AgentSession contract. The CLI must be able to unmarshal this
 // payload without client-side backfill.
 type agentSessionDTO struct {
-	RunID              string                             `json:"runId"`
-	PodName            string                             `json:"podName,omitempty"`
-	ServerID           string                             `json:"serverID,omitempty"`
-	Runtime            operatorv1alpha1.AgentRuntime      `json:"runtime,omitempty"`
-	Agent              operatorv1alpha1.AgentKind         `json:"agent,omitempty"`
-	SessionID          string                             `json:"sessionId,omitempty"`
-	Phase              operatorv1alpha1.AgentSessionPhase `json:"phase,omitempty"`
-	LastSequence       int64                              `json:"lastSequence,omitempty"`
-	WorkspaceSessionID string                             `json:"workspaceSessionId,omitempty"`
-	DisplayName        string                             `json:"displayName,omitempty"`
-	CreatedAt          string                             `json:"createdAt,omitempty"`
-	Diagnostic         *agentSessionDiagnosticDTO         `json:"diagnostic,omitempty"`
+	RunID              string                                           `json:"runId"`
+	PodName            string                                           `json:"podName,omitempty"`
+	ServerID           string                                           `json:"serverID,omitempty"`
+	ImageProfile       *operatorv1alpha1.HarnessImageProfileStatus      `json:"imageProfile,omitempty"`
+	StartupMetrics     *operatorv1alpha1.HarnessRunStartupMetricsStatus `json:"startupMetrics,omitempty"`
+	Runtime            operatorv1alpha1.AgentRuntime                    `json:"runtime,omitempty"`
+	Agent              operatorv1alpha1.AgentKind                       `json:"agent,omitempty"`
+	SessionID          string                                           `json:"sessionId,omitempty"`
+	Phase              operatorv1alpha1.AgentSessionPhase               `json:"phase,omitempty"`
+	LastSequence       int64                                            `json:"lastSequence,omitempty"`
+	WorkspaceSessionID string                                           `json:"workspaceSessionId,omitempty"`
+	DisplayName        string                                           `json:"displayName,omitempty"`
+	CreatedAt          string                                           `json:"createdAt,omitempty"`
+	Diagnostic         *agentSessionDiagnosticDTO                       `json:"diagnostic,omitempty"`
 }
 
 type agentSessionDiagnosticDTO struct {
@@ -937,6 +980,8 @@ func (a *API) agentSessionToDTO(ctx context.Context, run *operatorv1alpha1.Harne
 		RunID:              run.Name,
 		PodName:            state.PodName,
 		ServerID:           state.ServerID,
+		ImageProfile:       harnessImageProfileStatusForRun(run),
+		StartupMetrics:     run.Status.StartupMetrics,
 		Runtime:            state.Runtime,
 		Agent:              state.Agent,
 		SessionID:          state.SessionID,
@@ -1141,11 +1186,11 @@ func (a *API) handleRunAgentSessionCreate(w http.ResponseWriter, r *http.Request
 	state, err := a.AgentSessions.EnsureSession(r.Context(), run)
 	if err != nil {
 		slog.Error("agent session create failed", "run", id, "error", err)
-		a.updateHarnessRunAgentSessionStatus(r.Context(), run, state)
+		a.updateHarnessRunAgentSessionStatus(r.Context(), run, state, false)
 		writeError(w, http.StatusBadGateway, "agent session create failed")
 		return
 	}
-	a.updateHarnessRunAgentSessionStatus(r.Context(), run, state)
+	a.updateHarnessRunAgentSessionStatus(r.Context(), run, state, false)
 	a.Audit.Append(r.Context(), principal(r.Context()), "agent-session.create", "harness-run", id, "allowed", map[string]any{"agent": state.Agent, "runtime": state.Runtime, "sessionId": state.SessionID})
 	writeJSON(w, http.StatusCreated, a.agentSessionToDTO(r.Context(), run, state))
 }
@@ -1172,7 +1217,7 @@ func (a *API) handleRunAgentSessionPrompt(w http.ResponseWriter, r *http.Request
 	result, state, err := a.AgentSessions.Prompt(r.Context(), run, req.Prompt)
 	if err != nil {
 		slog.Error("agent session prompt failed", "run", id, "error", err)
-		a.updateHarnessRunAgentSessionStatus(r.Context(), run, state)
+		a.updateHarnessRunAgentSessionStatus(r.Context(), run, state, true)
 		var opErr *agentSessionOperationError
 		if errors.As(err, &opErr) {
 			writeError(w, opErr.statusCode, opErr.message)
@@ -1181,7 +1226,7 @@ func (a *API) handleRunAgentSessionPrompt(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusBadGateway, "agent session prompt failed")
 		return
 	}
-	a.updateHarnessRunAgentSessionStatus(r.Context(), run, state)
+	a.updateHarnessRunAgentSessionStatus(r.Context(), run, state, true)
 	a.Audit.Append(r.Context(), principal(r.Context()), "agent-session.prompt", "harness-run", id, "allowed", map[string]any{"sessionId": state.SessionID})
 
 	// Build an event from the prompt result so the CLI receives a uniform
@@ -1300,11 +1345,11 @@ func (a *API) handleRunAgentSessionStop(w http.ResponseWriter, r *http.Request, 
 		// Best-effort: persist the failed state to the HarnessRun CRD so
 		// the operator and subsequent status queries reflect the failure,
 		// even though we are about to return a 502 to the caller.
-		a.updateHarnessRunAgentSessionStatus(r.Context(), run, state)
+		a.updateHarnessRunAgentSessionStatus(r.Context(), run, state, false)
 		writeError(w, http.StatusBadGateway, err.Error())
 		return
 	}
-	a.updateHarnessRunAgentSessionStatus(r.Context(), run, state)
+	a.updateHarnessRunAgentSessionStatus(r.Context(), run, state, false)
 	a.Audit.Append(r.Context(), principal(r.Context()), "agent-session.stop", "harness-run", id, "allowed", map[string]any{"sessionId": state.SessionID})
 	writeJSON(w, http.StatusOK, a.agentSessionToDTO(r.Context(), run, state))
 }

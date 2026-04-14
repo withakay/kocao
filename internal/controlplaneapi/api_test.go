@@ -899,6 +899,89 @@ func TestAgentSessionGet_StoppingHasNoProvisioningDiagnostic(t *testing.T) {
 	}
 }
 
+func TestAgentSessionPrompt_RecordsStartupMetrics(t *testing.T) {
+	api, cleanup := newTestAPI(t)
+	defer cleanup()
+	api.AgentSessions = newAgentSessionService(newFakeAgentSessionTransport(), newAgentSessionStore(""))
+
+	if err := api.Tokens.Create(context.Background(), "t-full", "full", []string{"harness-run:read", "harness-run:write"}); err != nil {
+		t.Fatalf("create token: %v", err)
+	}
+
+	run := &operatorv1alpha1.HarnessRun{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "run-startup-metrics",
+			Namespace:         api.Namespace,
+			CreationTimestamp: metav1.NewTime(time.Unix(100, 0)),
+		},
+		Spec: operatorv1alpha1.HarnessRunSpec{
+			RepoURL: "https://github.com/withakay/kocao",
+			Image:   "ghcr.io/withakay/kocao/harness-runtime:dev-web",
+			AgentSession: &operatorv1alpha1.AgentSessionSpec{
+				Runtime: operatorv1alpha1.AgentRuntimeSandboxAgent,
+				Agent:   operatorv1alpha1.AgentKindCodex,
+			},
+		},
+		Status: operatorv1alpha1.HarnessRunStatus{
+			Phase:   operatorv1alpha1.HarnessRunPhaseRunning,
+			PodName: "pod-startup-metrics",
+			AgentSession: &operatorv1alpha1.AgentSessionStatus{
+				Runtime: operatorv1alpha1.AgentRuntimeSandboxAgent,
+				Agent:   operatorv1alpha1.AgentKindCodex,
+				Phase:   operatorv1alpha1.AgentSessionPhaseProvisioning,
+			},
+			StartupMetrics: &operatorv1alpha1.HarnessRunStartupMetricsStatus{
+				ImagePullStartedAt:   &metav1.Time{Time: time.Unix(101, 0)},
+				ImagePullCompletedAt: &metav1.Time{Time: time.Unix(109, 0)},
+				ImagePullDurationMs:  8000,
+			},
+		},
+	}
+	if err := api.K8s.Create(context.Background(), run); err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+
+	srv := httptest.NewServer(api.Handler())
+	defer srv.Close()
+
+	resp, b := doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/harness-runs/"+run.Name+"/agent-session", "full", nil)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create agent session status = %d (body=%s)", resp.StatusCode, string(b))
+	}
+	var created agentSessionDTO
+	if err := json.Unmarshal(b, &created); err != nil {
+		t.Fatalf("unmarshal create response: %v", err)
+	}
+	if created.StartupMetrics == nil {
+		t.Fatal("expected startup metrics in create response")
+	}
+	if created.StartupMetrics.ImagePullDurationMs != 8000 {
+		t.Fatalf("imagePullDurationMs = %d, want 8000", created.StartupMetrics.ImagePullDurationMs)
+	}
+	if created.StartupMetrics.TimeToReadyMs == 0 {
+		t.Fatal("expected timeToReadyMs to be recorded")
+	}
+
+	resp, b = doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/harness-runs/"+run.Name+"/agent-session/prompt", "full", map[string]any{"prompt": "hello sandbox"})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("prompt status = %d (body=%s)", resp.StatusCode, string(b))
+	}
+
+	var stored operatorv1alpha1.HarnessRun
+	if err := api.K8s.Get(context.Background(), client.ObjectKey{Namespace: api.Namespace, Name: run.Name}, &stored); err != nil {
+		t.Fatalf("get stored run: %v", err)
+	}
+	if stored.Status.StartupMetrics == nil || stored.Status.StartupMetrics.FirstPromptAt == nil {
+		t.Fatalf("stored startup metrics = %#v, want firstPromptAt", stored.Status.StartupMetrics)
+	}
+	if stored.Status.StartupMetrics.TimeToFirstPromptMs == 0 {
+		t.Fatal("expected timeToFirstPromptMs to be recorded")
+	}
+	if stored.Status.StartupMetrics.TimeToFirstPromptMs < stored.Status.StartupMetrics.TimeToReadyMs {
+		t.Fatalf("timeToFirstPromptMs = %d, want >= timeToReadyMs %d", stored.Status.StartupMetrics.TimeToFirstPromptMs, stored.Status.StartupMetrics.TimeToReadyMs)
+	}
+}
+
 func TestAgentSessionGet_AuthRepoAndNetworkDiagnostics(t *testing.T) {
 	tests := []struct {
 		name          string
@@ -1559,6 +1642,7 @@ func TestWorkspaceAgentSessionsList_WithLiveBridgeState(t *testing.T) {
 	resp, b = doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/workspace-sessions/"+sess.ID+"/harness-runs", "full", map[string]any{
 		"repoURL":      "https://example.com/repo",
 		"image":        "alpine:3",
+		"imageProfile": map[string]any{"profile": "web"},
 		"agentSession": map[string]any{"agent": "codex"},
 	})
 	if resp.StatusCode != http.StatusCreated {
@@ -1566,6 +1650,15 @@ func TestWorkspaceAgentSessionsList_WithLiveBridgeState(t *testing.T) {
 	}
 	var run runResponse
 	_ = json.Unmarshal(b, &run)
+	if run.ImageProfile == nil {
+		t.Fatal("run imageProfile missing from create response")
+	}
+	if run.ImageProfile.SelectedProfile != operatorv1alpha1.HarnessImageProfileWeb {
+		t.Fatalf("run selectedProfile = %q, want web", run.ImageProfile.SelectedProfile)
+	}
+	if run.ImageProfile.SelectionSource != operatorv1alpha1.HarnessImageProfileSelectionSourceExplicit {
+		t.Fatalf("run selectionSource = %q, want explicit", run.ImageProfile.SelectionSource)
+	}
 
 	// Simulate the pod being ready and create an agent session via the API.
 	var stored operatorv1alpha1.HarnessRun
@@ -1602,8 +1695,128 @@ func TestWorkspaceAgentSessionsList_WithLiveBridgeState(t *testing.T) {
 	if as.SessionID != "sas-123" {
 		t.Fatalf("sessionId = %q, want sas-123", as.SessionID)
 	}
+	if as.ImageProfile == nil || as.ImageProfile.SelectedProfile != operatorv1alpha1.HarnessImageProfileWeb {
+		t.Fatalf("agent session list imageProfile = %#v, want selectedProfile web", as.ImageProfile)
+	}
 	if as.Phase != "Ready" {
 		t.Fatalf("phase = %q, want Ready", as.Phase)
+	}
+}
+
+func TestCreateHarnessRunImageProfileSelectionPolicies(t *testing.T) {
+	api, cleanup := newTestAPI(t)
+	defer cleanup()
+
+	if err := api.Tokens.Create(context.Background(), "t-full", "full", []string{
+		"workspace-session:write", "workspace-session:read",
+		"harness-run:write", "harness-run:read",
+	}); err != nil {
+		t.Fatalf("create token: %v", err)
+	}
+
+	srv := httptest.NewServer(api.Handler())
+	defer srv.Close()
+
+	resp, b := doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/workspace-sessions", "full", map[string]any{
+		"repoURL": "https://example.com/repo",
+	})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create session status = %d (body=%s)", resp.StatusCode, string(b))
+	}
+	var sess sessionResponse
+	_ = json.Unmarshal(b, &sess)
+
+	tests := []struct {
+		name              string
+		imageProfile      map[string]any
+		wantRequested     operatorv1alpha1.HarnessImageProfile
+		wantPolicy        operatorv1alpha1.HarnessImageProfileSelectionPolicy
+		wantSelected      operatorv1alpha1.HarnessImageProfile
+		wantSource        operatorv1alpha1.HarnessImageProfileSelectionSource
+		wantReason        string
+		wantStoredProfile operatorv1alpha1.HarnessImageProfile
+		wantStoredPolicy  operatorv1alpha1.HarnessImageProfileSelectionPolicy
+	}{
+		{
+			name:             "preferred minimal policy selects base",
+			imageProfile:     map[string]any{"selectionPolicy": "preferred-minimal"},
+			wantPolicy:       operatorv1alpha1.HarnessImageProfileSelectionPolicyPreferredMinimal,
+			wantSelected:     operatorv1alpha1.HarnessImageProfileBase,
+			wantSource:       operatorv1alpha1.HarnessImageProfileSelectionSourcePolicy,
+			wantReason:       "policy-preferred-minimal",
+			wantStoredPolicy: operatorv1alpha1.HarnessImageProfileSelectionPolicyPreferredMinimal,
+		},
+		{
+			name:             "omitted profile falls back to compatibility",
+			wantPolicy:       operatorv1alpha1.HarnessImageProfileSelectionPolicyAuto,
+			wantSelected:     operatorv1alpha1.HarnessImageProfileFull,
+			wantSource:       operatorv1alpha1.HarnessImageProfileSelectionSourceFallback,
+			wantReason:       "auto-inference-pending",
+			wantStoredPolicy: operatorv1alpha1.HarnessImageProfileSelectionPolicyAuto,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			request := map[string]any{
+				"repoURL": "https://example.com/repo",
+				"image":   "alpine:3",
+			}
+			if tt.imageProfile != nil {
+				request["imageProfile"] = tt.imageProfile
+			}
+
+			resp, b := doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/workspace-sessions/"+sess.ID+"/harness-runs", "full", request)
+			if resp.StatusCode != http.StatusCreated {
+				t.Fatalf("create run status = %d (body=%s)", resp.StatusCode, string(b))
+			}
+
+			var run runResponse
+			if err := json.Unmarshal(b, &run); err != nil {
+				t.Fatalf("unmarshal run response: %v", err)
+			}
+			if run.ImageProfile == nil {
+				t.Fatal("run imageProfile missing from response")
+			}
+			if run.ImageProfile.RequestedProfile != tt.wantRequested {
+				t.Fatalf("requestedProfile = %q, want %q", run.ImageProfile.RequestedProfile, tt.wantRequested)
+			}
+			if run.ImageProfile.SelectionPolicy != tt.wantPolicy {
+				t.Fatalf("selectionPolicy = %q, want %q", run.ImageProfile.SelectionPolicy, tt.wantPolicy)
+			}
+			if run.ImageProfile.SelectedProfile != tt.wantSelected {
+				t.Fatalf("selectedProfile = %q, want %q", run.ImageProfile.SelectedProfile, tt.wantSelected)
+			}
+			if run.ImageProfile.SelectionSource != tt.wantSource {
+				t.Fatalf("selectionSource = %q, want %q", run.ImageProfile.SelectionSource, tt.wantSource)
+			}
+			if run.ImageProfile.FallbackProfile != operatorv1alpha1.HarnessImageProfileFull {
+				t.Fatalf("fallbackProfile = %q, want full", run.ImageProfile.FallbackProfile)
+			}
+			if run.ImageProfile.Reason != tt.wantReason {
+				t.Fatalf("reason = %q, want %q", run.ImageProfile.Reason, tt.wantReason)
+			}
+
+			var stored operatorv1alpha1.HarnessRun
+			if err := api.K8s.Get(context.Background(), client.ObjectKey{Namespace: api.Namespace, Name: run.ID}, &stored); err != nil {
+				t.Fatalf("get stored run: %v", err)
+			}
+			if stored.Status.ImageProfile == nil {
+				t.Fatal("stored status imageProfile missing")
+			}
+			if stored.Status.ImageProfile.SelectedProfile != tt.wantSelected {
+				t.Fatalf("stored selectedProfile = %q, want %q", stored.Status.ImageProfile.SelectedProfile, tt.wantSelected)
+			}
+			if stored.Spec.ImageProfile == nil {
+				t.Fatal("stored spec imageProfile missing")
+			}
+			if stored.Spec.ImageProfile.Profile != tt.wantStoredProfile {
+				t.Fatalf("stored spec profile = %q, want %q", stored.Spec.ImageProfile.Profile, tt.wantStoredProfile)
+			}
+			if stored.Spec.ImageProfile.SelectionPolicy != tt.wantStoredPolicy {
+				t.Fatalf("stored spec policy = %q, want %q", stored.Spec.ImageProfile.SelectionPolicy, tt.wantStoredPolicy)
+			}
+		})
 	}
 }
 
@@ -2340,6 +2553,7 @@ func TestStatusAndStop_ResponseIncludesContractFields(t *testing.T) {
 	resp, b = doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/workspace-sessions/"+sess.ID+"/harness-runs", "full", map[string]any{
 		"repoURL":      "https://example.com/repo",
 		"image":        "alpine:3",
+		"imageProfile": map[string]any{"profile": "web"},
 		"agentSession": map[string]any{"agent": "codex"},
 	})
 	if resp.StatusCode != http.StatusCreated {
@@ -2347,6 +2561,9 @@ func TestStatusAndStop_ResponseIncludesContractFields(t *testing.T) {
 	}
 	var run runResponse
 	_ = json.Unmarshal(b, &run)
+	if run.ImageProfile == nil || run.ImageProfile.SelectedProfile != operatorv1alpha1.HarnessImageProfileWeb {
+		t.Fatalf("create run imageProfile = %#v, want selectedProfile web", run.ImageProfile)
+	}
 
 	// Simulate pod ready and set a creation timestamp (fake client doesn't
 	// auto-set it like a real API server would).
@@ -2478,8 +2695,36 @@ func TestCreateStatusAndStop_DTOUnmarshalsIntoCLIAgentSession(t *testing.T) {
 	if err := api.K8s.Get(context.Background(), client.ObjectKey{Namespace: api.Namespace, Name: run.ID}, &stored); err != nil {
 		t.Fatalf("get run: %v", err)
 	}
+	if stored.Spec.ImageProfile == nil {
+		stored.Spec.ImageProfile = &operatorv1alpha1.HarnessImageProfileSpec{
+			Profile:         operatorv1alpha1.HarnessImageProfileWeb,
+			SelectionPolicy: operatorv1alpha1.HarnessImageProfileSelectionPolicyAuto,
+		}
+	}
+	if stored.Annotations == nil {
+		stored.Annotations = map[string]string{}
+	}
+	stored.Annotations[annotationHarnessImageProfileSelected] = "web"
+	stored.Annotations[annotationHarnessImageProfileSource] = "explicit"
+	stored.Annotations[annotationHarnessImageProfilePolicy] = "auto"
+	stored.Annotations[annotationHarnessImageProfileFallback] = "full"
+	stored.Annotations[annotationHarnessImageProfileReason] = "explicit-request"
+	if err := api.K8s.Update(context.Background(), &stored); err != nil {
+		t.Fatalf("update run spec: %v", err)
+	}
+	if err := api.K8s.Get(context.Background(), client.ObjectKey{Namespace: api.Namespace, Name: run.ID}, &stored); err != nil {
+		t.Fatalf("refresh run after spec update: %v", err)
+	}
 	stored.Status.PodName = "pod-cli-contract"
 	stored.Status.Phase = operatorv1alpha1.HarnessRunPhaseRunning
+	stored.Status.ImageProfile = &operatorv1alpha1.HarnessImageProfileStatus{
+		RequestedProfile: operatorv1alpha1.HarnessImageProfileWeb,
+		SelectionPolicy:  operatorv1alpha1.HarnessImageProfileSelectionPolicyAuto,
+		SelectedProfile:  operatorv1alpha1.HarnessImageProfileWeb,
+		SelectionSource:  operatorv1alpha1.HarnessImageProfileSelectionSourceExplicit,
+		FallbackProfile:  operatorv1alpha1.HarnessImageProfileFull,
+		Reason:           "explicit-request",
+	}
 	if err := api.K8s.Status().Update(context.Background(), &stored); err != nil {
 		t.Fatalf("update run status: %v", err)
 	}
@@ -2491,14 +2736,15 @@ func TestCreateStatusAndStop_DTOUnmarshalsIntoCLIAgentSession(t *testing.T) {
 
 	// POST create — unmarshal into the CLI contract shape.
 	type cliAgentSession struct {
-		SessionID   string `json:"sessionId"`
-		RunID       string `json:"runId"`
-		DisplayName string `json:"displayName"`
-		Runtime     string `json:"runtime"`
-		Agent       string `json:"agent"`
-		Phase       string `json:"phase"`
-		WorkspaceID string `json:"workspaceSessionId"`
-		CreatedAt   string `json:"createdAt,omitempty"`
+		SessionID    string                                      `json:"sessionId"`
+		RunID        string                                      `json:"runId"`
+		DisplayName  string                                      `json:"displayName"`
+		ImageProfile *operatorv1alpha1.HarnessImageProfileStatus `json:"imageProfile,omitempty"`
+		Runtime      string                                      `json:"runtime"`
+		Agent        string                                      `json:"agent"`
+		Phase        string                                      `json:"phase"`
+		WorkspaceID  string                                      `json:"workspaceSessionId"`
+		CreatedAt    string                                      `json:"createdAt,omitempty"`
 	}
 
 	var createCLI cliAgentSession
@@ -2513,6 +2759,9 @@ func TestCreateStatusAndStop_DTOUnmarshalsIntoCLIAgentSession(t *testing.T) {
 	}
 	if createCLI.Phase != string(operatorv1alpha1.AgentSessionPhaseReady) {
 		t.Fatalf("CLI contract: create phase = %q, want Ready", createCLI.Phase)
+	}
+	if createCLI.ImageProfile == nil || createCLI.ImageProfile.SelectedProfile != operatorv1alpha1.HarnessImageProfileWeb {
+		t.Fatalf("CLI contract: create imageProfile = %#v, want selectedProfile web", createCLI.ImageProfile)
 	}
 
 	var createRaw map[string]json.RawMessage
@@ -2547,6 +2796,9 @@ func TestCreateStatusAndStop_DTOUnmarshalsIntoCLIAgentSession(t *testing.T) {
 	}
 	if statusCLI.Phase != string(operatorv1alpha1.AgentSessionPhaseReady) {
 		t.Fatalf("CLI contract: phase = %q, want Ready", statusCLI.Phase)
+	}
+	if statusCLI.ImageProfile == nil || statusCLI.ImageProfile.SelectedProfile != operatorv1alpha1.HarnessImageProfileWeb {
+		t.Fatalf("CLI contract: status imageProfile = %#v, want selectedProfile web", statusCLI.ImageProfile)
 	}
 
 	// Verify the old field name "harnessRunID" is NOT present in the payload.
@@ -2750,8 +3002,12 @@ func TestPrompt_Failure_PersistsToHarnessRunStatus(t *testing.T) {
 	}
 
 	run := &operatorv1alpha1.HarnessRun{
-		TypeMeta:   metav1.TypeMeta{APIVersion: operatorv1alpha1.GroupVersion.String(), Kind: "HarnessRun"},
-		ObjectMeta: metav1.ObjectMeta{Name: "run-prompt-fail-persist", Namespace: api.Namespace},
+		TypeMeta: metav1.TypeMeta{APIVersion: operatorv1alpha1.GroupVersion.String(), Kind: "HarnessRun"},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "run-prompt-fail-persist",
+			Namespace:         api.Namespace,
+			CreationTimestamp: metav1.NewTime(time.Now().Add(-2 * time.Second)),
+		},
 		Spec: operatorv1alpha1.HarnessRunSpec{
 			RepoURL:    "https://example.com/repo",
 			Image:      "kocao/harness-runtime:dev",
@@ -2796,6 +3052,12 @@ func TestPrompt_Failure_PersistsToHarnessRunStatus(t *testing.T) {
 	}
 	if stored.Status.AgentSession.Phase != operatorv1alpha1.AgentSessionPhaseFailed {
 		t.Fatalf("agent session phase = %q, want Failed", stored.Status.AgentSession.Phase)
+	}
+	if stored.Status.StartupMetrics == nil || stored.Status.StartupMetrics.FirstPromptAt == nil {
+		t.Fatalf("stored startup metrics = %#v, want firstPromptAt", stored.Status.StartupMetrics)
+	}
+	if stored.Status.StartupMetrics.TimeToFirstPromptMs == 0 {
+		t.Fatal("expected timeToFirstPromptMs to be recorded")
 	}
 }
 

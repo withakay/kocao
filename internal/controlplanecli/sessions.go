@@ -151,6 +151,7 @@ func runSessionStatusCommand(ctx context.Context, cfg Config, args []string, std
 		return nil
 	}
 	_, _ = fmt.Fprintf(stdout, "Run:        %s\n", status.Run.ID)
+	_, _ = fmt.Fprintf(stdout, "Profile:    %s\n", formatHarnessImageProfile(status.Run.ImageProfile))
 	_, _ = fmt.Fprintf(stdout, "Run Phase:  %s\n", valueOrDash(status.Run.Phase))
 	_, _ = fmt.Fprintf(stdout, "Pod Name:   %s\n", valueOrDash(status.Run.PodName))
 	return nil

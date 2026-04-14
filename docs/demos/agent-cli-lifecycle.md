@@ -29,6 +29,7 @@ Create, status, and stop all center on the same public identifiers:
 - `sessionId`: sandbox-agent session identity once initialized.
 - `phase`: lifecycle phase from the explicit state machine.
 - `agent`, `runtime`, `workspaceSessionId`, `displayName`, `createdAt`.
+- `startupMetrics`: per-run startup timings for `imagePullDurationMs`, `timeToReadyMs`, and `timeToFirstPromptMs`.
 - `diagnostic`: optional blocker details when the session is not ready.
 
 When `diagnostic` is present it uses:
@@ -66,6 +67,10 @@ Representative provisioning response:
   "phase": "Provisioning",
   "workspaceSessionId": "ws-demo123",
   "createdAt": "2026-04-14T09:30:00Z",
+  "startupMetrics": {
+    "imagePullDurationMs": 12000,
+    "timeToReadyMs": 18500
+  },
   "diagnostic": {
     "class": "image-pull",
     "summary": "Image pull is blocking session readiness.",
@@ -74,7 +79,20 @@ Representative provisioning response:
 }
 ```
 
-Table output includes the same lifecycle summary plus blocker lines when `diagnostic` is populated.
+Table output includes the same lifecycle summary plus startup timing lines and blocker lines when they are populated.
+
+## Profile startup measurement
+
+The fastest demo loop for comparing `base`, `go`, `web`, and `full` is:
+
+```bash
+kocao agent start --repo https://github.com/withakay/kocao --agent codex --image-profile web --output json
+kocao agent status <run-id> --output json | jq '.startupMetrics'
+kocao agent exec <run-id> --prompt "Summarize the repo" --output json >/dev/null
+kocao agent status <run-id> --output json | jq '.startupMetrics'
+```
+
+Use the first status call to capture image pull and time-to-ready. Use the second status call after the first prompt to capture `timeToFirstPromptMs`.
 
 ## List active agents
 

@@ -49,6 +49,13 @@ func formatAgentSessionBlocker(diag *AgentSessionDiagnostic) string {
 	return diag.Class
 }
 
+func formatStartupMetricDuration(ms int64) string {
+	if ms <= 0 {
+		return "-"
+	}
+	return (time.Duration(ms) * time.Millisecond).String()
+}
+
 func writeAgentSessionSummary(w io.Writer, heading string, session *AgentSession) error {
 	if heading != "" {
 		if _, err := fmt.Fprintln(w, heading); err != nil {
@@ -63,11 +70,28 @@ func writeAgentSessionSummary(w io.Writer, heading string, session *AgentSession
 		{"Run ID", valueOrDash(session.RunID)},
 		{"Session ID", valueOrDash(session.SessionID)},
 		{"Name", valueOrDash(session.DisplayName)},
+		{"Profile", formatHarnessImageProfile(session.ImageProfile)},
 		{"Runtime", valueOrDash(session.Runtime)},
 		{"Agent", valueOrDash(session.Agent)},
 		{"Phase", valueOrDash(session.Phase)},
 		{"Workspace", valueOrDash(session.WorkspaceID)},
 		{"Created", formatAgentSessionCreatedAt(session.CreatedAt)},
+	}
+	if session.StartupMetrics != nil {
+		lines = append(lines,
+			struct {
+				label string
+				value string
+			}{"Image Pull", formatStartupMetricDuration(session.StartupMetrics.ImagePullDurationMs)},
+			struct {
+				label string
+				value string
+			}{"Ready In", formatStartupMetricDuration(session.StartupMetrics.TimeToReadyMs)},
+			struct {
+				label string
+				value string
+			}{"1st Prompt", formatStartupMetricDuration(session.StartupMetrics.TimeToFirstPromptMs)},
+		)
 	}
 
 	for _, line := range lines {

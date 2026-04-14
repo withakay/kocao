@@ -6,8 +6,16 @@ This demo captures the complete agent CLI workflow against the MicroK8s cluster:
 
 The important production contract shown below is that the CLI keeps using the
 same `runId`, `sessionId`, and `phase` fields across create, status, and stop.
-When a session is not ready, the same status shape also carries a `diagnostic`
-blocker.
+The same status shape now also carries `startupMetrics` so profile choices can
+be compared with real pull, ready, and first-prompt timings.
+
+Before the live demo, warm the common harness profiles on the cluster so the first profile-specific run is not blocked on a cold image pull:
+
+```bash
+HARNESS_IMAGE=ghcr.io/withakay/kocao/harness-runtime IMAGE_TAG=dev-microk8s-amd64fix \
+  IMAGE_PULL_SECRETS=ghcr-pull \
+  make microk8s-prepull-harness-profiles
+```
 
 ## 1. Start an agent session
 
@@ -48,9 +56,16 @@ kocao agent status 7d5108e3a844b192c8f754cf5afed99b --output json
   "agent": "opencode",
   "phase": "Ready",
   "workspaceSessionId": "ea2e5a6636ca5e1de047b07b38b171cf",
-  "createdAt": "2026-04-13T20:54:59Z"
+  "createdAt": "2026-04-13T20:54:59Z",
+  "startupMetrics": {
+    "imagePullDurationMs": 11800,
+    "timeToReadyMs": 17600,
+    "readyAt": "2026-04-13T20:55:16Z"
+  }
 }
 ```
+
+For a profile-split demo, repeat the same flow with `--image-profile full` and compare the `startupMetrics` block. The `web` and `base` profiles should show the benefit first on `imagePullDurationMs`, then on `timeToReadyMs`.
 
 ## 3. List active agent sessions
 
@@ -104,6 +119,21 @@ kocao agent exec 7d5108e3a844b192c8f754cf5afed99b \
       }
     }
   ]
+}
+```
+
+Re-checking status after the first prompt shows the third startup metric populated:
+
+```bash
+kocao agent status 7d5108e3a844b192c8f754cf5afed99b --output json | jq '.startupMetrics'
+```
+
+```output
+{
+  "imagePullDurationMs": 11800,
+  "timeToReadyMs": 17600,
+  "timeToFirstPromptMs": 35200,
+  "firstPromptAt": "2026-04-13T20:55:34Z"
 }
 ```
 

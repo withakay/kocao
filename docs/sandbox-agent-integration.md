@@ -22,6 +22,8 @@ The harness image now:
 - starts `sandbox-agent server` automatically when a Harness Run is configured with an `agentSession`
 - validates the sandbox-agent health endpoint and supported agent catalog in `build/harness/smoke.sh`
 
+The planned harness profile split keeps that contract intact across every profile. `base`, `go`, `web`, and `full` may differ in workload runtimes, but each profile must still ship the same sandbox-agent entrypoint, health endpoint, and supported agent catalog.
+
 ## API flow
 
 ### 1. Start a Harness Run with an agent
@@ -44,6 +46,14 @@ The harness image now:
 `POST /api/v1/harness-runs/{harnessRunID}/agent-session`
 
 Returns run-scoped session metadata including runtime, selected agent, session id, phase, and last seen sequence.
+
+The same status payload now includes `startupMetrics` for the harness run:
+
+- `imagePullDurationMs`
+- `timeToReadyMs`
+- `timeToFirstPromptMs`
+
+This gives operators a stable place to compare the `base`, `go`, `web`, and `full` profiles without scraping ad hoc logs.
 
 ### 3. Send a prompt
 
@@ -151,16 +161,36 @@ kubectl kustomize deploy/base >/dev/null
 make harness-smoke
 ```
 
+For profile startup measurements during demos or dev-cluster tuning:
+
+```bash
+kocao agent start --repo https://github.com/withakay/kocao --agent codex --image-profile web --output json
+kocao agent status <run-id> --output json | jq '.startupMetrics'
+kocao agent exec <run-id> --prompt "Summarize the repo" --output json >/dev/null
+kocao agent status <run-id> --output json | jq '.startupMetrics'
+```
+
 ## Local Kind Setup
 
 ```bash
 kubectl config current-context  # Must be kind-kocao-dev
 make images                     # Build all images (api, operator, web, harness, sidecar)
 make kind-load-images           # Load into Kind
+make kind-prepull-harness-profiles  # Load base/go/web/full harness profiles before live runs
 make deploy                     # Apply kustomize overlay
 make deploy-wait                # Wait for rollout
 make seed-agent-secrets         # Copy local OAuth tokens
 ```
+
+For registry-backed dev clusters, pre-pull the common harness profiles before a demo so the first profiled run does not pay the full image download cost:
+
+```bash
+HARNESS_IMAGE=ghcr.io/withakay/kocao/harness-runtime IMAGE_TAG=dev-microk8s-amd64fix \
+  IMAGE_PULL_SECRETS=ghcr-pull \
+  make registry-prepull-harness-profiles
+```
+
+The script uses a short-lived DaemonSet for MicroK8s and other registry-backed dev clusters, and cleans it up on exit unless `KEEP_PREPULL_DAEMONSET=1` is set. Use `make microk8s-prepull-harness-profiles` as a convenience wrapper for the default `microk8s` kube context, set `PREPULL_CONTEXT` when targeting another registry-backed cluster, or use `kind` mode to load locally built images straight into Kind.
 
 **Important**: When creating Harness Runs in Kind, use `"egressMode":"full"` to allow the pod to reach external git hosts and API endpoints. The default `restricted` egress mode only allows DNS.
 

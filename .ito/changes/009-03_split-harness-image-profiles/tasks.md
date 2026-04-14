@@ -27,8 +27,8 @@ ______________________________________________________________________
 - **Verify**: profile build plan review or profile build smoke commands
 - **Done When**: There is a concrete, testable build plan for base/go/web/full profiles with preserved sandbox-agent compatibility.
 - **Requirements**: harness-image-profiles:profile-based-harness-images, harness-runtime:sandbox-agent-compatibility-across-profiles
-- **Updated At**: 2026-04-13
-- **Status**: [ ] pending
+- **Updated At**: 2026-04-14
+- **Status**: [x] complete
 
 ### Task 1.2: Define profile selection contract
 
@@ -38,8 +38,8 @@ ______________________________________________________________________
 - **Verify**: API/CLI contract review and tests
 - **Done When**: The profile selection contract is documented and implementable without ambiguity.
 - **Requirements**: harness-image-profiles:deterministic-profile-selection, control-plane-api:image-profile-selection-surface
-- **Updated At**: 2026-04-13
-- **Status**: [ ] pending
+- **Updated At**: 2026-04-14
+- **Status**: [x] complete
 
 ______________________________________________________________________
 
@@ -55,8 +55,8 @@ ______________________________________________________________________
 - **Verify**: profile build/test workflow and harness smoke verification
 - **Done When**: Multiple harness image profiles build successfully and pass smoke coverage.
 - **Requirements**: harness-image-profiles:profile-based-harness-images, harness-runtime:sandbox-agent-compatibility-across-profiles
-- **Updated At**: 2026-04-13
-- **Status**: [ ] pending
+- **Updated At**: 2026-04-14
+- **Status**: [x] complete
 
 ### Task 2.2: Implement API/CLI profile selection and reporting
 
@@ -66,8 +66,8 @@ ______________________________________________________________________
 - **Verify**: `go test ./internal/controlplaneapi/... ./internal/controlplanecli/... ./cmd/kocao/...`
 - **Done When**: Clients can request or observe harness image profiles reliably.
 - **Requirements**: harness-image-profiles:deterministic-profile-selection, control-plane-api:image-profile-selection-surface
-- **Updated At**: 2026-04-13
-- **Status**: [ ] pending
+- **Updated At**: 2026-04-14
+- **Status**: [x] complete
 
 ______________________________________________________________________
 
@@ -83,8 +83,8 @@ ______________________________________________________________________
 - **Verify**: documented cluster prep workflow and smoke validation
 - **Done When**: Dev clusters can be primed with common profiles before live demos or tests.
 - **Requirements**: harness-image-profiles:development-cluster-prepull-support
-- **Updated At**: 2026-04-13
-- **Status**: [ ] pending
+- **Updated At**: 2026-04-14
+- **Status**: [x] complete
 
 ### Task 3.2: Add startup performance instrumentation and demos
 
@@ -94,6 +94,6 @@ ______________________________________________________________________
 - **Verify**: metrics test coverage and live/dev-cluster measurement workflow
 - **Done When**: Runtime profile decisions can be evaluated with real startup data.
 - **Requirements**: run-execution:startup-performance-metrics
-- **Updated At**: 2026-04-13
-- **Status**: [ ] pending
+- **Updated At**: 2026-04-14
+- **Status**: [x] complete
 <!-- ITO:END -->

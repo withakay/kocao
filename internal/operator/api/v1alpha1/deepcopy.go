@@ -53,6 +53,12 @@ func (in *HarnessRun) DeepCopyInto(out *HarnessRun) {
 	out.Spec.RepoURL = in.Spec.RepoURL
 	out.Spec.RepoRevision = in.Spec.RepoRevision
 	out.Spec.Image = in.Spec.Image
+	if in.Spec.ImageProfile != nil {
+		out.Spec.ImageProfile = &HarnessImageProfileSpec{
+			Profile:         in.Spec.ImageProfile.Profile,
+			SelectionPolicy: in.Spec.ImageProfile.SelectionPolicy,
+		}
+	}
 	if in.Spec.Command != nil {
 		out.Spec.Command = append([]string(nil), in.Spec.Command...)
 	}
@@ -92,6 +98,35 @@ func (in *HarnessRun) DeepCopyInto(out *HarnessRun) {
 	out.Status.ObservedGeneration = in.Status.ObservedGeneration
 	out.Status.Phase = in.Status.Phase
 	out.Status.PodName = in.Status.PodName
+	if in.Status.ImageProfile != nil {
+		out.Status.ImageProfile = &HarnessImageProfileStatus{
+			RequestedProfile: in.Status.ImageProfile.RequestedProfile,
+			SelectionPolicy:  in.Status.ImageProfile.SelectionPolicy,
+			SelectedProfile:  in.Status.ImageProfile.SelectedProfile,
+			SelectionSource:  in.Status.ImageProfile.SelectionSource,
+			FallbackProfile:  in.Status.ImageProfile.FallbackProfile,
+			Reason:           in.Status.ImageProfile.Reason,
+		}
+	}
+	if in.Status.StartupMetrics != nil {
+		out.Status.StartupMetrics = &HarnessRunStartupMetricsStatus{
+			ImagePullDurationMs: in.Status.StartupMetrics.ImagePullDurationMs,
+			TimeToReadyMs:       in.Status.StartupMetrics.TimeToReadyMs,
+			TimeToFirstPromptMs: in.Status.StartupMetrics.TimeToFirstPromptMs,
+		}
+		if in.Status.StartupMetrics.ImagePullStartedAt != nil {
+			out.Status.StartupMetrics.ImagePullStartedAt = &metav1.Time{Time: in.Status.StartupMetrics.ImagePullStartedAt.Time}
+		}
+		if in.Status.StartupMetrics.ImagePullCompletedAt != nil {
+			out.Status.StartupMetrics.ImagePullCompletedAt = &metav1.Time{Time: in.Status.StartupMetrics.ImagePullCompletedAt.Time}
+		}
+		if in.Status.StartupMetrics.ReadyAt != nil {
+			out.Status.StartupMetrics.ReadyAt = &metav1.Time{Time: in.Status.StartupMetrics.ReadyAt.Time}
+		}
+		if in.Status.StartupMetrics.FirstPromptAt != nil {
+			out.Status.StartupMetrics.FirstPromptAt = &metav1.Time{Time: in.Status.StartupMetrics.FirstPromptAt.Time}
+		}
+	}
 	if in.Status.StartTime != nil {
 		out.Status.StartTime = &metav1.Time{Time: in.Status.StartTime.Time}
 	}

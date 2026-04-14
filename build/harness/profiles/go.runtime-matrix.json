@@ -1,0 +1,31 @@
+{
+  "runtimes": {
+    "go": {
+      "versions": ["1.26.0", "1.25.7"],
+      "check": "go version"
+    }
+  },
+  "tools": {
+    "bash": "bash --version",
+    "clang": "clang --version",
+    "claude": "claude --version",
+    "cmake": "cmake --version",
+    "codex": "codex --version",
+    "curl": "curl --version",
+    "fd": "fd --version",
+    "gcc": "gcc --version",
+    "gh": "gh --version",
+    "git": "git --version",
+    "jq": "jq --version",
+    "make": "make --version",
+    "mise": "mise --version",
+    "nvim": "nvim --version",
+    "opencode": "opencode --version",
+    "pi": "pi --version",
+    "pkg-config": "pkg-config --version",
+    "rg": "rg --version",
+    "sandbox-agent": "sandbox-agent --version",
+    "tmux": "tmux -V",
+    "yq": "yq --version"
+  }
+}

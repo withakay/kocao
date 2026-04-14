@@ -341,7 +341,7 @@ func TestStartAgent(t *testing.T) {
 	defer srv.Close()
 
 	client := newTestClient(t, srv.URL)
-	runID, err := client.StartAgent(context.Background(), "", "https://github.com/example/repo", "main", "claude", "ghcr.io/example/harness:latest", nil, "")
+	runID, err := client.StartAgent(context.Background(), "", "https://github.com/example/repo", "main", "claude", "ghcr.io/example/harness:latest", nil, nil, "")
 	if err != nil {
 		t.Fatalf("StartAgent: %v", err)
 	}
@@ -380,7 +380,7 @@ func TestStartAgentWithExistingWorkspace(t *testing.T) {
 	defer srv.Close()
 
 	client := newTestClient(t, srv.URL)
-	runID, err := client.StartAgent(context.Background(), "ws-existing", "https://github.com/example/repo", "main", "claude", "ghcr.io/example/harness:latest", nil, "")
+	runID, err := client.StartAgent(context.Background(), "ws-existing", "https://github.com/example/repo", "main", "claude", "ghcr.io/example/harness:latest", nil, nil, "")
 	if err != nil {
 		t.Fatalf("StartAgent: %v", err)
 	}
