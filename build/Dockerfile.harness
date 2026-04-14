@@ -1,25 +1,20 @@
-FROM ubuntu:24.04
+FROM ubuntu:24.04 AS os-common
 
 ARG DEBIAN_FRONTEND=noninteractive
+ARG YQ_VERSION=v4.44.6
 
-# ── System packages: compilation prerequisites, dev utilities, base tools ──
 RUN apt-get update \
   && apt-get install -y --no-install-recommends \
     bash \
-    build-essential \
     ca-certificates \
-    clang \
-    cmake \
     curl \
     fd-find \
-    g++ \
-    gcc \
     git \
     gnupg \
     jq \
-    libssl-dev \
+    libatomic1 \
+    make \
     openssh-client \
-    pkg-config \
     ripgrep \
     software-properties-common \
     tini \
@@ -29,13 +24,11 @@ RUN apt-get update \
     xz-utils \
   && rm -rf /var/lib/apt/lists/*
 
-# ── Install neovim (latest stable PPA) ──
 RUN add-apt-repository -y ppa:neovim-ppa/stable \
   && apt-get update \
   && apt-get install -y --no-install-recommends neovim \
   && rm -rf /var/lib/apt/lists/*
 
-# ── Install GitHub CLI from official repo ──
 RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
       -o /usr/share/keyrings/githubcli-archive-keyring.gpg \
   && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
@@ -44,99 +37,148 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
   && apt-get install -y --no-install-recommends gh \
   && rm -rf /var/lib/apt/lists/*
 
-# ── Install yq (binary download) ──
-ARG YQ_VERSION=v4.44.6
 RUN curl -fsSL "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_$(dpkg --print-architecture)" \
       -o /usr/local/bin/yq \
   && chmod 0755 /usr/local/bin/yq
 
-# ── Create kocao user and workspace ──
 RUN addgroup --system --gid 10001 kocao \
   && adduser --system --uid 10001 --ingroup kocao --home /home/kocao --disabled-password kocao \
   && mkdir -p /workspace /var/run/secrets/kocao/git \
   && chown -R 10001:10001 /workspace /var/run/secrets/kocao /home/kocao \
-  && chmod 0755 /workspace /var/run/secrets/kocao /var/run/secrets/kocao/git
+  && chmod 0755 /workspace /var/run/secrets/kocao /var/run/secrets/kocao/git \
+  && ln -sf "$(which fdfind)" /usr/local/bin/fd
 
-# ── Install mise (as kocao user) ──
+FROM os-common AS agent-runtime
+
 USER 10001:10001
 ENV HOME=/home/kocao
 ENV MISE_DATA_DIR=/home/kocao/.local/share/mise
 ENV MISE_CONFIG_DIR=/home/kocao/.config/mise
 ENV MISE_CACHE_DIR=/home/kocao/.cache/mise
+ENV MISE_NODE_VERIFY=false
 ENV PATH=/home/kocao/.local/share/mise/shims:/home/kocao/.local/bin:${PATH}
 
 RUN curl -fsSL https://mise.run | sh
 
-# ── Copy mise.toml and install all runtimes ──
-COPY --chown=10001:10001 build/harness/mise.toml /home/kocao/.config/mise/config.toml
-
 ENV MISE_NODE_VERIFY=false
-RUN mise install --yes go python node dotnet bun zig uv
-
-# Install Rust toolchains serially because they share rustup state.
-RUN for v in 1.93.1 1.92.0 1.91.1; do \
-      mise install --yes rust@${v}; \
-    done \
+COPY --chown=10001:10001 build/harness/profiles/base.mise.toml /home/kocao/.config/mise/config.toml
+RUN mise install --yes \
   && mise reshim
 
-# ── Install Rust toolchain components for each version ──
-RUN for v in 1.93.1 1.92.0 1.91.1; do \
-      mise exec rust@${v} -- rustup component add rustfmt clippy rust-analyzer 2>/dev/null || true; \
-    done
-
-# ── Install agent CLIs ──
-
-# Claude Code — standalone binary via official installer.
-# NOTE: The installer script is fetched at build time. The version ARG pins
-# the binary version but not the installer content. For production builds,
-# consider vendoring the installer or adding checksum verification.
 ARG CLAUDE_CODE_VERSION=2.1.62
 RUN curl -fsSL https://claude.ai/install.sh | bash -s -- "${CLAUDE_CODE_VERSION}" \
   && claude --version
 
-# OpenCode — installed via npm (Node is already available via mise).
 ARG OPENCODE_VERSION=1.2.15
 RUN npm install -g "opencode-ai@${OPENCODE_VERSION}" \
   && opencode --version
 
-# Codex CLI — installed via npm.
 ARG CODEX_VERSION=0.106.0
 RUN npm install -g "@openai/codex@${CODEX_VERSION}" \
   && codex --version
 
-# Pi — installed via npm.
 ARG PI_VERSION=0.66.1
 RUN npm install -g "@mariozechner/pi-coding-agent@${PI_VERSION}" \
   && pi --version
 
-# Sandbox Agent CLI — installed via npm wrapper with pinned version.
 ARG SANDBOX_AGENT_VERSION=0.4.2
 RUN npm install -g "@sandbox-agent/cli@${SANDBOX_AGENT_VERSION}" \
   && sandbox-agent --version \
   && sandbox-agent install-agent mock
 
-# ── Prepare agent state directories ──
-# These directories must exist with correct ownership so that Kubernetes
-# Secret volume mounts land correctly (projected files are read-only).
 RUN mkdir -p /home/kocao/.local/share/opencode /home/kocao/.codex /home/kocao/.pi \
   && chown -R 10001:10001 /home/kocao/.local/share/opencode /home/kocao/.codex /home/kocao/.pi
 
-# ── Create symlink for fd (Ubuntu packages it as fdfind) ──
-USER root
-RUN ln -sf "$(which fdfind)" /usr/local/bin/fd 2>/dev/null || true
+FROM agent-runtime AS native-build
 
-# ── Copy harness scripts ──
-COPY build/harness/runtime-matrix.json /etc/kocao/runtime-matrix.json
+USER root
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends \
+    build-essential \
+    clang \
+    cmake \
+    g++ \
+    gcc \
+    libssl-dev \
+    pkg-config \
+  && rm -rf /var/lib/apt/lists/*
+
+FROM native-build AS go-toolchain
+
+USER 10001:10001
+COPY --chown=10001:10001 build/harness/profiles/go.mise.toml /home/kocao/.config/mise/config.toml
+RUN mise install --yes \
+  && mise reshim
+
+FROM agent-runtime AS web-toolchain
+
+USER 10001:10001
+COPY --chown=10001:10001 build/harness/profiles/web.mise.toml /home/kocao/.config/mise/config.toml
+RUN mise install --yes \
+  && mise reshim
+
+FROM go-toolchain AS full-toolchain
+
+COPY --chown=10001:10001 build/harness/profiles/full.mise.toml /home/kocao/.config/mise/config.toml
+RUN mise install --yes \
+  && mise reshim
+
+RUN for v in 1.93.1 1.92.0 1.91.1; do \
+      mise exec rust@${v} -- rustup component add rustfmt clippy rust-analyzer 2>/dev/null || true; \
+    done
+
+FROM agent-runtime AS harness-profile-base
+
+USER root
+COPY build/harness/profiles/base.runtime-matrix.json /etc/kocao/runtime-matrix.json
+COPY build/harness/profiles/base.harness-profile.json /etc/kocao/harness-profile.json
 COPY build/harness/kocao-harness-entrypoint.sh /usr/local/bin/kocao-harness-entrypoint
 COPY build/harness/kocao-git-askpass.sh /usr/local/bin/kocao-git-askpass
 COPY build/harness/smoke.sh /usr/local/bin/kocao-harness-smoke
-
 RUN chmod 0555 /usr/local/bin/kocao-harness-entrypoint /usr/local/bin/kocao-git-askpass /usr/local/bin/kocao-harness-smoke
-
-# ── Run smoke test (build fails fast if anything is missing) ──
 USER 10001:10001
-RUN /usr/local/bin/kocao-harness-smoke
-
 WORKDIR /workspace
+RUN /usr/local/bin/kocao-harness-smoke
+ENTRYPOINT ["/usr/bin/tini","--","/usr/local/bin/kocao-harness-entrypoint"]
 
+FROM go-toolchain AS harness-profile-go
+
+USER root
+COPY build/harness/profiles/go.runtime-matrix.json /etc/kocao/runtime-matrix.json
+COPY build/harness/profiles/go.harness-profile.json /etc/kocao/harness-profile.json
+COPY build/harness/kocao-harness-entrypoint.sh /usr/local/bin/kocao-harness-entrypoint
+COPY build/harness/kocao-git-askpass.sh /usr/local/bin/kocao-git-askpass
+COPY build/harness/smoke.sh /usr/local/bin/kocao-harness-smoke
+RUN chmod 0555 /usr/local/bin/kocao-harness-entrypoint /usr/local/bin/kocao-git-askpass /usr/local/bin/kocao-harness-smoke
+USER 10001:10001
+WORKDIR /workspace
+RUN /usr/local/bin/kocao-harness-smoke
+ENTRYPOINT ["/usr/bin/tini","--","/usr/local/bin/kocao-harness-entrypoint"]
+
+FROM web-toolchain AS harness-profile-web
+
+USER root
+COPY build/harness/profiles/web.runtime-matrix.json /etc/kocao/runtime-matrix.json
+COPY build/harness/profiles/web.harness-profile.json /etc/kocao/harness-profile.json
+COPY build/harness/kocao-harness-entrypoint.sh /usr/local/bin/kocao-harness-entrypoint
+COPY build/harness/kocao-git-askpass.sh /usr/local/bin/kocao-git-askpass
+COPY build/harness/smoke.sh /usr/local/bin/kocao-harness-smoke
+RUN chmod 0555 /usr/local/bin/kocao-harness-entrypoint /usr/local/bin/kocao-git-askpass /usr/local/bin/kocao-harness-smoke
+USER 10001:10001
+WORKDIR /workspace
+RUN /usr/local/bin/kocao-harness-smoke
+ENTRYPOINT ["/usr/bin/tini","--","/usr/local/bin/kocao-harness-entrypoint"]
+
+FROM full-toolchain AS harness-profile-full
+
+USER root
+COPY build/harness/profiles/full.runtime-matrix.json /etc/kocao/runtime-matrix.json
+COPY build/harness/profiles/full.harness-profile.json /etc/kocao/harness-profile.json
+COPY build/harness/kocao-harness-entrypoint.sh /usr/local/bin/kocao-harness-entrypoint
+COPY build/harness/kocao-git-askpass.sh /usr/local/bin/kocao-git-askpass
+COPY build/harness/smoke.sh /usr/local/bin/kocao-harness-smoke
+RUN chmod 0555 /usr/local/bin/kocao-harness-entrypoint /usr/local/bin/kocao-git-askpass /usr/local/bin/kocao-harness-smoke
+USER 10001:10001
+WORKDIR /workspace
+RUN /usr/local/bin/kocao-harness-smoke
 ENTRYPOINT ["/usr/bin/tini","--","/usr/local/bin/kocao-harness-entrypoint"]

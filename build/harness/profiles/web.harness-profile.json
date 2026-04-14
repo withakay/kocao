@@ -1,0 +1,27 @@
+{
+  "profile": "web",
+  "buildTarget": "harness-profile-web",
+  "imageSuffix": "web",
+  "workspaceDir": "/workspace",
+  "runAsUser": {
+    "uid": 10001,
+    "gid": 10001,
+    "user": "kocao",
+    "group": "kocao"
+  },
+  "requiredFiles": [
+    "/workspace",
+    "/etc/kocao/runtime-matrix.json",
+    "/etc/kocao/harness-profile.json",
+    "/usr/local/bin/kocao-harness-entrypoint",
+    "/usr/local/bin/kocao-git-askpass",
+    "/usr/local/bin/kocao-harness-smoke"
+  ],
+  "requiredTools": ["sandbox-agent", "claude", "codex", "opencode", "pi"],
+  "requiredAgents": ["claude", "codex", "opencode", "pi"],
+  "smokeChecks": ["contract", "web"],
+  "healthEndpoint": "/v1/health",
+  "agentCatalogEndpoint": "/v1/agents",
+  "smokeAgentCatalogAgents": ["claude", "codex", "mock", "opencode", "pi"],
+  "smokeReportAgents": ["mock"]
+}

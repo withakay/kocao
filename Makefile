@@ -96,8 +96,12 @@ images:
 	docker build -f build/Dockerfile.api -t "$(API_IMAGE):$(IMAGE_TAG)" .
 	docker build -f build/Dockerfile.operator -t "$(OPERATOR_IMAGE):$(IMAGE_TAG)" .
 	docker build -f build/Dockerfile.web -t "$(WEB_IMAGE):$(IMAGE_TAG)" .
-	docker build -f build/Dockerfile.harness -t "$(HARNESS_IMAGE):$(IMAGE_TAG)" .
+	docker build -f build/Dockerfile.harness --target harness-profile-full -t "$(HARNESS_IMAGE):$(IMAGE_TAG)" .
 	docker build -f build/Dockerfile.sidecar -t "$(SIDECAR_IMAGE):$(IMAGE_TAG)" .
+
+.PHONY: harness-images
+harness-images:
+	bash ./build/harness/build-profiles.sh
 
 .PHONY: images-live-agent
 images-live-agent: images
@@ -114,9 +118,8 @@ kind-load-images: tools
 kind-load-images-live-agent: kind-load-images
 
 .PHONY: harness-smoke
-harness-smoke:
-	docker build -f build/Dockerfile.harness -t "$(HARNESS_IMAGE):$(IMAGE_TAG)" .
-	docker run --rm "$(HARNESS_IMAGE):$(IMAGE_TAG)" /usr/local/bin/kocao-harness-smoke
+harness-smoke: harness-images
+	bash ./build/harness/smoke-profiles.sh
 
 .PHONY: seed-agent-secrets
 seed-agent-secrets:

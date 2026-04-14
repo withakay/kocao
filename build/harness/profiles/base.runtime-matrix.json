@@ -1,0 +1,22 @@
+{
+  "runtimes": {},
+  "tools": {
+    "bash": "bash --version",
+    "claude": "claude --version",
+    "codex": "codex --version",
+    "curl": "curl --version",
+    "fd": "fd --version",
+    "gh": "gh --version",
+    "git": "git --version",
+    "jq": "jq --version",
+    "make": "make --version",
+    "mise": "mise --version",
+    "nvim": "nvim --version",
+    "opencode": "opencode --version",
+    "pi": "pi --version",
+    "rg": "rg --version",
+    "sandbox-agent": "sandbox-agent --version",
+    "tmux": "tmux -V",
+    "yq": "yq --version"
+  }
+}

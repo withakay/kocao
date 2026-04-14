@@ -55,8 +55,8 @@ ______________________________________________________________________
 - **Verify**: profile build/test workflow and harness smoke verification
 - **Done When**: Multiple harness image profiles build successfully and pass smoke coverage.
 - **Requirements**: harness-image-profiles:profile-based-harness-images, harness-runtime:sandbox-agent-compatibility-across-profiles
-- **Updated At**: 2026-04-13
-- **Status**: [ ] pending
+- **Updated At**: 2026-04-14
+- **Status**: [x] complete
 
 ### Task 2.2: Implement API/CLI profile selection and reporting
 

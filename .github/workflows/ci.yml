@@ -29,10 +29,21 @@ jobs:
       - name: Test
         run: make test
 
+  harness-profiles:
+    name: Harness Profiles (build + smoke)
+    runs-on: ubuntu-latest
+    needs: go
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build and smoke harness profiles
+        run: make harness-smoke
+
   agent-lifecycle-live:
     name: Agent Lifecycle (kind live)
     runs-on: ubuntu-latest
-    needs: go
+    needs: [go, harness-profiles]
     timeout-minutes: 45
     steps:
       - name: Checkout
