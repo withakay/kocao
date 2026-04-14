@@ -1310,6 +1310,38 @@ type fakeFailingDeleteTransport struct {
 	deleteErr error
 }
 
+type fakeCreateFailureTransport struct {
+	*fakeAgentSessionTransport
+	createErr error
+}
+
+func (f *fakeCreateFailureTransport) PostACP(ctx context.Context, podName, serverID, agent string, payload any) ([]byte, error) {
+	env, ok := payload.(jsonRPCEnvelope)
+	if !ok {
+		return nil, fmt.Errorf("unexpected payload type %T", payload)
+	}
+	if env.Method == "session/new" {
+		return nil, f.createErr
+	}
+	return f.fakeAgentSessionTransport.PostACP(ctx, podName, serverID, agent, payload)
+}
+
+type fakePromptFailureTransport struct {
+	*fakeAgentSessionTransport
+	promptErr error
+}
+
+func (f *fakePromptFailureTransport) PostACP(ctx context.Context, podName, serverID, agent string, payload any) ([]byte, error) {
+	env, ok := payload.(jsonRPCEnvelope)
+	if !ok {
+		return nil, fmt.Errorf("unexpected payload type %T", payload)
+	}
+	if env.Method == "session/prompt" {
+		return nil, f.promptErr
+	}
+	return f.fakeAgentSessionTransport.PostACP(ctx, podName, serverID, agent, payload)
+}
+
 func (f *fakeFailingDeleteTransport) DeleteACP(_ context.Context, _ string, _ string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -2174,6 +2206,184 @@ func TestStop_DeleteHardFailure_PersistsToHarnessRunStatus(t *testing.T) {
 	}
 	if stored.Status.AgentSession.Phase != operatorv1alpha1.AgentSessionPhaseFailed {
 		t.Fatalf("agent session phase = %q, want Failed", stored.Status.AgentSession.Phase)
+	}
+}
+
+func TestCreate_Failure_PersistsToHarnessRunStatus(t *testing.T) {
+	api, cleanup := newTestAPI(t)
+	defer cleanup()
+	api.AgentSessions = newAgentSessionService(&fakeCreateFailureTransport{
+		fakeAgentSessionTransport: newFakeAgentSessionTransport(),
+		createErr:                 fmt.Errorf("sandbox-agent proxy POST returned 500: internal server error"),
+	}, newAgentSessionStore(""))
+
+	if err := api.Tokens.Create(context.Background(), "t-full", "full", []string{"harness-run:write", "harness-run:read"}); err != nil {
+		t.Fatalf("create token: %v", err)
+	}
+
+	run := &operatorv1alpha1.HarnessRun{
+		TypeMeta:   metav1.TypeMeta{APIVersion: operatorv1alpha1.GroupVersion.String(), Kind: "HarnessRun"},
+		ObjectMeta: metav1.ObjectMeta{Name: "run-create-fail-persist", Namespace: api.Namespace},
+		Spec: operatorv1alpha1.HarnessRunSpec{
+			RepoURL:    "https://example.com/repo",
+			Image:      "kocao/harness-runtime:dev",
+			WorkingDir: "/workspace/repo",
+			AgentSession: &operatorv1alpha1.AgentSessionSpec{
+				Runtime: operatorv1alpha1.AgentRuntimeSandboxAgent,
+				Agent:   operatorv1alpha1.AgentKindClaude,
+			},
+		},
+	}
+	if err := api.K8s.Create(context.Background(), run); err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	var stored operatorv1alpha1.HarnessRun
+	if err := api.K8s.Get(context.Background(), client.ObjectKeyFromObject(run), &stored); err != nil {
+		t.Fatalf("get run: %v", err)
+	}
+	stored.Status.PodName = "pod-create-fail-persist"
+	stored.Status.Phase = operatorv1alpha1.HarnessRunPhaseRunning
+	if err := api.K8s.Status().Update(context.Background(), &stored); err != nil {
+		t.Fatalf("update run status: %v", err)
+	}
+
+	srv := httptest.NewServer(api.Handler())
+	defer srv.Close()
+
+	resp, b := doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/harness-runs/"+run.Name+"/agent-session", "full", nil)
+	if resp.StatusCode != http.StatusBadGateway {
+		t.Fatalf("create status = %d, want 502 (body=%s)", resp.StatusCode, string(b))
+	}
+
+	if err := api.K8s.Get(context.Background(), client.ObjectKeyFromObject(run), &stored); err != nil {
+		t.Fatalf("get run after create failure: %v", err)
+	}
+	if stored.Status.AgentSession == nil {
+		t.Fatal("expected agent session status to be set after create failure")
+	}
+	if stored.Status.AgentSession.Phase != operatorv1alpha1.AgentSessionPhaseFailed {
+		t.Fatalf("agent session phase = %q, want Failed", stored.Status.AgentSession.Phase)
+	}
+}
+
+func TestPrompt_Failure_PersistsToHarnessRunStatus(t *testing.T) {
+	api, cleanup := newTestAPI(t)
+	defer cleanup()
+	transport := &fakePromptFailureTransport{
+		fakeAgentSessionTransport: newFakeAgentSessionTransport(),
+		promptErr:                 fmt.Errorf("sandbox-agent proxy POST returned 500: internal server error"),
+	}
+	api.AgentSessions = newAgentSessionService(transport, newAgentSessionStore(""))
+
+	if err := api.Tokens.Create(context.Background(), "t-full", "full", []string{"harness-run:write", "harness-run:read"}); err != nil {
+		t.Fatalf("create token: %v", err)
+	}
+
+	run := &operatorv1alpha1.HarnessRun{
+		TypeMeta:   metav1.TypeMeta{APIVersion: operatorv1alpha1.GroupVersion.String(), Kind: "HarnessRun"},
+		ObjectMeta: metav1.ObjectMeta{Name: "run-prompt-fail-persist", Namespace: api.Namespace},
+		Spec: operatorv1alpha1.HarnessRunSpec{
+			RepoURL:    "https://example.com/repo",
+			Image:      "kocao/harness-runtime:dev",
+			WorkingDir: "/workspace/repo",
+			AgentSession: &operatorv1alpha1.AgentSessionSpec{
+				Runtime: operatorv1alpha1.AgentRuntimeSandboxAgent,
+				Agent:   operatorv1alpha1.AgentKindClaude,
+			},
+		},
+	}
+	if err := api.K8s.Create(context.Background(), run); err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	var stored operatorv1alpha1.HarnessRun
+	if err := api.K8s.Get(context.Background(), client.ObjectKeyFromObject(run), &stored); err != nil {
+		t.Fatalf("get run: %v", err)
+	}
+	stored.Status.PodName = "pod-prompt-fail-persist"
+	stored.Status.Phase = operatorv1alpha1.HarnessRunPhaseRunning
+	if err := api.K8s.Status().Update(context.Background(), &stored); err != nil {
+		t.Fatalf("update run status: %v", err)
+	}
+
+	srv := httptest.NewServer(api.Handler())
+	defer srv.Close()
+
+	resp, b := doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/harness-runs/"+run.Name+"/agent-session", "full", nil)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create session status = %d (body=%s)", resp.StatusCode, string(b))
+	}
+
+	resp, b = doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/harness-runs/"+run.Name+"/agent-session/prompt", "full", map[string]any{"prompt": "fail this prompt"})
+	if resp.StatusCode != http.StatusBadGateway {
+		t.Fatalf("prompt status = %d, want 502 (body=%s)", resp.StatusCode, string(b))
+	}
+
+	if err := api.K8s.Get(context.Background(), client.ObjectKeyFromObject(run), &stored); err != nil {
+		t.Fatalf("get run after prompt failure: %v", err)
+	}
+	if stored.Status.AgentSession == nil {
+		t.Fatal("expected agent session status to be set after prompt failure")
+	}
+	if stored.Status.AgentSession.Phase != operatorv1alpha1.AgentSessionPhaseFailed {
+		t.Fatalf("agent session phase = %q, want Failed", stored.Status.AgentSession.Phase)
+	}
+}
+
+func TestStatus_LegacyActiveNormalizesToRunning(t *testing.T) {
+	api, cleanup := newTestAPI(t)
+	defer cleanup()
+	api.AgentSessions = newAgentSessionService(newFakeAgentSessionTransport(), newAgentSessionStore(""))
+
+	if err := api.Tokens.Create(context.Background(), "t-full", "full", []string{"harness-run:read"}); err != nil {
+		t.Fatalf("create token: %v", err)
+	}
+
+	run := &operatorv1alpha1.HarnessRun{
+		TypeMeta:   metav1.TypeMeta{APIVersion: operatorv1alpha1.GroupVersion.String(), Kind: "HarnessRun"},
+		ObjectMeta: metav1.ObjectMeta{Name: "run-legacy-active-status", Namespace: api.Namespace},
+		Spec: operatorv1alpha1.HarnessRunSpec{
+			RepoURL:    "https://example.com/repo",
+			Image:      "kocao/harness-runtime:dev",
+			WorkingDir: "/workspace/repo",
+			AgentSession: &operatorv1alpha1.AgentSessionSpec{
+				Runtime: operatorv1alpha1.AgentRuntimeSandboxAgent,
+				Agent:   operatorv1alpha1.AgentKindClaude,
+			},
+		},
+	}
+	if err := api.K8s.Create(context.Background(), run); err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	var stored operatorv1alpha1.HarnessRun
+	if err := api.K8s.Get(context.Background(), client.ObjectKeyFromObject(run), &stored); err != nil {
+		t.Fatalf("get run: %v", err)
+	}
+	stored.Status.PodName = "pod-legacy-active-status"
+	stored.Status.Phase = operatorv1alpha1.HarnessRunPhaseRunning
+	stored.Status.AgentSession = &operatorv1alpha1.AgentSessionStatus{
+		Runtime:   operatorv1alpha1.AgentRuntimeSandboxAgent,
+		Agent:     operatorv1alpha1.AgentKindClaude,
+		SessionID: "sas-legacy-active",
+		Phase:     operatorv1alpha1.AgentSessionPhaseActive,
+	}
+	if err := api.K8s.Status().Update(context.Background(), &stored); err != nil {
+		t.Fatalf("update run status: %v", err)
+	}
+
+	srv := httptest.NewServer(api.Handler())
+	defer srv.Close()
+
+	resp, b := doJSON(t, srv.Client(), http.MethodGet, srv.URL+"/api/v1/harness-runs/"+run.Name+"/agent-session", "full", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status code = %d, want 200 (body=%s)", resp.StatusCode, string(b))
+	}
+
+	var dto agentSessionDTO
+	if err := json.Unmarshal(b, &dto); err != nil {
+		t.Fatalf("unmarshal status response: %v", err)
+	}
+	if dto.Phase != operatorv1alpha1.AgentSessionPhaseRunning {
+		t.Fatalf("status phase = %q, want Running", dto.Phase)
 	}
 }
 

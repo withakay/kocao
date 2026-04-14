@@ -863,6 +863,7 @@ func (a *API) handleRunAgentSessionCreate(w http.ResponseWriter, r *http.Request
 	state, err := a.AgentSessions.EnsureSession(r.Context(), run)
 	if err != nil {
 		slog.Error("agent session create failed", "run", id, "error", err)
+		a.updateHarnessRunAgentSessionStatus(r.Context(), run, state)
 		writeError(w, http.StatusBadGateway, "agent session create failed")
 		return
 	}
@@ -893,6 +894,7 @@ func (a *API) handleRunAgentSessionPrompt(w http.ResponseWriter, r *http.Request
 	result, state, err := a.AgentSessions.Prompt(r.Context(), run, req.Prompt)
 	if err != nil {
 		slog.Error("agent session prompt failed", "run", id, "error", err)
+		a.updateHarnessRunAgentSessionStatus(r.Context(), run, state)
 		writeError(w, http.StatusBadGateway, "agent session prompt failed")
 		return
 	}
