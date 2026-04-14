@@ -17,7 +17,7 @@ and machine-readable output.
 The important lifecycle contract is:
 
 - the CLI uses `runId` as the canonical handle for follow-up actions
-- create, status, and stop all return the same public `runId` / `sessionId` / `phase` fields
+- create and status expose stable public `runId` / `sessionId` / `phase` fields, and stop returns the same identifiers under its nested `session` object
 - non-ready sessions may include `diagnostic.class`, `diagnostic.summary`, and `diagnostic.detail`
 - repeated create and stop calls are safe and should be treated as idempotent lifecycle reconciliation, not duplicate work
 
@@ -60,8 +60,8 @@ scripts/agent-list.sh
 scripts/agent-list.sh --workspace <workspace-id>
 ```
 
-Filter JSON output with `.[] | select(.phase == "Ready")` to find active
-agents.
+Filter JSON output with `.[] | select(.phase == "Ready" or .phase == "Running")`
+to find active agents.
 
 The table view includes a `BLOCKER` column so assistants can spot unhealthy
 sessions without opening each run individually.
