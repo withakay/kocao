@@ -415,7 +415,7 @@ assert_jq "${list_json}" --arg run_id "${run_id}" 'map(select(.runId == $run_id 
 
 log "sending prompt through live agent session"
 "${ROOT_DIR}/bin/kocao" --api-url "${KOCAO_API_URL}" --token "${KOCAO_TOKEN}" agent exec "${run_id}" --prompt 'hello live kind' --output json >"${exec_json}"
-assert_jq "${exec_json}" --arg prompt 'hello live kind' '.events | length > 0 and any(.[]; (.data | tostring | contains($prompt)) or (.data | tostring | contains("echo: " + $prompt)) or (.data.stopReason? == "completed"))' 'agent exec did not return prompt completion or response events'
+assert_jq "${exec_json}" --arg prompt 'hello live kind' '.events | length > 0 and any(.[]; (.data | tostring | contains($prompt)) or (.data | tostring | contains("echo: " + $prompt)) or (.data.result.stopReason? == "completed"))' 'agent exec did not return prompt completion or response events'
 
 log "verifying live agent logs for session creation and prompt traffic"
 if ! wait_for_logs_contains "${run_id}" "${logs_jsonl}" 'session/new'; then
