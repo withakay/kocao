@@ -857,15 +857,16 @@ func (a *API) handleSessionRunsCreate(w http.ResponseWriter, r *http.Request, wo
 			ImagePullSecrets:        req.ImagePullSecrets,
 			TTLSecondsAfterFinished: req.TTLSecondsAfterFinished,
 		},
-		Status: operatorv1alpha1.HarnessRunStatus{AgentSession: agentSessionStatus, ImageProfile: imageProfileStatus},
 	}
 	if err := a.K8s.Create(r.Context(), run); err != nil {
 		writeError(w, http.StatusInternalServerError, "create harness run failed")
 		return
 	}
-	if run.Spec.ImageProfile != nil || len(run.Annotations) != 0 {
-		if err := a.K8s.Update(r.Context(), run); err != nil {
-			writeError(w, http.StatusInternalServerError, "persist harness run profile contract failed")
+	if agentSessionStatus != nil || imageProfileStatus != nil {
+		run.Status.AgentSession = agentSessionStatus
+		run.Status.ImageProfile = imageProfileStatus
+		if err := a.K8s.Status().Update(r.Context(), run); err != nil {
+			writeError(w, http.StatusInternalServerError, "persist harness run initial status failed")
 			return
 		}
 	}

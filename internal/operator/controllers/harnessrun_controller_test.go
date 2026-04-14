@@ -405,6 +405,34 @@ func TestHarnessRunReconcile_TTLDeletesAfterCompletion(t *testing.T) {
 	}
 }
 
+func TestObserveStartupMetricsFromPod_ZeroDurationOnlyRecordedOnce(t *testing.T) {
+	run := &operatorv1alpha1.HarnessRun{}
+	pod := &corev1.Pod{
+		Status: corev1.PodStatus{
+			StartTime: &metav1.Time{Time: time.Unix(11, 0)},
+			ContainerStatuses: []corev1.ContainerStatus{{
+				Name: "harness",
+				State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{
+					StartedAt: metav1.Time{Time: time.Unix(11, 0)},
+				}},
+			}},
+		},
+	}
+
+	if !observeStartupMetricsFromPod(run, pod) {
+		t.Fatal("expected first observation to record startup metrics")
+	}
+	if run.Status.StartupMetrics == nil {
+		t.Fatal("expected startup metrics to be initialized")
+	}
+	if run.Status.StartupMetrics.ImagePullDurationMs != 0 {
+		t.Fatalf("imagePullDurationMs = %d, want 0", run.Status.StartupMetrics.ImagePullDurationMs)
+	}
+	if observeStartupMetricsFromPod(run, pod) {
+		t.Fatal("expected zero-duration metrics to be stable on repeat observation")
+	}
+}
+
 // --- Agent credential injection tests (002-05) ---
 
 func TestBuildHarnessPod_NoAgentAuth(t *testing.T) {

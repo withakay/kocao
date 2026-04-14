@@ -405,12 +405,11 @@ func observeStartupMetricsFromPod(run *operatorv1alpha1.HarnessRun, pod *corev1.
 		if m.ImagePullCompletedAt == nil {
 			m.ImagePullCompletedAt = &metav1.Time{Time: startedAt.UTC()}
 			changed = true
-		}
-		if m.ImagePullDurationMs == 0 && m.ImagePullStartedAt != nil {
-			duration := startedAt.Sub(m.ImagePullStartedAt.Time)
-			if duration >= 0 {
-				m.ImagePullDurationMs = duration.Milliseconds()
-				changed = true
+			if m.ImagePullStartedAt != nil {
+				duration := startedAt.Sub(m.ImagePullStartedAt.Time)
+				if duration >= 0 {
+					m.ImagePullDurationMs = duration.Milliseconds()
+				}
 			}
 		}
 	}
