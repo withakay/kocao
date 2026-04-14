@@ -863,9 +863,10 @@ func (a *API) handleSessionRunsCreate(w http.ResponseWriter, r *http.Request, wo
 		return
 	}
 	if agentSessionStatus != nil || imageProfileStatus != nil {
+		base := run.DeepCopy()
 		run.Status.AgentSession = agentSessionStatus
 		run.Status.ImageProfile = imageProfileStatus
-		if err := a.K8s.Status().Update(r.Context(), run); err != nil {
+		if err := a.K8s.Status().Patch(r.Context(), run, client.MergeFrom(base)); err != nil {
 			writeError(w, http.StatusInternalServerError, "persist harness run initial status failed")
 			return
 		}
