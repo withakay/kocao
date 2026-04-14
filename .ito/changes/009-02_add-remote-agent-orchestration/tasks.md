@@ -38,8 +38,8 @@ ______________________________________________________________________
 - **Verify**: UI design review or component-level tests
 - **Done When**: The dashboard structure is concrete enough to implement without guessing data shape later.
 - **Requirements**: web-ui:remote-agent-operations-dashboard
-- **Updated At**: 2026-04-13
-- **Status**: [ ] pending
+- **Updated At**: 2026-04-14
+- **Status**: [x] complete
 
 ______________________________________________________________________
 
