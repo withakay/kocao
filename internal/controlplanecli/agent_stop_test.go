@@ -134,6 +134,17 @@ func TestAgentStop_AlreadyStopped(t *testing.T) {
 			w.WriteHeader(http.StatusConflict)
 			_ = json.NewEncoder(w).Encode(map[string]any{"error": "agent session already stopped"})
 
+		case r.URL.Path == "/api/v1/harness-runs/run-done/agent-session" && r.Method == http.MethodGet:
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"sessionId":          "as-done",
+				"runId":              "run-done",
+				"displayName":        "my-agent",
+				"runtime":            "opencode",
+				"agent":              "claude",
+				"phase":              "Completed",
+				"workspaceSessionId": "ws-5",
+			})
+
 		default:
 			http.NotFound(w, r)
 		}
@@ -143,12 +154,15 @@ func TestAgentStop_AlreadyStopped(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 	code := Main([]string{"--api-url", srv.URL, "--token", "test-token", "agent", "stop", "run-done"}, &stdout, &stderr)
-	if code != 1 {
-		t.Fatalf("exit code = %d, want 1; stderr=%s", code, stderr.String())
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0; stderr=%s", code, stderr.String())
 	}
-	errOut := stderr.String()
-	if !strings.Contains(errOut, "already stopped") {
-		t.Errorf("expected 'already stopped' in stderr, got:\n%s", errOut)
+	out := stdout.String()
+	if !strings.Contains(out, "Agent session stopped") {
+		t.Errorf("expected stop summary in stdout, got:\n%s", out)
+	}
+	if !strings.Contains(out, "run-done") {
+		t.Errorf("expected run ID in output, got:\n%s", out)
 	}
 }
 

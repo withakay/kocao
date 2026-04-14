@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -142,6 +143,18 @@ type agentSessionState struct {
 	SessionID    string                             `json:"sessionId,omitempty"`
 	Phase        operatorv1alpha1.AgentSessionPhase `json:"phase,omitempty"`
 	LastSequence int64                              `json:"lastSequence,omitempty"`
+}
+
+type agentSessionOperationError struct {
+	statusCode int
+	message    string
+}
+
+func (e *agentSessionOperationError) Error() string {
+	if e == nil {
+		return ""
+	}
+	return e.message
 }
 
 type agentSessionBridge struct {
@@ -633,6 +646,12 @@ func (s *AgentSessionService) Prompt(ctx context.Context, run *operatorv1alpha1.
 	if strings.TrimSpace(text) == "" {
 		return nil, agentSessionState{}, fmt.Errorf("prompt required")
 	}
+	if state.Phase.IsTerminal() {
+		return nil, state, &agentSessionOperationError{
+			statusCode: http.StatusConflict,
+			message:    fmt.Sprintf("agent session is %s", strings.ToLower(string(state.Phase))),
+		}
+	}
 	bridge := s.bridgeFor(run)
 	bridge.mu.Lock()
 	bridge.transitionLocked(operatorv1alpha1.AgentSessionPhaseRunning)
@@ -927,6 +946,11 @@ func (a *API) handleRunAgentSessionPrompt(w http.ResponseWriter, r *http.Request
 	if err != nil {
 		slog.Error("agent session prompt failed", "run", id, "error", err)
 		a.updateHarnessRunAgentSessionStatus(r.Context(), run, state)
+		var opErr *agentSessionOperationError
+		if errors.As(err, &opErr) {
+			writeError(w, opErr.statusCode, opErr.message)
+			return
+		}
 		writeError(w, http.StatusBadGateway, "agent session prompt failed")
 		return
 	}

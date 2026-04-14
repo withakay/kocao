@@ -55,8 +55,8 @@ ______________________________________________________________________
 - **Verify**: `go test ./internal/controlplaneapi/... ./internal/controlplanecli/... ./cmd/kocao/...`
 - **Done When**: Repeated lifecycle calls return stable, documented outcomes and tests cover duplicate calls.
 - **Requirements**: agent-session-lifecycle:idempotent-operations, control-plane-api:session-api-safety-on-failure
-- **Updated At**: 2026-04-13
-- **Status**: [ ] pending
+- **Updated At**: 2026-04-14
+- **Status**: [x] complete
 
 ### Task 2.2: Add session diagnostics surfaces
 
