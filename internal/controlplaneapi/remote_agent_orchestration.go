@@ -744,6 +744,7 @@ func (s *RemoteAgentOrchestrationService) DispatchTask(requestedBy string, req r
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.expireTimedOutTasksLocked(time.Now().UTC())
 	agent, err := s.resolveAgentLocked(req.Target)
 	if err != nil {
 		return remoteAgentTask{}, err
@@ -968,7 +969,7 @@ func (s *RemoteAgentOrchestrationService) RetryTask(taskID string) (remoteAgentT
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	taskID = strings.TrimSpace(taskID)
-	s.expireTimedOutTaskLocked(taskID, time.Now().UTC())
+	s.expireTimedOutTasksLocked(time.Now().UTC())
 	task, ok := s.tasks[taskID]
 	if !ok {
 		return remoteAgentTask{}, &requestError{status: http.StatusNotFound, msg: "remote agent task not found"}

@@ -15,6 +15,25 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+func ageRemoteAgentTaskForTimeout(t *testing.T, service *RemoteAgentOrchestrationService, taskID string, age time.Duration) {
+	t.Helper()
+
+	service.mu.Lock()
+	defer service.mu.Unlock()
+
+	task, ok := service.tasks[taskID]
+	if !ok {
+		t.Fatalf("task %s not found", taskID)
+	}
+	assignedAt := time.Now().UTC().Add(-age).Format(time.RFC3339)
+	task.AssignedAt = assignedAt
+	task.LastTransitionAt = assignedAt
+	service.tasks[task.ID] = task
+	if service.store != nil {
+		service.store.SaveTask(task)
+	}
+}
+
 func createHarnessRunForRemoteAgent(t *testing.T, api *API, run operatorv1alpha1.HarnessRun) {
 	t.Helper()
 	if err := api.K8s.Create(context.Background(), &run); err != nil {
@@ -474,14 +493,7 @@ func TestRemoteAgentOrchestrationService_TimesOutAndCanRetryTask(t *testing.T) {
 		t.Fatalf("dispatch task: %v", err)
 	}
 
-	service.mu.Lock()
-	stored := service.tasks[task.ID]
-	assignedAt := time.Now().UTC().Add(-2 * time.Second).Format(time.RFC3339)
-	stored.AssignedAt = assignedAt
-	stored.LastTransitionAt = assignedAt
-	service.tasks[task.ID] = stored
-	service.store.SaveTask(stored)
-	service.mu.Unlock()
+	ageRemoteAgentTaskForTimeout(t, service, task.ID, 2*time.Second)
 
 	timedOut, ok := service.GetTask(task.ID)
 	if !ok {
@@ -510,6 +522,147 @@ func TestRemoteAgentOrchestrationService_TimesOutAndCanRetryTask(t *testing.T) {
 	}
 	if retried.CompletedAt != "" || retried.Result != nil || len(retried.OutputArtifacts) != 0 || len(retried.Transcript) != 0 {
 		t.Fatalf("expected retry to reset terminal attempt state, got %+v", retried)
+	}
+}
+
+func TestRemoteAgentOrchestrationService_DispatchExpiresTimedOutTaskWithoutRead(t *testing.T) {
+	store := newRemoteAgentOrchestrationStore(filepath.Join(t.TempDir(), "orchestration.jsonl"))
+	service := newRemoteAgentOrchestrationService(store, "", nil, nil)
+
+	agent, err := service.CreateAgent(remoteAgentCreateRequest{Name: "reviewer"})
+	if err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	first, err := service.DispatchTask("tester", remoteAgentTaskCreateRequest{
+		Target:         remoteAgentTaskTarget{AgentID: agent.ID},
+		Prompt:         "Review this change",
+		TimeoutSeconds: 1,
+	})
+	if err != nil {
+		t.Fatalf("dispatch first task: %v", err)
+	}
+	ageRemoteAgentTaskForTimeout(t, service, first.ID, 2*time.Second)
+
+	second, err := service.DispatchTask("tester", remoteAgentTaskCreateRequest{
+		Target:         remoteAgentTaskTarget{AgentID: agent.ID},
+		Prompt:         "Review the follow-up",
+		TimeoutSeconds: 1,
+	})
+	if err != nil {
+		t.Fatalf("dispatch second task: %v", err)
+	}
+	if second.ID == first.ID {
+		t.Fatalf("expected a new task after timeout, got %+v", second)
+	}
+
+	timedOut, ok := service.GetTask(first.ID)
+	if !ok {
+		t.Fatal("expected expired task to remain addressable")
+	}
+	if timedOut.State != remoteAgentTaskStateTimedOut {
+		t.Fatalf("task state = %s, want %s", timedOut.State, remoteAgentTaskStateTimedOut)
+	}
+
+	agent, ok = service.GetAgent(agent.ID)
+	if !ok {
+		t.Fatal("expected agent to remain addressable")
+	}
+	if agent.CurrentTaskID != second.ID || agent.Availability != remoteAgentAvailabilityBusy {
+		t.Fatalf("expected agent assigned to second task, got %+v", agent)
+	}
+}
+
+func TestRemoteAgentOrchestrationService_DispatchExpiresTimedOutTaskAfterReload(t *testing.T) {
+	store := newRemoteAgentOrchestrationStore(filepath.Join(t.TempDir(), "orchestration.jsonl"))
+	service := newRemoteAgentOrchestrationService(store, "", nil, nil)
+
+	agent, err := service.CreateAgent(remoteAgentCreateRequest{Name: "reviewer"})
+	if err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	first, err := service.DispatchTask("tester", remoteAgentTaskCreateRequest{
+		Target:         remoteAgentTaskTarget{AgentID: agent.ID},
+		Prompt:         "Review this change",
+		TimeoutSeconds: 1,
+	})
+	if err != nil {
+		t.Fatalf("dispatch first task: %v", err)
+	}
+	ageRemoteAgentTaskForTimeout(t, service, first.ID, 2*time.Second)
+
+	reloaded := newRemoteAgentOrchestrationService(store, "", nil, nil)
+	second, err := reloaded.DispatchTask("tester", remoteAgentTaskCreateRequest{
+		Target:         remoteAgentTaskTarget{AgentID: agent.ID},
+		Prompt:         "Review the follow-up",
+		TimeoutSeconds: 1,
+	})
+	if err != nil {
+		t.Fatalf("dispatch second task after reload: %v", err)
+	}
+	if second.ID == first.ID {
+		t.Fatalf("expected a new task after reload, got %+v", second)
+	}
+
+	timedOut, ok := reloaded.GetTask(first.ID)
+	if !ok {
+		t.Fatal("expected expired task to remain addressable after reload")
+	}
+	if timedOut.State != remoteAgentTaskStateTimedOut {
+		t.Fatalf("task state after reload = %s, want %s", timedOut.State, remoteAgentTaskStateTimedOut)
+	}
+
+	reloadedAgent, ok := reloaded.GetAgent(agent.ID)
+	if !ok {
+		t.Fatal("expected agent to remain addressable after reload")
+	}
+	if reloadedAgent.CurrentTaskID != second.ID || reloadedAgent.Availability != remoteAgentAvailabilityBusy {
+		t.Fatalf("expected agent assigned to second task after reload, got %+v", reloadedAgent)
+	}
+}
+
+func TestRemoteAgentOrchestrationService_RetryIgnoresTimedOutConflictingTask(t *testing.T) {
+	store := newRemoteAgentOrchestrationStore(filepath.Join(t.TempDir(), "orchestration.jsonl"))
+	service := newRemoteAgentOrchestrationService(store, "", nil, nil)
+
+	agent, err := service.CreateAgent(remoteAgentCreateRequest{Name: "reviewer"})
+	if err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	first, err := service.DispatchTask("tester", remoteAgentTaskCreateRequest{
+		Target: remoteAgentTaskTarget{AgentID: agent.ID},
+		Prompt: "Review this change",
+	})
+	if err != nil {
+		t.Fatalf("dispatch first task: %v", err)
+	}
+	if _, err := service.CancelTask(first.ID); err != nil {
+		t.Fatalf("cancel first task: %v", err)
+	}
+
+	conflicting, err := service.DispatchTask("tester", remoteAgentTaskCreateRequest{
+		Target:         remoteAgentTaskTarget{AgentID: agent.ID},
+		Prompt:         "Review conflicting change",
+		TimeoutSeconds: 1,
+	})
+	if err != nil {
+		t.Fatalf("dispatch conflicting task: %v", err)
+	}
+	ageRemoteAgentTaskForTimeout(t, service, conflicting.ID, 2*time.Second)
+
+	retried, err := service.RetryTask(first.ID)
+	if err != nil {
+		t.Fatalf("retry task: %v", err)
+	}
+	if retried.ID != first.ID || retried.State != remoteAgentTaskStateAssigned || retried.Attempt != 2 || retried.RetryCount != 1 {
+		t.Fatalf("unexpected retried task after clearing conflict: %+v", retried)
+	}
+
+	timedOut, ok := service.GetTask(conflicting.ID)
+	if !ok {
+		t.Fatal("expected conflicting task to remain addressable")
+	}
+	if timedOut.State != remoteAgentTaskStateTimedOut {
+		t.Fatalf("conflicting task state = %s, want %s", timedOut.State, remoteAgentTaskStateTimedOut)
 	}
 }
 
