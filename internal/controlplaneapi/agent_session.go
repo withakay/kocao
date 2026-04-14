@@ -1217,7 +1217,7 @@ func (a *API) handleRunAgentSessionPrompt(w http.ResponseWriter, r *http.Request
 	result, state, err := a.AgentSessions.Prompt(r.Context(), run, req.Prompt)
 	if err != nil {
 		slog.Error("agent session prompt failed", "run", id, "error", err)
-		a.updateHarnessRunAgentSessionStatus(r.Context(), run, state, false)
+		a.updateHarnessRunAgentSessionStatus(r.Context(), run, state, true)
 		var opErr *agentSessionOperationError
 		if errors.As(err, &opErr) {
 			writeError(w, opErr.statusCode, opErr.message)

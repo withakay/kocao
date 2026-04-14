@@ -3002,8 +3002,12 @@ func TestPrompt_Failure_PersistsToHarnessRunStatus(t *testing.T) {
 	}
 
 	run := &operatorv1alpha1.HarnessRun{
-		TypeMeta:   metav1.TypeMeta{APIVersion: operatorv1alpha1.GroupVersion.String(), Kind: "HarnessRun"},
-		ObjectMeta: metav1.ObjectMeta{Name: "run-prompt-fail-persist", Namespace: api.Namespace},
+		TypeMeta: metav1.TypeMeta{APIVersion: operatorv1alpha1.GroupVersion.String(), Kind: "HarnessRun"},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "run-prompt-fail-persist",
+			Namespace:         api.Namespace,
+			CreationTimestamp: metav1.NewTime(time.Now().Add(-2 * time.Second)),
+		},
 		Spec: operatorv1alpha1.HarnessRunSpec{
 			RepoURL:    "https://example.com/repo",
 			Image:      "kocao/harness-runtime:dev",
@@ -3048,6 +3052,12 @@ func TestPrompt_Failure_PersistsToHarnessRunStatus(t *testing.T) {
 	}
 	if stored.Status.AgentSession.Phase != operatorv1alpha1.AgentSessionPhaseFailed {
 		t.Fatalf("agent session phase = %q, want Failed", stored.Status.AgentSession.Phase)
+	}
+	if stored.Status.StartupMetrics == nil || stored.Status.StartupMetrics.FirstPromptAt == nil {
+		t.Fatalf("stored startup metrics = %#v, want firstPromptAt", stored.Status.StartupMetrics)
+	}
+	if stored.Status.StartupMetrics.TimeToFirstPromptMs == 0 {
+		t.Fatal("expected timeToFirstPromptMs to be recorded")
 	}
 }
 
