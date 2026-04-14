@@ -113,6 +113,7 @@ sandbox_host=127.0.0.1
 sandbox_port=2468
 sandbox_health_endpoint=$(jq -r '.healthEndpoint' "${profile}")
 sandbox_catalog_endpoint=$(jq -r '.agentCatalogEndpoint' "${profile}")
+sandbox_report_agents=$(jq -r '[.requiredAgents[], .requiredTools[] | select(. != "sandbox-agent")] | unique[]' "${profile}")
 sandbox_log="$(mktemp -t sandbox-agent-smoke.XXXXXX.log)"
 sandbox_pid=""
 
@@ -152,7 +153,7 @@ fi
 
 if [[ "${health_ok}" -eq 1 ]]; then
   agents_json="$(curl -fsS "http://${sandbox_host}:${sandbox_port}${sandbox_catalog_endpoint}" 2>/dev/null || true)"
-  for required_agent in $(jq -r '.smokeAgentCatalogAgents[]' "${profile}"); do
+  for required_agent in $(jq -r '.requiredAgents[]' "${profile}"); do
     if [[ -z "${agents_json}" ]] || ! jq -e --arg agent "${required_agent}" '.agents[]? | select(.id == $agent)' >/dev/null <<<"${agents_json}"; then
       echo "FAIL: sandbox-agent catalog missing ${required_agent}" >&2
       fail=1
@@ -162,7 +163,7 @@ if [[ "${health_ok}" -eq 1 ]]; then
   done
 
   report_json="$(sandbox-agent api agents report --endpoint "http://${sandbox_host}:${sandbox_port}" 2>/dev/null || true)"
-  for report_agent in $(jq -r '.smokeReportAgents[]' "${profile}"); do
+  for report_agent in ${sandbox_report_agents}; do
     if [[ -z "${report_json}" ]] || ! jq -e --arg agent "${report_agent}" '.agents[]? | select(.id == $agent and .installed == true)' >/dev/null <<<"${report_json}"; then
       echo "FAIL: sandbox-agent ${report_agent} agent is not installed" >&2
       fail=1

@@ -21,7 +21,5 @@
   "requiredAgents": ["claude", "codex", "opencode", "pi"],
   "smokeChecks": ["contract", "go", "web", "full"],
   "healthEndpoint": "/v1/health",
-  "agentCatalogEndpoint": "/v1/agents",
-  "smokeAgentCatalogAgents": ["claude", "codex", "mock", "opencode", "pi"],
-  "smokeReportAgents": ["mock"]
+  "agentCatalogEndpoint": "/v1/agents"
 }

@@ -84,7 +84,7 @@ RUN npm install -g "@mariozechner/pi-coding-agent@${PI_VERSION}" \
 ARG SANDBOX_AGENT_VERSION=0.4.2
 RUN npm install -g "@sandbox-agent/cli@${SANDBOX_AGENT_VERSION}" \
   && sandbox-agent --version \
-  && sandbox-agent install-agent mock
+  && for agent in claude codex mock opencode pi; do sandbox-agent install-agent "${agent}"; done
 
 RUN mkdir -p /home/kocao/.local/share/opencode /home/kocao/.codex /home/kocao/.pi \
   && chown -R 10001:10001 /home/kocao/.local/share/opencode /home/kocao/.codex /home/kocao/.pi
@@ -117,7 +117,35 @@ COPY --chown=10001:10001 build/harness/profiles/web.mise.toml /home/kocao/.confi
 RUN mise install --yes \
   && mise reshim
 
-FROM go-toolchain AS full-toolchain
+FROM agent-runtime AS contract-shared
+
+USER root
+COPY build/harness/kocao-harness-entrypoint.sh /usr/local/bin/kocao-harness-entrypoint
+COPY build/harness/kocao-git-askpass.sh /usr/local/bin/kocao-git-askpass
+COPY build/harness/smoke.sh /usr/local/bin/kocao-harness-smoke
+RUN chmod 0555 /usr/local/bin/kocao-harness-entrypoint /usr/local/bin/kocao-git-askpass /usr/local/bin/kocao-harness-smoke
+
+FROM contract-shared AS contract-base
+
+COPY build/harness/profiles/base.runtime-matrix.json /etc/kocao/runtime-matrix.json
+COPY build/harness/profiles/base.harness-profile.json /etc/kocao/harness-profile.json
+
+FROM contract-shared AS contract-go
+
+COPY build/harness/profiles/go.runtime-matrix.json /etc/kocao/runtime-matrix.json
+COPY build/harness/profiles/go.harness-profile.json /etc/kocao/harness-profile.json
+
+FROM contract-shared AS contract-web
+
+COPY build/harness/profiles/web.runtime-matrix.json /etc/kocao/runtime-matrix.json
+COPY build/harness/profiles/web.harness-profile.json /etc/kocao/harness-profile.json
+
+FROM contract-shared AS contract-full
+
+COPY build/harness/profiles/full.runtime-matrix.json /etc/kocao/runtime-matrix.json
+COPY build/harness/profiles/full.harness-profile.json /etc/kocao/harness-profile.json
+
+FROM go-toolchain AS full-extra-toolchains
 
 COPY --chown=10001:10001 build/harness/profiles/full.mise.toml /home/kocao/.config/mise/config.toml
 RUN mise install --yes \
@@ -127,15 +155,8 @@ RUN for v in 1.93.1 1.92.0 1.91.1; do \
       mise exec rust@${v} -- rustup component add rustfmt clippy rust-analyzer 2>/dev/null || true; \
     done
 
-FROM agent-runtime AS harness-profile-base
+FROM contract-base AS harness-profile-base
 
-USER root
-COPY build/harness/profiles/base.runtime-matrix.json /etc/kocao/runtime-matrix.json
-COPY build/harness/profiles/base.harness-profile.json /etc/kocao/harness-profile.json
-COPY build/harness/kocao-harness-entrypoint.sh /usr/local/bin/kocao-harness-entrypoint
-COPY build/harness/kocao-git-askpass.sh /usr/local/bin/kocao-git-askpass
-COPY build/harness/smoke.sh /usr/local/bin/kocao-harness-smoke
-RUN chmod 0555 /usr/local/bin/kocao-harness-entrypoint /usr/local/bin/kocao-git-askpass /usr/local/bin/kocao-harness-smoke
 USER 10001:10001
 WORKDIR /workspace
 RUN /usr/local/bin/kocao-harness-smoke
@@ -144,12 +165,10 @@ ENTRYPOINT ["/usr/bin/tini","--","/usr/local/bin/kocao-harness-entrypoint"]
 FROM go-toolchain AS harness-profile-go
 
 USER root
-COPY build/harness/profiles/go.runtime-matrix.json /etc/kocao/runtime-matrix.json
-COPY build/harness/profiles/go.harness-profile.json /etc/kocao/harness-profile.json
-COPY build/harness/kocao-harness-entrypoint.sh /usr/local/bin/kocao-harness-entrypoint
-COPY build/harness/kocao-git-askpass.sh /usr/local/bin/kocao-git-askpass
-COPY build/harness/smoke.sh /usr/local/bin/kocao-harness-smoke
-RUN chmod 0555 /usr/local/bin/kocao-harness-entrypoint /usr/local/bin/kocao-git-askpass /usr/local/bin/kocao-harness-smoke
+COPY --from=contract-go /etc/kocao /etc/kocao
+COPY --from=contract-go /usr/local/bin/kocao-harness-entrypoint /usr/local/bin/kocao-harness-entrypoint
+COPY --from=contract-go /usr/local/bin/kocao-git-askpass /usr/local/bin/kocao-git-askpass
+COPY --from=contract-go /usr/local/bin/kocao-harness-smoke /usr/local/bin/kocao-harness-smoke
 USER 10001:10001
 WORKDIR /workspace
 RUN /usr/local/bin/kocao-harness-smoke
@@ -158,26 +177,22 @@ ENTRYPOINT ["/usr/bin/tini","--","/usr/local/bin/kocao-harness-entrypoint"]
 FROM web-toolchain AS harness-profile-web
 
 USER root
-COPY build/harness/profiles/web.runtime-matrix.json /etc/kocao/runtime-matrix.json
-COPY build/harness/profiles/web.harness-profile.json /etc/kocao/harness-profile.json
-COPY build/harness/kocao-harness-entrypoint.sh /usr/local/bin/kocao-harness-entrypoint
-COPY build/harness/kocao-git-askpass.sh /usr/local/bin/kocao-git-askpass
-COPY build/harness/smoke.sh /usr/local/bin/kocao-harness-smoke
-RUN chmod 0555 /usr/local/bin/kocao-harness-entrypoint /usr/local/bin/kocao-git-askpass /usr/local/bin/kocao-harness-smoke
+COPY --from=contract-web /etc/kocao /etc/kocao
+COPY --from=contract-web /usr/local/bin/kocao-harness-entrypoint /usr/local/bin/kocao-harness-entrypoint
+COPY --from=contract-web /usr/local/bin/kocao-git-askpass /usr/local/bin/kocao-git-askpass
+COPY --from=contract-web /usr/local/bin/kocao-harness-smoke /usr/local/bin/kocao-harness-smoke
 USER 10001:10001
 WORKDIR /workspace
 RUN /usr/local/bin/kocao-harness-smoke
 ENTRYPOINT ["/usr/bin/tini","--","/usr/local/bin/kocao-harness-entrypoint"]
 
-FROM full-toolchain AS harness-profile-full
+FROM full-extra-toolchains AS harness-profile-full
 
 USER root
-COPY build/harness/profiles/full.runtime-matrix.json /etc/kocao/runtime-matrix.json
-COPY build/harness/profiles/full.harness-profile.json /etc/kocao/harness-profile.json
-COPY build/harness/kocao-harness-entrypoint.sh /usr/local/bin/kocao-harness-entrypoint
-COPY build/harness/kocao-git-askpass.sh /usr/local/bin/kocao-git-askpass
-COPY build/harness/smoke.sh /usr/local/bin/kocao-harness-smoke
-RUN chmod 0555 /usr/local/bin/kocao-harness-entrypoint /usr/local/bin/kocao-git-askpass /usr/local/bin/kocao-harness-smoke
+COPY --from=contract-full /etc/kocao /etc/kocao
+COPY --from=contract-full /usr/local/bin/kocao-harness-entrypoint /usr/local/bin/kocao-harness-entrypoint
+COPY --from=contract-full /usr/local/bin/kocao-git-askpass /usr/local/bin/kocao-git-askpass
+COPY --from=contract-full /usr/local/bin/kocao-harness-smoke /usr/local/bin/kocao-harness-smoke
 USER 10001:10001
 WORKDIR /workspace
 RUN /usr/local/bin/kocao-harness-smoke
