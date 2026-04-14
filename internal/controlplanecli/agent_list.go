@@ -97,15 +97,16 @@ func collectAgentSessions(ctx context.Context, client *Client, workspaceID strin
 
 func writeAgentSessionsTable(w io.Writer, sessions []AgentSession) error {
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
-	if _, err := fmt.Fprintln(tw, "SESSION ID\tRUN\tAGENT\tPHASE\tWORKSPACE\tCREATED"); err != nil {
+	if _, err := fmt.Fprintln(tw, "SESSION ID\tRUN\tAGENT\tPHASE\tBLOCKER\tWORKSPACE\tCREATED"); err != nil {
 		return err
 	}
 	for _, session := range sessions {
-		if _, err := fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n",
+		if _, err := fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
 			session.SessionID,
 			valueOrDash(session.RunID),
 			valueOrDash(session.Agent),
 			valueOrDash(session.Phase),
+			formatAgentSessionBlocker(session.Diagnostic),
 			valueOrDash(session.WorkspaceID),
 			formatAgentSessionCreatedAt(session.CreatedAt),
 		); err != nil {

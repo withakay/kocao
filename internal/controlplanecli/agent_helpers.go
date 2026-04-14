@@ -42,6 +42,13 @@ func formatAgentSessionCreatedAt(t time.Time) string {
 	return t.Format(time.RFC3339)
 }
 
+func formatAgentSessionBlocker(diag *AgentSessionDiagnostic) string {
+	if diag == nil || strings.TrimSpace(diag.Class) == "" {
+		return "-"
+	}
+	return diag.Class
+}
+
 func writeAgentSessionSummary(w io.Writer, heading string, session *AgentSession) error {
 	if heading != "" {
 		if _, err := fmt.Fprintln(w, heading); err != nil {

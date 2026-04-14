@@ -892,7 +892,7 @@ func (a *API) agentSessionToDTO(ctx context.Context, run *operatorv1alpha1.Harne
 func (a *API) agentSessionDiagnostic(ctx context.Context, run *operatorv1alpha1.HarnessRun, state agentSessionState) *agentSessionDiagnosticDTO {
 	phase := operatorv1alpha1.NormalizeAgentSessionPhase(string(state.Phase))
 	switch phase {
-	case operatorv1alpha1.AgentSessionPhaseReady, operatorv1alpha1.AgentSessionPhaseRunning, operatorv1alpha1.AgentSessionPhaseCompleted:
+	case operatorv1alpha1.AgentSessionPhaseReady, operatorv1alpha1.AgentSessionPhaseRunning, operatorv1alpha1.AgentSessionPhaseStopping, operatorv1alpha1.AgentSessionPhaseCompleted:
 		return nil
 	}
 

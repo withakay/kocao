@@ -752,6 +752,93 @@ func TestAgentSessionGet_ImagePullDiagnostic(t *testing.T) {
 	}
 }
 
+func TestAgentSessionGet_SandboxAgentReadinessDiagnosticForRunningPod(t *testing.T) {
+	api, cleanup := newTestAPI(t)
+	defer cleanup()
+	api.AgentSessions = newAgentSessionService(newFakeAgentSessionTransport(), newAgentSessionStore(""))
+
+	run := &operatorv1alpha1.HarnessRun{
+		ObjectMeta: metav1.ObjectMeta{Name: "run-sandbox-readiness", Namespace: api.Namespace},
+		Spec: operatorv1alpha1.HarnessRunSpec{
+			RepoURL:      "https://github.com/withakay/kocao",
+			Image:        "ghcr.io/withakay/kocao-agent:latest",
+			AgentSession: &operatorv1alpha1.AgentSessionSpec{Runtime: operatorv1alpha1.AgentRuntimeSandboxAgent, Agent: operatorv1alpha1.AgentKindCodex},
+		},
+		Status: operatorv1alpha1.HarnessRunStatus{
+			Phase:   operatorv1alpha1.HarnessRunPhaseRunning,
+			PodName: "pod-sandbox-readiness",
+			AgentSession: &operatorv1alpha1.AgentSessionStatus{
+				Runtime: operatorv1alpha1.AgentRuntimeSandboxAgent,
+				Agent:   operatorv1alpha1.AgentKindCodex,
+				Phase:   operatorv1alpha1.AgentSessionPhaseProvisioning,
+			},
+		},
+	}
+	if err := api.K8s.Create(context.Background(), run); err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "pod-sandbox-readiness", Namespace: api.Namespace},
+		Status: corev1.PodStatus{
+			Phase: corev1.PodRunning,
+		},
+	}
+	if err := api.K8s.Create(context.Background(), pod); err != nil {
+		t.Fatalf("create pod: %v", err)
+	}
+
+	state, _ := agentSessionStateFromHarnessRun(run)
+	diag := api.agentSessionDiagnostic(context.Background(), run, state)
+	if diag == nil {
+		t.Fatal("expected diagnostic")
+	}
+	if diag.Class != agentSessionBlockerSandboxAgentReadiness {
+		t.Fatalf("diagnostic class = %q, want %q", diag.Class, agentSessionBlockerSandboxAgentReadiness)
+	}
+	if !strings.Contains(diag.Detail, "running") {
+		t.Fatalf("diagnostic detail = %q, want running pod detail", diag.Detail)
+	}
+}
+
+func TestAgentSessionGet_StoppingHasNoProvisioningDiagnostic(t *testing.T) {
+	api, cleanup := newTestAPI(t)
+	defer cleanup()
+	api.AgentSessions = newAgentSessionService(newFakeAgentSessionTransport(), newAgentSessionStore(""))
+
+	run := &operatorv1alpha1.HarnessRun{
+		ObjectMeta: metav1.ObjectMeta{Name: "run-stopping", Namespace: api.Namespace},
+		Spec: operatorv1alpha1.HarnessRunSpec{
+			RepoURL:      "https://github.com/withakay/kocao",
+			Image:        "ghcr.io/withakay/kocao-agent:latest",
+			AgentSession: &operatorv1alpha1.AgentSessionSpec{Runtime: operatorv1alpha1.AgentRuntimeSandboxAgent, Agent: operatorv1alpha1.AgentKindCodex},
+		},
+		Status: operatorv1alpha1.HarnessRunStatus{
+			Phase:   operatorv1alpha1.HarnessRunPhaseRunning,
+			PodName: "pod-stopping",
+			AgentSession: &operatorv1alpha1.AgentSessionStatus{
+				Runtime: operatorv1alpha1.AgentRuntimeSandboxAgent,
+				Agent:   operatorv1alpha1.AgentKindCodex,
+				Phase:   operatorv1alpha1.AgentSessionPhaseStopping,
+			},
+		},
+	}
+	if err := api.K8s.Create(context.Background(), run); err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "pod-stopping", Namespace: api.Namespace},
+		Status:     corev1.PodStatus{Phase: corev1.PodPending},
+	}
+	if err := api.K8s.Create(context.Background(), pod); err != nil {
+		t.Fatalf("create pod: %v", err)
+	}
+
+	state, _ := agentSessionStateFromHarnessRun(run)
+	if diag := api.agentSessionDiagnostic(context.Background(), run, state); diag != nil {
+		t.Fatalf("diagnostic = %#v, want nil", diag)
+	}
+}
+
 func TestAgentSessionGet_AuthRepoAndNetworkDiagnostics(t *testing.T) {
 	tests := []struct {
 		name          string
