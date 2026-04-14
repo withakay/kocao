@@ -22,6 +22,8 @@ The harness image now:
 - starts `sandbox-agent server` automatically when a Harness Run is configured with an `agentSession`
 - validates the sandbox-agent health endpoint and supported agent catalog in `build/harness/smoke.sh`
 
+The planned harness profile split keeps that contract intact across every profile. `base`, `go`, `web`, and `full` may differ in workload runtimes, but each profile must still ship the same sandbox-agent entrypoint, health endpoint, and supported agent catalog.
+
 ## API flow
 
 ### 1. Start a Harness Run with an agent

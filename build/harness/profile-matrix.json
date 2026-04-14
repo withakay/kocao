@@ -1,0 +1,98 @@
+{
+  "version": 1,
+  "dockerfile": "build/Dockerfile.harness",
+  "defaultProfile": "base",
+  "compatibilityProfile": "full",
+  "buildOrder": ["base", "go", "web", "full"],
+  "sharedLayers": {
+    "os-common": {
+      "purpose": "Common Ubuntu base, apt tooling, non-root user, workspace paths, and tini",
+      "requiredFiles": ["/workspace", "/home/kocao", "/usr/bin/tini"]
+    },
+    "agent-runtime": {
+      "purpose": "Sandbox-agent and supported agent CLIs available in every profile",
+      "requiredTools": ["sandbox-agent", "claude", "codex", "opencode", "pi"]
+    },
+    "contract": {
+      "purpose": "Stable runtime contract files and scripts copied into every profile",
+      "requiredFiles": [
+        "/etc/kocao/runtime-matrix.json",
+        "/etc/kocao/harness-profile.json",
+        "/usr/local/bin/kocao-harness-entrypoint",
+        "/usr/local/bin/kocao-git-askpass",
+        "/usr/local/bin/kocao-harness-smoke"
+      ]
+    },
+    "native-build": {
+      "purpose": "Shared native build packages used by compile-heavy profiles",
+      "requiredTools": ["clang", "cmake", "gcc", "pkg-config"]
+    },
+    "go-toolchain": {
+      "purpose": "Go workload runtime layer",
+      "devRuntimes": ["go"]
+    },
+    "web-toolchain": {
+      "purpose": "JavaScript and TypeScript workload runtime layer",
+      "devRuntimes": ["node", "bun"]
+    },
+    "full-extra-toolchains": {
+      "purpose": "Additional polyglot runtimes kept only in the compatibility profile",
+      "devRuntimes": ["python", "rust", "dotnet", "zig", "uv"]
+    }
+  },
+  "compatibility": {
+    "workspaceDir": "/workspace",
+    "runAsUser": 10001,
+    "requiredAgents": ["claude", "codex", "mock", "opencode", "pi"],
+    "requiredTools": ["sandbox-agent", "claude", "codex", "opencode", "pi"],
+    "requiredEntrypoint": "/usr/local/bin/kocao-harness-entrypoint",
+    "requiredHealthEndpoint": "/v1/health",
+    "requiredAgentCatalogEndpoint": "/v1/agents"
+  },
+  "profiles": {
+    "base": {
+      "imageSuffix": "base",
+      "buildTarget": "harness-profile-base",
+      "inherits": [],
+      "layers": ["os-common", "agent-runtime", "contract"],
+      "devRuntimes": [],
+      "smokeChecks": ["contract"],
+      "intendedFor": ["repo inspection", "planning", "docs", "sandbox-agent sessions"]
+    },
+    "go": {
+      "imageSuffix": "go",
+      "buildTarget": "harness-profile-go",
+      "inherits": ["base"],
+      "layers": ["os-common", "agent-runtime", "contract", "native-build", "go-toolchain"],
+      "devRuntimes": ["go"],
+      "smokeChecks": ["contract", "go"],
+      "intendedFor": ["go build", "go test", "backend CLI work"]
+    },
+    "web": {
+      "imageSuffix": "web",
+      "buildTarget": "harness-profile-web",
+      "inherits": ["base"],
+      "layers": ["os-common", "agent-runtime", "contract", "web-toolchain"],
+      "devRuntimes": ["node", "bun"],
+      "smokeChecks": ["contract", "web"],
+      "intendedFor": ["pnpm", "bun", "frontend builds", "web test workflows"]
+    },
+    "full": {
+      "imageSuffix": "full",
+      "buildTarget": "harness-profile-full",
+      "inherits": ["go", "web"],
+      "layers": [
+        "os-common",
+        "agent-runtime",
+        "contract",
+        "native-build",
+        "go-toolchain",
+        "web-toolchain",
+        "full-extra-toolchains"
+      ],
+      "devRuntimes": ["go", "node", "bun", "python", "rust", "dotnet", "zig", "uv"],
+      "smokeChecks": ["contract", "go", "web", "full"],
+      "intendedFor": ["unknown workload", "polyglot repos", "compatibility fallback"]
+    }
+  }
+}

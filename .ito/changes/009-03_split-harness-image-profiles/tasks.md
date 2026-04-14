@@ -27,8 +27,8 @@ ______________________________________________________________________
 - **Verify**: profile build plan review or profile build smoke commands
 - **Done When**: There is a concrete, testable build plan for base/go/web/full profiles with preserved sandbox-agent compatibility.
 - **Requirements**: harness-image-profiles:profile-based-harness-images, harness-runtime:sandbox-agent-compatibility-across-profiles
-- **Updated At**: 2026-04-13
-- **Status**: [ ] pending
+- **Updated At**: 2026-04-14
+- **Status**: [x] complete
 
 ### Task 1.2: Define profile selection contract
 
