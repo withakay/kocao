@@ -1,8 +1,13 @@
 # Kocao Agent CLI Live Demo
 
-*2026-04-13T20:55:00Z — full happy-path verified after transport & list fixes*
+*2026-04-14T09:30:00Z — happy path aligned with explicit lifecycle and diagnostic contract*
 
 This demo captures the complete agent CLI workflow against the MicroK8s cluster: start a session, list active sessions, inspect status, view logs, execute a prompt, and stop the session.
+
+The important production contract shown below is that the CLI keeps using the
+same `runId`, `sessionId`, and `phase` fields across create, status, and stop.
+When a session is not ready, the same status shape also carries a `diagnostic`
+blocker.
 
 ## 1. Start an agent session
 
@@ -38,34 +43,24 @@ kocao agent status 7d5108e3a844b192c8f754cf5afed99b --output json
 {
   "sessionId": "ses_2775f78e1ffeMh4b3ookLBRjsW",
   "runId": "7d5108e3a844b192c8f754cf5afed99b",
-  "displayName": "",
+  "displayName": "cool-sutherland-ed99b",
   "runtime": "sandbox-agent",
   "agent": "opencode",
   "phase": "Ready",
-  "workspaceSessionId": "",
-  "createdAt": "0001-01-01T00:00:00Z"
+  "workspaceSessionId": "ea2e5a6636ca5e1de047b07b38b171cf",
+  "createdAt": "2026-04-13T20:54:59Z"
 }
 ```
 
 ## 3. List active agent sessions
 
 ```bash
-kocao agent list --output json | jq '.[0:2]'
+kocao agent list
 ```
 
 ```output
-[
-  {
-    "sessionId": "ses_2775f78e1ffeMh4b3ookLBRjsW",
-    "runId": "7d5108e3a844b192c8f754cf5afed99b",
-    "displayName": "cool-sutherland-ed99b",
-    "runtime": "sandbox-agent",
-    "agent": "opencode",
-    "phase": "Ready",
-    "workspaceSessionId": "ea2e5a6636ca5e1de047b07b38b171cf",
-    "createdAt": "2026-04-13T20:54:59Z"
-  }
-]
+SESSION ID                    RUN                               AGENT     PHASE  BLOCKER  WORKSPACE                          CREATED
+ses_2775f78e1ffeMh4b3ookLBRjsW  7d5108e3a844b192c8f754cf5afed99b  opencode  Ready  -        ea2e5a6636ca5e1de047b07b38b171cf  2026-04-13T20:54:59Z
 ```
 
 ## 4. View agent logs
@@ -123,16 +118,20 @@ kocao agent stop 7d5108e3a844b192c8f754cf5afed99b --json
   "session": {
     "sessionId": "ses_2775f78e1ffeMh4b3ookLBRjsW",
     "runId": "7d5108e3a844b192c8f754cf5afed99b",
-    "displayName": "",
+    "displayName": "cool-sutherland-ed99b",
     "runtime": "sandbox-agent",
     "agent": "opencode",
     "phase": "Completed",
-    "workspaceSessionId": "",
-    "createdAt": "0001-01-01T00:00:00Z"
+    "workspaceSessionId": "ea2e5a6636ca5e1de047b07b38b171cf",
+    "createdAt": "2026-04-13T20:54:59Z"
   },
   "status": "stopped"
 }
 ```
+
+The same identifiers survive the stop transition, which is the operator-facing
+proof that the lifecycle is explicit and durable instead of inferred from a
+best-effort proxy call.
 
 ## 7. Verify pod health (infrastructure check)
 

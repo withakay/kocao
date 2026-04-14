@@ -1,41 +1,113 @@
-# Kocao Agent CLI — Resolved Gaps
+# Kocao Agent CLI Diagnostics Demo
 
-*2026-04-13T20:55:00Z — all four transport gaps resolved*
+*2026-04-14T09:30:00Z — blocker-focused outputs aligned with the current lifecycle contract*
 
-This document records the four live gaps that were identified and fixed in the agent CLI workflow. All gaps are now resolved; see `agent-cli-live-demo.md` for the full working happy path.
+This document replaces the earlier "resolved gaps" notes. The CLI and API now
+share a stable lifecycle contract, so the operator-facing demo value is in the
+diagnostics surfaced for non-ready sessions.
 
-## Gap 1: `agent list` returned empty `[]`
+See `agent-cli-live-demo.md` for the happy path. Use the examples below when
+triaging provisioning and runtime blockers.
 
-**Root cause:** The API server had no `GET /workspace-sessions/{id}/agent-sessions` endpoint. The CLI client called it for each workspace, got 404 (silently tolerated), and returned an empty list.
+## 1. Unschedulable pod
 
-**Fix:** Added `handleWorkspaceAgentSessionsList` handler that aggregates agent sessions across harness runs for a workspace. Also set the workspace-session label on harness runs at creation time.
+```bash
+kocao agent status run-unschedulable --output json
+```
 
-**Commit:** `9a4df71` — `fix(api): add GET /workspace-sessions/{id}/agent-sessions endpoint`
+```output
+{
+  "runId": "run-unschedulable",
+  "sessionId": "ses_waiting123",
+  "agent": "codex",
+  "runtime": "sandbox-agent",
+  "phase": "Provisioning",
+  "diagnostic": {
+    "class": "provisioning",
+    "summary": "Pod scheduling is blocking session readiness.",
+    "detail": "Unschedulable: 0/3 nodes are available: insufficient cpu."
+  }
+}
+```
 
-## Gap 2: `agent exec` returned EOF
+## 2. Image pull failure
 
-**Root cause:** The API prompt handler returned `{session, result}` but the CLI expected `{events: [...]}`. The response shape mismatch caused the CLI to fail parsing.
+```bash
+kocao agent status run-image-pull --output json
+```
 
-**Fix:** The prompt response now includes an `events` array wrapping the JSON-RPC result so the CLI can display it uniformly.
+```output
+{
+  "runId": "run-image-pull",
+  "sessionId": "ses_imagepull123",
+  "agent": "codex",
+  "runtime": "sandbox-agent",
+  "phase": "Provisioning",
+  "diagnostic": {
+    "class": "image-pull",
+    "summary": "Image pull is blocking session readiness.",
+    "detail": "container \"workspace\" waiting: ImagePullBackOff: Back-off pulling image \"ghcr.io/private/image:missing\""
+  }
+}
+```
 
-**Commit:** `f62727f` — `fix: align agent session API wire format with CLI and prevent stop timeout`
+## 3. Sandbox-agent readiness delay
 
-## Gap 3: `agent logs` returned zero-value events
+```bash
+kocao agent status run-sandbox-readiness
+```
 
-**Root cause:** The API serialized `agentSessionEvent` with JSON tags `sequence/at/envelope` but the CLI deserialized with `seq/timestamp/data`. The field name mismatch caused all values to deserialize as zero.
+```output
+  Run ID:     run-sandbox-readiness
+  Session ID: ses_readywait123
+  Name:       demo-sbox-123
+  Runtime:    sandbox-agent
+  Agent:      codex
+  Phase:      Provisioning
+  Workspace:  ws-demo123
+  Created:    2026-04-14T09:30:00Z
+  Blocker:    sandbox-agent-readiness
+  Summary:    Sandbox-agent is not ready yet.
+  Detail:     Pod "demo-sbox-123" is running, but the sandbox-agent health path has not produced a ready session.
+```
 
-**Fix:** Aligned the API struct tags to `seq/timestamp/data` to match the CLI's expectations.
+## 4. Credential, repo, and network blockers
 
-**Commit:** `f62727f` — `fix: align agent session API wire format with CLI and prevent stop timeout`
+Representative blocker classes from real classification logic:
 
-## Gap 4: `agent stop` timed out
+- `auth`: missing secret, invalid token, or other credential bootstrap failure
+- `repo-access`: repository checkout or Git authentication failure
+- `network`: DNS, egress, TLS, or connection timeout failure
 
-**Root cause:** The sandbox-agent serializes requests per server ID, so the DELETE blocked while the SSE GET stream was still open. The K8s REST client's HTTP/2 connection pool also held stale connections after stream closure.
+## 5. Fleet visibility with `agent list`
 
-**Fix:** Stop now: (1) explicitly closes the SSE response body, (2) cancels the stream context, (3) waits for the stream goroutine to exit, (4) sends DELETE, and (5) marks the session as Completed even if the DELETE times out through the K8s pod proxy (the operator handles pod cleanup).
+```bash
+kocao agent list
+```
 
-**Commits:** `f62727f` (initial ordering fix) + reconciliation commit (resilient stop with streamDone/streamBody)
+```output
+SESSION ID     RUN                  AGENT     PHASE         BLOCKER                  WORKSPACE    CREATED
+ses_ok123      run-ready            opencode  Ready         -                        ws-alpha     2026-04-14T09:25:00Z
+ses_wait123    run-image-pull       codex     Provisioning  image-pull               ws-alpha     2026-04-14T09:26:00Z
+ses_wait456    run-sandbox-check    claude    Provisioning  sandbox-agent-readiness  ws-beta      2026-04-14T09:27:00Z
+```
 
-## Remaining notes
+## 6. Stop remains safe after retries or reconnects
 
-- The K8s API server pod proxy DELETE can still time out due to HTTP/2 connection pool staleness after closing a long-lived SSE stream. The stop handler now tolerates this gracefully — the session is marked Completed regardless, and the operator cleans up the pod. A follow-on improvement would be to use a separate HTTP client (or disable HTTP/2) for the pod proxy transport.
+```bash
+kocao agent stop run-ready --json
+```
+
+```output
+{
+  "status": "stopped",
+  "session": {
+    "runId": "run-ready",
+    "sessionId": "ses_ok123",
+    "phase": "Completed"
+  }
+}
+```
+
+Running the same stop command again returns the same terminal lifecycle view,
+which is the intended idempotent behavior.

@@ -4,6 +4,12 @@ This document shows how an AI assistant uses the `kocao-agent` skill to manage
 remote Kocao agent sessions. For real captured output, see the showboat demos in
 `demos/agent-cli-live-demo.md` and `demos/agent-cli-errors-demo.md`.
 
+The important contract points are:
+
+- the assistant tracks sessions by `runId`
+- `sessionId` and `phase` are returned consistently across start, status, and stop
+- non-ready sessions expose a blocker `diagnostic` that the assistant can relay directly to the operator
+
 ## Scene 1: Start a remote agent
 
 **User:** Start a remote codex agent for the kocao repo.
@@ -18,7 +24,7 @@ remote Kocao agent sessions. For real captured output, see the showboat demos in
 ```
 
 The wrapper returns JSON by default so the assistant can capture the `runId` for
-follow-up actions.
+follow-up actions and the `sessionId` for diagnostics/log correlation.
 
 ## Scene 2: Send a task to the agent
 
@@ -39,6 +45,24 @@ follow-up actions.
 
 ```bash
 .opencode/skills/kocao-agent/scripts/agent-status.sh <run-id>
+```
+
+If the session is still provisioning, the assistant should report the blocker
+class and summary instead of a vague "still starting" message.
+
+Representative JSON:
+
+```json
+{
+  "runId": "run-demo123",
+  "sessionId": "ses_demo123",
+  "phase": "Provisioning",
+  "diagnostic": {
+    "class": "sandbox-agent-readiness",
+    "summary": "Sandbox-agent is not ready yet.",
+    "detail": "Pod \"demo-run\" is running, but the sandbox-agent health path has not produced a ready session."
+  }
+}
 ```
 
 ## Scene 4: View logs
@@ -71,13 +95,16 @@ follow-up actions.
 .opencode/skills/kocao-agent/scripts/agent-stop.sh <run-id>
 ```
 
+Repeated stop requests are safe. The assistant can re-run the stop wrapper if it
+needs to confirm the terminal state after a reconnect or local restart.
+
 ## Summary
 
 This skill wraps the actual `kocao agent` commands so assistants can:
 
 1. start a remote agent run
 2. send a task through `kocao agent exec`
-3. inspect agent status
+3. inspect lifecycle phase and blocker diagnostics
 4. review event logs
-5. list active agent sessions
-6. stop the finished agent run
+5. list active agent sessions with blocker visibility
+6. stop the finished agent run without relying on transient local state

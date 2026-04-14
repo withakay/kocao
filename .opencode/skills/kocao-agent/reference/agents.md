@@ -6,6 +6,9 @@ The `kocao-agent` skill manages **agent sessions** in the Kocao control plane.
 Each agent session is attached to a harness run and is addressed by the harness
 run ID in the CLI.
 
+`runId` is the canonical public identifier. `sessionId` is stable session
+metadata returned once the sandbox-agent session exists.
+
 ## Supported Agents
 
 | Agent | Typical workflow |
@@ -90,6 +93,38 @@ kocao agent exec <run-id> --prompt TEXT [--output json]
 kocao agent stop <run-id> [--json]
 ```
 
+## Lifecycle contract
+
+The current lifecycle phases are:
+
+- `Provisioning`
+- `Ready`
+- `Running`
+- `Stopping`
+- `Completed`
+- `Failed`
+
+The same public fields are used across the main session endpoints and CLI views:
+
+- `runId`
+- `sessionId`
+- `phase`
+- `agent`
+- `runtime`
+- `workspaceSessionId`
+- `displayName`
+- `createdAt`
+- `diagnostic` when a blocker is present
+
+`diagnostic.class` can currently be one of:
+
+- `provisioning`
+- `image-pull`
+- `sandbox-agent-readiness`
+- `auth`
+- `repo-access`
+- `network`
+
 ## Behavior Notes
 
 ### `agent-start.sh`
@@ -98,6 +133,7 @@ kocao agent stop <run-id> [--json]
 - waits for the agent session to become ready unless the command times out
 - `--quiet` prints only the run ID
 - supports remote-cluster flags like `--image-pull-secret` and `--egress-mode`
+- repeated underlying create/status polling is intentional and safe because session creation is idempotent
 
 ### `agent-exec.sh`
 
@@ -110,6 +146,11 @@ kocao agent stop <run-id> [--json]
 - defaults to JSON for one-shot fetches
 - accepts `--follow` and `--tail`
 - `--no-json` switches back to the CLI's human-readable event table
+
+### `agent-stop.sh`
+
+- returns the terminal lifecycle state when the CLI can fetch it after stop
+- repeated stop calls are safe and should keep returning a terminal view
 
 ## Troubleshooting
 
@@ -130,7 +171,14 @@ The run ID is wrong, expired, or belongs to another cluster/environment.
 
 ### Session stuck in `Provisioning`
 
-Check whether Kubernetes can schedule and start the harness pod:
+First inspect the CLI blocker output:
+
+```bash
+kocao agent status <run-id>
+kocao agent list
+```
+
+If the blocker points to Kubernetes provisioning, check whether the cluster can schedule and start the harness pod:
 
 ```bash
 kubectl -n kocao-system get pods
@@ -138,5 +186,11 @@ kubectl -n kocao-system describe pod <pod-name>
 kubectl -n kocao-system logs <pod-name> -c harness
 ```
 
-Look for scheduling failures, image pull errors, revision checkout failures, or
-missing secrets.
+Map common blockers like this:
+
+- `provisioning`: pod not scheduled or not visible yet
+- `image-pull`: image or registry access failure
+- `sandbox-agent-readiness`: pod is running but sandbox-agent is not healthy yet
+- `auth`: missing or invalid credentials/secret wiring
+- `repo-access`: checkout or remote repository access failure
+- `network`: DNS, egress, or connection failure

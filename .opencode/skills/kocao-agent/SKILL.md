@@ -14,6 +14,13 @@ inspect, and control agent sessions running inside ephemeral Kubernetes pods.
 This skill wraps those commands in small shell scripts with consistent defaults
 and machine-readable output.
 
+The important lifecycle contract is:
+
+- the CLI uses `runId` as the canonical handle for follow-up actions
+- create, status, and stop all return the same public `runId` / `sessionId` / `phase` fields
+- non-ready sessions may include `diagnostic.class`, `diagnostic.summary`, and `diagnostic.detail`
+- repeated create and stop calls are safe and should be treated as idempotent lifecycle reconciliation, not duplicate work
+
 ## Prerequisites
 
 - `kocao` binary in `PATH`
@@ -39,6 +46,8 @@ and machine-readable output.
 - usage problems exit with code `2`
 - runtime/API failures exit with code `1`
 - all wrappers rely on `kocao agent`, not ad-hoc REST calls
+- lifecycle phases are `Provisioning`, `Ready`, `Running`, `Stopping`, `Completed`, and `Failed`
+- blocker classes currently include `provisioning`, `image-pull`, `sandbox-agent-readiness`, `auth`, `repo-access`, and `network`
 
 ## Workflows
 
@@ -54,6 +63,9 @@ scripts/agent-list.sh --workspace <workspace-id>
 Filter JSON output with `.[] | select(.phase == "Ready")` to find active
 agents.
 
+The table view includes a `BLOCKER` column so assistants can spot unhealthy
+sessions without opening each run individually.
+
 ### 2. Start a remote agent
 
 ```bash
@@ -67,6 +79,9 @@ Useful flags:
 - `--egress-mode full` when the harness needs unrestricted outbound access
 - `--quiet` to print only the run ID
 
+The wrapper waits until the lifecycle reaches `Ready`. If the wait times out,
+use `scripts/agent-status.sh <run-id>` to surface the current blocker.
+
 ### 3. Check agent status
 
 ```bash
@@ -75,7 +90,10 @@ scripts/agent-status.sh <run-id> --no-json
 ```
 
 The JSON status payload includes run ID, session ID, runtime, agent, phase,
-workspace session ID, and created time.
+workspace session ID, created time, and an optional `diagnostic` object.
+
+When `diagnostic` is present, assistants should surface the blocker class and
+summary directly instead of paraphrasing away the failure mode.
 
 ### 4. Send a task to a remote agent
 
@@ -100,6 +118,9 @@ scripts/agent-stop.sh <run-id>
 scripts/agent-stop.sh <run-id> --no-json
 ```
 
+`agent-stop.sh` returns the terminal session view from the CLI. Re-running stop
+after reconnects is safe and is the preferred way to confirm a terminal phase.
+
 ### 7. Multi-agent workflow
 
 ```bash
@@ -122,7 +143,7 @@ Use this skill for prompts like:
 
 - “What remote agents are running right now?”
 - “Start a codex agent for this repo and wait until it is ready.”
-- “Check the status of run `hr-123`.”
+- “Check the status of run `hr-123` and tell me what blocker is preventing readiness.”
 - “Show the last 100 events from that agent session.”
 - “Stop the finished agent run.”
 - “Send this prompt to the remote agent.”

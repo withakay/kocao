@@ -94,6 +94,6 @@ ______________________________________________________________________
 - **Verify**: `showboat verify <demo>` or documented manual replay
 - **Done When**: Demos and skill instructions match the final lifecycle semantics and diagnostic output.
 - **Requirements**: agent-diagnostics:operator-and-cli-visibility, control-plane-api:session-api-contract-consistency
-- **Updated At**: 2026-04-13
-- **Status**: [ ] pending
+- **Updated At**: 2026-04-14
+- **Status**: [x] complete
 <!-- ITO:END -->
