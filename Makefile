@@ -26,7 +26,10 @@ help:
 		"  kind-up             Create local kind cluster" \
 		"  kind-down           Delete local kind cluster" \
 		"  images              Build local Docker images" \
+		"  harness-images      Build all harness image profiles" \
 		"  kind-load-images    Load images into kind" \
+		"  kind-prepull-harness-profiles Build and load harness profiles into kind" \
+		"  microk8s-prepull-harness-profiles Pre-pull registry-backed harness profiles on MicroK8s" \
 		"  seed-agent-secrets  Copy local OAuth auth into k8s secret" \
 		"  deploy              Apply kustomize overlay" \
 		"  deploy-restart      Apply overlay + restart control-plane pods" \
@@ -116,6 +119,14 @@ kind-load-images: tools
 
 .PHONY: kind-load-images-live-agent
 kind-load-images-live-agent: kind-load-images
+
+.PHONY: kind-prepull-harness-profiles
+kind-prepull-harness-profiles: tools harness-images
+	KIND_CLUSTER_NAME="$(KIND_CLUSTER_NAME)" KIND_BIN="$(KIND)" bash ./hack/dev/prepull-harness-images.sh kind
+
+.PHONY: microk8s-prepull-harness-profiles
+microk8s-prepull-harness-profiles:
+	bash ./hack/dev/prepull-harness-images.sh microk8s
 
 .PHONY: harness-smoke
 harness-smoke: harness-images

@@ -9,6 +9,14 @@ same `runId`, `sessionId`, and `phase` fields across create, status, and stop.
 When a session is not ready, the same status shape also carries a `diagnostic`
 blocker.
 
+Before the live demo, warm the common harness profiles on the cluster so the first profile-specific run is not blocked on a cold image pull:
+
+```bash
+HARNESS_IMAGE=ghcr.io/withakay/kocao/harness-runtime IMAGE_TAG=dev-microk8s-amd64fix \
+  IMAGE_PULL_SECRETS=ghcr-pull \
+  make microk8s-prepull-harness-profiles
+```
+
 ## 1. Start an agent session
 
 ```bash

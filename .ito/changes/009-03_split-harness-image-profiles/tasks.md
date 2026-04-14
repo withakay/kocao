@@ -83,8 +83,8 @@ ______________________________________________________________________
 - **Verify**: documented cluster prep workflow and smoke validation
 - **Done When**: Dev clusters can be primed with common profiles before live demos or tests.
 - **Requirements**: harness-image-profiles:development-cluster-prepull-support
-- **Updated At**: 2026-04-13
-- **Status**: [ ] pending
+- **Updated At**: 2026-04-14
+- **Status**: [x] complete
 
 ### Task 3.2: Add startup performance instrumentation and demos
 

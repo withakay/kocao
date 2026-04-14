@@ -159,10 +159,21 @@ make harness-smoke
 kubectl config current-context  # Must be kind-kocao-dev
 make images                     # Build all images (api, operator, web, harness, sidecar)
 make kind-load-images           # Load into Kind
+make kind-prepull-harness-profiles  # Load base/go/web/full harness profiles before live runs
 make deploy                     # Apply kustomize overlay
 make deploy-wait                # Wait for rollout
 make seed-agent-secrets         # Copy local OAuth tokens
 ```
+
+For registry-backed dev clusters, pre-pull the common harness profiles before a demo so the first profiled run does not pay the full image download cost:
+
+```bash
+HARNESS_IMAGE=ghcr.io/withakay/kocao/harness-runtime IMAGE_TAG=dev-microk8s-amd64fix \
+  IMAGE_PULL_SECRETS=ghcr-pull \
+  bash ./hack/dev/prepull-harness-images.sh microk8s
+```
+
+The script uses a short-lived DaemonSet for MicroK8s and other registry-backed dev clusters. Set `PREPULL_CONTEXT` if your kube context is not `microk8s`, or use `kind` mode to load locally built images straight into Kind.
 
 **Important**: When creating Harness Runs in Kind, use `"egressMode":"full"` to allow the pod to reach external git hosts and API endpoints. The default `restricted` egress mode only allows DNS.
 
