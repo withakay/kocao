@@ -7,6 +7,12 @@ import type {
 } from './api'
 
 export const remoteAgentDashboardBaseRoute = '/remote-agents'
+export const remoteAgentTaskListSearchDefaults = {
+  q: '',
+  pool: 'all',
+  state: 'all',
+  artifacts: 'all',
+} as const
 
 export type RemoteAgentDashboardResource = 'agents' | 'tasks' | 'transcripts' | 'artifacts'
 

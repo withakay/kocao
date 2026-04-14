@@ -5,6 +5,7 @@ import { api } from '../lib/api'
 import { usePollingQuery } from '../lib/usePolling'
 import { Topbar } from '../components/Topbar'
 import { Btn, ErrorBanner } from '../components/primitives'
+import { remoteAgentTaskListSearchDefaults } from '../lib/remoteAgentDashboard'
 import { formatTimestamp, TaskDetailSections } from './remoteAgentDashboardShared'
 
 export function RemoteAgentTaskDetailPage() {
@@ -44,7 +45,7 @@ export function RemoteAgentTaskDetailPage() {
 
       <div className="flex-1 overflow-y-auto p-4 space-y-3">
         <div className="flex flex-wrap items-center gap-2 text-sm">
-          <Link className="text-primary hover:underline" to="/remote-agents/tasks">Back to tasks</Link>
+          <Link className="text-primary hover:underline" to="/remote-agents/tasks" search={remoteAgentTaskListSearchDefaults}>Back to tasks</Link>
           {task?.agentId ? <Link className="text-primary hover:underline" to="/remote-agents/agents/$agentId" params={{ agentId: task.agentId }}>Assigned agent</Link> : null}
           <Link className="text-primary hover:underline" to="/remote-agents/tasks/$taskId/transcript" params={{ taskId: id }}>Transcript</Link>
           <Link className="text-primary hover:underline" to="/remote-agents/tasks/$taskId/artifacts" params={{ taskId: id }}>Artifacts</Link>

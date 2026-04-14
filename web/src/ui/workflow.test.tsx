@@ -1,9 +1,13 @@
-import { render, screen, within } from '@testing-library/react'
+import { cleanup, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { http, HttpResponse } from 'msw'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { server } from '../test/server'
 import { App } from './App'
+
+afterEach(() => {
+  cleanup()
+})
 
 // Mock terminal adapter factory — avoids loading real xterm/ghostty WASM in jsdom
 vi.mock('./lib/terminal-adapter', async (importOriginal) => {
@@ -729,11 +733,8 @@ describe('shell-layout', () => {
     unmount()
   })
 
-  it('renders remote-agent dashboard route with task detail, transcript, and artifacts', async () => {
-    sessionStorage.setItem('kocao.apiToken', 't-full')
-    window.location.hash = '#/remote-agents/tasks'
-
-    server.use(
+  function remoteAgentHandlers() {
+    return [
       http.get('/api/v1/remote-agents', () => HttpResponse.json({
         remoteAgents: [
           {
@@ -747,6 +748,18 @@ describe('shell-layout', () => {
             workspaceSessionId: 'ws-42',
           },
         ],
+      })),
+      http.get('/api/v1/remote-agents/agent-reviewer', () => HttpResponse.json({
+        id: 'agent-reviewer',
+        name: 'reviewer',
+        displayName: 'Reviewer',
+        poolName: 'backend',
+        availability: 'busy',
+        description: 'Reviews and validates submitted patches.',
+        currentTaskId: 'task-42',
+        lastActivityAt: '2026-04-14T09:00:00Z',
+        workspaceSessionId: 'ws-42',
+        currentSession: { sessionId: 'sess-9', podName: 'agent-reviewer-0', runtime: 'opencode', agent: 'reviewer' },
       })),
       http.get('/api/v1/remote-agent-pools', () => HttpResponse.json({
         remoteAgentPools: [{ id: 'pool-backend', name: 'backend' }],
@@ -763,6 +776,17 @@ describe('shell-layout', () => {
             attempt: 1,
             lastTransitionAt: '2026-04-14T09:10:00Z',
             result: { summary: 'Patched worker retry handling', outcome: 'completed', transcriptEntries: 2, outputArtifactCount: 1 },
+          },
+          {
+            id: 'task-24',
+            state: 'running',
+            agentId: 'agent-reviewer',
+            agentName: 'Reviewer',
+            poolName: 'backend',
+            workspaceSessionId: 'ws-24',
+            attempt: 2,
+            lastTransitionAt: '2026-04-14T09:05:00Z',
+            result: { summary: 'Streaming live review output', outcome: 'running', transcriptEntries: 1, outputArtifactCount: 0 },
           },
         ],
       })),
@@ -792,11 +816,59 @@ describe('shell-layout', () => {
           { id: 'artifact-1', name: 'review.md', kind: 'report', mediaType: 'text/markdown', sizeBytes: 128 },
         ],
       })),
-    )
+    ]
+  }
+
+  it('redirects /remote-agents to tasks and keeps pools as a filter dimension', async () => {
+    sessionStorage.setItem('kocao.apiToken', 't-full')
+    window.location.hash = '#/remote-agents'
+    server.use(...remoteAgentHandlers())
 
     const { unmount } = render(<App />)
 
-    await screen.findByRole('heading', { name: 'Remote Agents' })
+    await screen.findByText('Current Tasks')
+    expect(window.location.hash).toContain('#/remote-agents/tasks')
+    expect((await screen.findAllByText('Pool')).length).toBeGreaterThan(0)
+    expect((await screen.findAllByText('Artifacts')).length).toBeGreaterThan(0)
+    expect(screen.queryByRole('link', { name: 'Pools' })).toBeNull()
+
+    unmount()
+  })
+
+  it('makes overview cards pivot into filtered task subsets', async () => {
+    sessionStorage.setItem('kocao.apiToken', 't-full')
+    window.location.hash = '#/remote-agents/tasks'
+    server.use(...remoteAgentHandlers())
+
+    const user = userEvent.setup()
+    const { unmount } = render(<App />)
+
+    await screen.findByText('Current Tasks')
+    const terminalCard = (await screen.findAllByRole('link', { name: /Terminal Tasks \(24h\)/ }))[0]
+    await user.click(terminalCard)
+    expect(decodeURIComponent(window.location.hash)).toContain('state=terminal')
+    expect(screen.getByDisplayValue('Terminal only')).toBeTruthy()
+    expect(screen.queryByText('task-24')).toBeNull()
+
+    const artifactCard = (await screen.findAllByRole('link', { name: /Artifacts \(24h\)/ }))[0]
+    await user.click(artifactCard)
+    const filteredHash = decodeURIComponent(window.location.hash)
+    expect(filteredHash).toContain('state=terminal')
+    expect(filteredHash).toContain('artifacts=with-output')
+    expect(screen.getByDisplayValue('With artifacts')).toBeTruthy()
+    expect(screen.queryByText('task-24')).toBeNull()
+
+    unmount()
+  })
+
+  it('renders remote-agent dashboard route with task detail, transcript, and artifacts', async () => {
+    sessionStorage.setItem('kocao.apiToken', 't-full')
+    window.location.hash = '#/remote-agents/tasks'
+    server.use(...remoteAgentHandlers())
+
+    const { unmount } = render(<App />)
+
+    await screen.findByText('Current Tasks')
     await screen.findByText('task-42')
     expect(await screen.findAllByText('Patched worker retry handling')).toHaveLength(2)
     await screen.findByText('review.md')
@@ -804,7 +876,77 @@ describe('shell-layout', () => {
 
     unmount()
   })
-})
+
+  it('renders remote-agent agents list route', async () => {
+    sessionStorage.setItem('kocao.apiToken', 't-full')
+    window.location.hash = '#/remote-agents/agents'
+    server.use(...remoteAgentHandlers())
+
+    const { unmount } = render(<App />)
+
+    await screen.findByText('Active Remote Agents')
+    await screen.findByText('Open full agent detail')
+    await screen.findByText('Reviews and validates submitted patches.')
+
+    unmount()
+  })
+
+  it('renders remote-agent agent detail route', async () => {
+    sessionStorage.setItem('kocao.apiToken', 't-full')
+    window.location.hash = '#/remote-agents/agents/agent-reviewer'
+    server.use(...remoteAgentHandlers())
+
+    const { unmount } = render(<App />)
+
+    await screen.findByRole('heading', { name: 'Agent Reviewer' })
+    await screen.findByText('Open current task')
+    await screen.findByText('Reviews and validates submitted patches.')
+
+    unmount()
+  })
+
+  it('renders remote-agent task detail route', async () => {
+    sessionStorage.setItem('kocao.apiToken', 't-full')
+    window.location.hash = '#/remote-agents/tasks/task-42'
+    server.use(...remoteAgentHandlers())
+
+    const { unmount } = render(<App />)
+
+    await screen.findByRole('heading', { name: 'Task task-42' })
+    await screen.findByRole('link', { name: 'Artifacts' })
+    await screen.findByText('review.md')
+
+    unmount()
+  })
+
+  it('renders remote-agent transcript route', async () => {
+    sessionStorage.setItem('kocao.apiToken', 't-full')
+    window.location.hash = '#/remote-agents/tasks/task-42/transcript'
+    server.use(...remoteAgentHandlers())
+
+    const { unmount } = render(<App />)
+
+    await screen.findByRole('heading', { name: 'Transcript task-42' })
+    expect((await screen.findAllByText('Review the orchestration patch')).length).toBeGreaterThan(0)
+    expect((await screen.findAllByText('Patched worker retry handling')).length).toBeGreaterThan(0)
+
+    unmount()
+  })
+
+  it('renders remote-agent artifacts route', async () => {
+    sessionStorage.setItem('kocao.apiToken', 't-full')
+    window.location.hash = '#/remote-agents/tasks/task-42/artifacts'
+    server.use(...remoteAgentHandlers())
+
+    const { unmount } = render(<App />)
+
+    await screen.findByRole('heading', { name: 'Artifacts task-42' })
+    await screen.findByText('review.md')
+    await screen.findByText('128 B')
+
+    unmount()
+  })
+  })
 
 
 describe('terminal-engine-selection', () => {

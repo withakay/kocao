@@ -9,7 +9,7 @@ import type {
   RemoteAgentTaskState,
   RemoteAgentTranscriptEntry,
 } from '../lib/api'
-import { remoteAgentTaskStateGroups, summarizeTranscript } from '../lib/remoteAgentDashboard'
+import { remoteAgentTaskListSearchDefaults, remoteAgentTaskStateGroups, summarizeTranscript } from '../lib/remoteAgentDashboard'
 import { Badge, Card, CardHeader, CollapsibleSection, DetailRow, EmptyRow, Table, Td, Th, btnClass } from '../components/primitives'
 
 export function formatTimestamp(value?: string): string {
@@ -85,22 +85,34 @@ export function RemoteAgentOverviewCards({ agents, tasks }: { agents: RemoteAgen
 
   const cards = [
     { label: 'Active Agents', value: String(activeAgents), to: '/remote-agents/agents' as const },
-    { label: 'Active Tasks', value: String(activeTasks), to: '/remote-agents/tasks' as const },
-    { label: 'Terminal Tasks (24h)', value: String(terminalTasks24h), to: '/remote-agents/tasks' as const },
-    { label: 'Artifacts (24h)', value: String(artifacts24h), to: '/remote-agents/tasks' as const },
+    { label: 'Active Tasks', value: String(activeTasks), to: '/remote-agents/tasks' as const, search: { ...remoteAgentTaskListSearchDefaults, state: 'active' as const } },
+    { label: 'Terminal Tasks (24h)', value: String(terminalTasks24h), to: '/remote-agents/tasks' as const, search: { ...remoteAgentTaskListSearchDefaults, state: 'terminal' as const } },
+    { label: 'Artifacts (24h)', value: String(artifacts24h), to: '/remote-agents/tasks' as const, search: { ...remoteAgentTaskListSearchDefaults, state: 'terminal' as const, artifacts: 'with-output' as const } },
   ]
 
   return (
     <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-4">
       {cards.map((card) => (
-        <Link
-          key={card.label}
-          className="rounded-lg border border-border/60 bg-card px-3 py-2 transition-colors hover:bg-muted/30"
-          to={card.to}
-        >
-          <div className="text-[10px] uppercase tracking-[0.18em] text-muted-foreground">{card.label}</div>
-          <div className="mt-1 text-lg font-semibold text-foreground">{card.value}</div>
-        </Link>
+        card.to === '/remote-agents/tasks' ? (
+          <Link
+            key={card.label}
+            className="rounded-lg border border-border/60 bg-card px-3 py-2 transition-colors hover:bg-muted/30"
+            to={card.to}
+            search={card.search}
+          >
+            <div className="text-[10px] uppercase tracking-[0.18em] text-muted-foreground">{card.label}</div>
+            <div className="mt-1 text-lg font-semibold text-foreground">{card.value}</div>
+          </Link>
+        ) : (
+          <Link
+            key={card.label}
+            className="rounded-lg border border-border/60 bg-card px-3 py-2 transition-colors hover:bg-muted/30"
+            to={card.to}
+          >
+            <div className="text-[10px] uppercase tracking-[0.18em] text-muted-foreground">{card.label}</div>
+            <div className="mt-1 text-lg font-semibold text-foreground">{card.value}</div>
+          </Link>
+        )
       ))}
     </div>
   )

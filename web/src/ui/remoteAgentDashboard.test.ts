@@ -27,6 +27,8 @@ describe('remote-agent-dashboard-information-architecture', () => {
           'Wave 3 keeps pools inside agent and task detail because operators act on named agents and durable tasks, while pool management remains a grouping/filtering concern rather than a standalone workflow.',
       },
     ])
+    expect(remoteAgentDashboardInformationArchitecture.collections.some((collection) => collection.route.includes('/remote-agents/pools'))).toBe(false)
+    expect(remoteAgentDashboardInformationArchitecture.collections.some((collection) => collection.title === 'Pools')).toBe(false)
   })
 
   it('uses explicit lifecycle states without a queued bucket', () => {

@@ -26,6 +26,7 @@ import { RemoteAgentTaskDetailPage } from './pages/RemoteAgentTaskDetailPage'
 import { RemoteAgentTaskTranscriptPage } from './pages/RemoteAgentTaskTranscriptPage'
 import { RemoteAgentTaskArtifactsPage } from './pages/RemoteAgentTaskArtifactsPage'
 import { RemoteAgentDetailPage } from './pages/RemoteAgentDetailPage'
+import { remoteAgentTaskListSearchDefaults } from './lib/remoteAgentDashboard'
 
 const rootRoute = createRootRoute({
   component: () => (
@@ -89,12 +90,18 @@ const clusterRoute = createRoute({
 const remoteAgentsIndexRoute = createRoute({
   getParentRoute: () => shellRoute,
   path: '/remote-agents',
-  component: () => <Navigate to="/remote-agents/tasks" replace />,
+  component: () => <Navigate to="/remote-agents/tasks" search={remoteAgentTaskListSearchDefaults} replace />,
 })
 
 const remoteAgentTasksRoute = createRoute({
   getParentRoute: () => shellRoute,
   path: '/remote-agents/tasks',
+  validateSearch: (search: Record<string, unknown>) => ({
+    q: typeof search.q === 'string' ? search.q : remoteAgentTaskListSearchDefaults.q,
+    pool: typeof search.pool === 'string' ? search.pool : remoteAgentTaskListSearchDefaults.pool,
+    state: search.state === 'active' || search.state === 'terminal' ? search.state : remoteAgentTaskListSearchDefaults.state,
+    artifacts: search.artifacts === 'with-output' ? 'with-output' : remoteAgentTaskListSearchDefaults.artifacts,
+  }),
   component: RemoteAgentsPage,
 })
 

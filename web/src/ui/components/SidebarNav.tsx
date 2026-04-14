@@ -1,5 +1,6 @@
 import { Link, useRouterState } from '@tanstack/react-router'
 import { cn } from '@/lib/utils'
+import { remoteAgentTaskListSearchDefaults } from '../lib/remoteAgentDashboard'
 
 function isActive(locationPath: string, href: string) {
   return locationPath === href || locationPath.startsWith(href + '/')
@@ -35,7 +36,7 @@ export function SidebarNav() {
             <ClusterIcon />
             Cluster
           </Link>
-          <Link className={linkClass('/remote-agents')} to="/remote-agents/tasks">
+          <Link className={linkClass('/remote-agents')} to="/remote-agents/tasks" search={remoteAgentTaskListSearchDefaults}>
             <RemoteAgentsIcon />
             Remote Agents
           </Link>

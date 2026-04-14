@@ -1,5 +1,5 @@
-import { useCallback, useMemo, useState } from 'react'
-import { Link } from '@tanstack/react-router'
+import { useCallback, useMemo } from 'react'
+import { Link, useRouterState } from '@tanstack/react-router'
 import { useAuth } from '../auth'
 import { api } from '../lib/api'
 import { usePollingQuery } from '../lib/usePolling'
@@ -12,13 +12,26 @@ import {
   TaskDetailSections,
   useSelectableList,
 } from './remoteAgentDashboardShared'
-import { remoteAgentDashboardInformationArchitecture, remoteAgentTaskStateGroups } from '../lib/remoteAgentDashboard'
+import { remoteAgentDashboardInformationArchitecture, remoteAgentTaskListSearchDefaults, remoteAgentTaskStateGroups } from '../lib/remoteAgentDashboard'
 
 export function RemoteAgentsPage() {
   const { token, invalidateToken } = useAuth()
-  const [filter, setFilter] = useState('')
-  const [poolFilter, setPoolFilter] = useState('all')
-  const [stateFilter, setStateFilter] = useState<'all' | 'active' | 'terminal'>('all')
+  const locationSearch = useRouterState({ select: (state) => state.location.searchStr })
+  const search = new URLSearchParams(locationSearch)
+  const stateParam = search.get('state')
+  const artifactParam = search.get('artifacts')
+  const filter = search.get('q') ?? remoteAgentTaskListSearchDefaults.q
+  const poolFilter = search.get('pool') ?? remoteAgentTaskListSearchDefaults.pool
+  const stateFilter = stateParam === 'active' || stateParam === 'terminal' ? stateParam : remoteAgentTaskListSearchDefaults.state
+  const artifactFilter = artifactParam === 'with-output' ? 'with-output' : remoteAgentTaskListSearchDefaults.artifacts
+
+  const updateFilters = (updates: Partial<Record<'q' | 'pool' | 'state' | 'artifacts', string>>) => {
+    const params = new URLSearchParams(locationSearch)
+    for (const [key, value] of Object.entries(updates)) {
+      params.set(key, value)
+    }
+    window.location.hash = `#/remote-agents/tasks?${params.toString()}`
+  }
 
   const onUnauthorized = useCallback(() => {
     invalidateToken('Bearer token rejected (401). Please re-enter a valid token in Settings.')
@@ -57,9 +70,10 @@ export function RemoteAgentsPage() {
         stateFilter === 'all' ||
         (stateFilter === 'active' && remoteAgentTaskStateGroups.active.includes(task.state)) ||
         (stateFilter === 'terminal' && remoteAgentTaskStateGroups.terminal.includes(task.state))
-      return matchesFilter && matchesPool && matchesState
+      const matchesArtifacts = artifactFilter === 'all' || (task.result?.outputArtifactCount ?? 0) > 0
+      return matchesFilter && matchesPool && matchesState && matchesArtifacts
     })
-  }, [filter, poolFilter, stateFilter, tasksQ.data])
+  }, [artifactFilter, filter, poolFilter, stateFilter, tasksQ.data])
 
   const { selectedId, setSelectedId, selected } = useSelectableList(tasks)
   const selectedTaskQ = usePollingQuery(`remote-agent-task:${selectedId}:${token}`, () => api.getRemoteAgentTask(token, selectedId), {
@@ -104,21 +118,40 @@ export function RemoteAgentsPage() {
           right={<Btn onClick={() => { tasksQ.reload(); agentsQ.reload() }} type="button">Refresh</Btn>}
         >
           <div className="space-y-3">
-            <div className="grid gap-2 md:grid-cols-3">
+            <div className="grid gap-2 md:grid-cols-4">
               <FormRow label="Search">
-                <Input value={filter} onChange={(event) => setFilter(event.target.value)} placeholder="task, agent, pool, prompt" />
+                <Input
+                  value={filter}
+                  onChange={(event) => updateFilters({ q: event.target.value })}
+                  placeholder="task, agent, pool, prompt"
+                />
               </FormRow>
               <FormRow label="Pool">
-                <Select value={poolFilter} onChange={(event) => setPoolFilter(event.target.value)}>
+                <Select
+                  value={poolFilter}
+                  onChange={(event) => updateFilters({ pool: event.target.value })}
+                >
                   <option value="all">All pools</option>
                   {pools.map((pool) => <option key={pool} value={pool}>{pool}</option>)}
                 </Select>
               </FormRow>
               <FormRow label="State">
-                <Select value={stateFilter} onChange={(event) => setStateFilter(event.target.value as 'all' | 'active' | 'terminal')}>
+                <Select
+                  value={stateFilter}
+                  onChange={(event) => updateFilters({ state: event.target.value })}
+                >
                   <option value="all">All states</option>
                   <option value="active">Active only</option>
                   <option value="terminal">Terminal only</option>
+                </Select>
+              </FormRow>
+              <FormRow label="Artifacts">
+                <Select
+                  value={artifactFilter}
+                  onChange={(event) => updateFilters({ artifacts: event.target.value })}
+                >
+                  <option value="all">All tasks</option>
+                  <option value="with-output">With artifacts</option>
                 </Select>
               </FormRow>
             </div>
