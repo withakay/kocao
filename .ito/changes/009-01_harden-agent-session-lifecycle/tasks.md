@@ -38,8 +38,8 @@ ______________________________________________________________________
 - **Verify**: `go test ./internal/controlplaneapi/... -run Reconciliation`
 - **Done When**: Restart-oriented tests prove that status and stop remain correct after API restart.
 - **Requirements**: agent-session-lifecycle:restart-reconciliation
-- **Updated At**: 2026-04-13
-- **Status**: [ ] pending
+- **Updated At**: 2026-04-14
+- **Status**: [x] complete
 
 ______________________________________________________________________
 

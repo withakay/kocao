@@ -301,6 +301,12 @@ func (s *AgentSessionService) bridgeFor(run *operatorv1alpha1.HarnessRun) *agent
 	if ok {
 		bridge.mu.Lock()
 		bridge.podName = run.Status.PodName
+		if run.Status.AgentSession != nil {
+			if bridge.sessionID == "" {
+				bridge.sessionID = strings.TrimSpace(run.Status.AgentSession.SessionID)
+			}
+			bridge.phase = resolveAgentSessionPhase(bridge.phase, run.Status.AgentSession.Phase)
+		}
 		if run.Spec.AgentSession != nil {
 			bridge.runtime = run.Spec.AgentSession.Runtime
 			bridge.agent = run.Spec.AgentSession.Agent
@@ -327,6 +333,16 @@ func (s *AgentSessionService) bridgeFor(run *operatorv1alpha1.HarnessRun) *agent
 		agent:       agent,
 		phase:       phase,
 		subscribers: map[chan agentSessionEvent]struct{}{},
+	}
+	if run.Status.AgentSession != nil {
+		if run.Status.AgentSession.Runtime != "" {
+			bridge.runtime = run.Status.AgentSession.Runtime
+		}
+		if run.Status.AgentSession.Agent != "" {
+			bridge.agent = run.Status.AgentSession.Agent
+		}
+		bridge.sessionID = strings.TrimSpace(run.Status.AgentSession.SessionID)
+		bridge.phase = resolveAgentSessionPhase(bridge.phase, run.Status.AgentSession.Phase)
 	}
 
 	if persisted, ok := s.store.LoadState(run.Name); ok {
@@ -679,13 +695,11 @@ func (s *AgentSessionService) Stop(ctx context.Context, run *operatorv1alpha1.Ha
 	bridge, ok := s.bridges[run.Name]
 	s.mu.Unlock()
 	if !ok {
-		// No in-memory bridge. Check persisted state to decide whether the
-		// session is genuinely already completed/stopped.
 		state := s.GetState(run)
 		if state.Phase.IsTerminal() {
 			return state, nil
 		}
-		return state, fmt.Errorf("no active session bridge for run %s (phase %s); cannot confirm stop", run.Name, state.Phase)
+		bridge = s.bridgeFor(run)
 	}
 	bridge.mu.Lock()
 	if operatorv1alpha1.NormalizeAgentSessionPhase(string(bridge.phase)).IsTerminal() {

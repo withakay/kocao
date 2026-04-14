@@ -1636,8 +1636,8 @@ func TestStop_NoBridge_CompletedState(t *testing.T) {
 	}
 }
 
-// TestStop_NoBridge_UnknownPhase verifies that Stop returns an error when no
-// bridge exists and persisted state does NOT prove the session is completed.
+// TestStop_NoBridge_UnknownPhase verifies that Stop reconstructs enough state
+// from the HarnessRun CRD to safely stop an active session after API restart.
 func TestStop_NoBridge_UnknownPhase(t *testing.T) {
 	api, cleanup := newTestAPI(t)
 	defer cleanup()
@@ -1687,9 +1687,12 @@ func TestStop_NoBridge_UnknownPhase(t *testing.T) {
 	srv := httptest.NewServer(api.Handler())
 	defer srv.Close()
 
-	resp, _ := doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/harness-runs/"+run.Name+"/agent-session/stop", "full", nil)
-	if resp.StatusCode != http.StatusBadGateway {
-		t.Fatalf("stop status = %d, want 502 (no bridge, non-terminal phase)", resp.StatusCode)
+	resp, b := doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/harness-runs/"+run.Name+"/agent-session/stop", "full", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("stop status = %d, want 200 (body=%s)", resp.StatusCode, string(b))
+	}
+	if !transport.deleted {
+		t.Fatal("expected stop to call DeleteACP after bridge reconstruction")
 	}
 }
 
