@@ -27,8 +27,8 @@ ______________________________________________________________________
 - **Verify**: `go test ./internal/controlplaneapi/... ./internal/operator/...`
 - **Done When**: Session creation, status, stop, and replay paths operate against an explicit lifecycle model with regression tests.
 - **Requirements**: agent-session-lifecycle:explicit-state-machine, control-plane-api:session-api-contract-consistency
-- **Updated At**: 2026-04-13
-- **Status**: [ ] pending
+- **Updated At**: 2026-04-14
+- **Status**: [x] complete
 
 ### Task 1.2: Add restart reconciliation for active sessions
 

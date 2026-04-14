@@ -164,10 +164,48 @@ type agentSessionBridge struct {
 	promptSeq    atomic.Int64
 }
 
+func normalizeAgentSessionState(state agentSessionState) agentSessionState {
+	state.Phase = operatorv1alpha1.NormalizeAgentSessionPhase(string(state.Phase))
+	return state
+}
+
+func resolveAgentSessionPhase(current, candidate operatorv1alpha1.AgentSessionPhase) operatorv1alpha1.AgentSessionPhase {
+	current = operatorv1alpha1.NormalizeAgentSessionPhase(string(current))
+	candidate = operatorv1alpha1.NormalizeAgentSessionPhase(string(candidate))
+	switch {
+	case candidate == "":
+		return current
+	case current == "":
+		return candidate
+	case current == candidate:
+		return current
+	case current.IsTerminal():
+		return current
+	case candidate.IsTerminal():
+		return candidate
+	case current.CanTransitionTo(candidate):
+		return candidate
+	case candidate.CanTransitionTo(current):
+		return current
+	default:
+		return current
+	}
+}
+
+func (b *agentSessionBridge) transitionLocked(next operatorv1alpha1.AgentSessionPhase) bool {
+	next = operatorv1alpha1.NormalizeAgentSessionPhase(string(next))
+	current := operatorv1alpha1.NormalizeAgentSessionPhase(string(b.phase))
+	if !current.CanTransitionTo(next) {
+		return false
+	}
+	b.phase = next
+	return true
+}
+
 func (b *agentSessionBridge) snapshot() agentSessionState {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	return agentSessionState{
+	return normalizeAgentSessionState(agentSessionState{
 		HarnessRunID: b.runID,
 		PodName:      b.podName,
 		ServerID:     b.serverID,
@@ -176,7 +214,7 @@ func (b *agentSessionBridge) snapshot() agentSessionState {
 		SessionID:    b.sessionID,
 		Phase:        b.phase,
 		LastSequence: b.nextSeq,
-	}
+	})
 }
 
 func (b *agentSessionBridge) appendEvent(raw json.RawMessage) agentSessionEvent {
@@ -273,7 +311,7 @@ func (s *AgentSessionService) bridgeFor(run *operatorv1alpha1.HarnessRun) *agent
 
 	phase := operatorv1alpha1.AgentSessionPhaseProvisioning
 	if run.Status.AgentSession != nil && run.Status.AgentSession.Phase != "" {
-		phase = run.Status.AgentSession.Phase
+		phase = operatorv1alpha1.NormalizeAgentSessionPhase(string(run.Status.AgentSession.Phase))
 	}
 	var runtime operatorv1alpha1.AgentRuntime
 	var agent operatorv1alpha1.AgentKind
@@ -295,9 +333,7 @@ func (s *AgentSessionService) bridgeFor(run *operatorv1alpha1.HarnessRun) *agent
 		if persisted.SessionID != "" {
 			bridge.sessionID = persisted.SessionID
 		}
-		if persisted.Phase != "" {
-			bridge.phase = persisted.Phase
-		}
+		bridge.phase = resolveAgentSessionPhase(bridge.phase, persisted.Phase)
 		if persisted.LastSequence > bridge.nextSeq {
 			bridge.nextSeq = persisted.LastSequence
 		}
@@ -327,17 +363,20 @@ func (s *AgentSessionService) EnsureSession(ctx context.Context, run *operatorv1
 	defer bridge.createMu.Unlock()
 
 	state := bridge.snapshot()
-	if state.SessionID != "" && state.Phase != operatorv1alpha1.AgentSessionPhaseCompleted && state.Phase != operatorv1alpha1.AgentSessionPhaseFailed {
+	if state.SessionID != "" {
+		if state.Phase.IsTerminal() {
+			return state, nil
+		}
 		s.ensureStreaming(ctx, bridge)
 		return state, nil
 	}
 	bridge.mu.Lock()
-	bridge.phase = operatorv1alpha1.AgentSessionPhaseProvisioning
+	if !bridge.transitionLocked(operatorv1alpha1.AgentSessionPhaseProvisioning) {
+		bridge.phase = resolveAgentSessionPhase(bridge.phase, operatorv1alpha1.AgentSessionPhaseProvisioning)
+	}
 	bridge.mu.Unlock()
 	state = bridge.snapshot()
-	if state.SessionID == "" {
-		s.store.SaveState(state)
-	}
+	s.store.SaveState(state)
 
 	initEnv := jsonRPCEnvelope{
 		JSONRPC: "2.0",
@@ -353,7 +392,12 @@ func (s *AgentSessionService) EnsureSession(ctx context.Context, run *operatorv1
 	}
 	body, err := s.transport.PostACP(ctx, run.Status.PodName, bridge.serverID, string(run.Spec.AgentSession.Agent), initEnv)
 	if err != nil {
-		return agentSessionState{}, err
+		bridge.mu.Lock()
+		bridge.transitionLocked(operatorv1alpha1.AgentSessionPhaseFailed)
+		bridge.mu.Unlock()
+		state = bridge.snapshot()
+		s.store.SaveState(state)
+		return state, err
 	}
 	var initResp struct {
 		Result struct {
@@ -364,10 +408,20 @@ func (s *AgentSessionService) EnsureSession(ctx context.Context, run *operatorv1
 		Error *jsonRPCError `json:"error,omitempty"`
 	}
 	if err := json.Unmarshal(body, &initResp); err != nil {
-		return agentSessionState{}, err
+		bridge.mu.Lock()
+		bridge.transitionLocked(operatorv1alpha1.AgentSessionPhaseFailed)
+		bridge.mu.Unlock()
+		state = bridge.snapshot()
+		s.store.SaveState(state)
+		return state, err
 	}
 	if initResp.Error != nil {
-		return agentSessionState{}, fmt.Errorf("sandbox-agent initialize failed: %s", initResp.Error.Message)
+		bridge.mu.Lock()
+		bridge.transitionLocked(operatorv1alpha1.AgentSessionPhaseFailed)
+		bridge.mu.Unlock()
+		state = bridge.snapshot()
+		s.store.SaveState(state)
+		return state, fmt.Errorf("sandbox-agent initialize failed: %s", initResp.Error.Message)
 	}
 	for _, method := range initResp.Result.AuthMethods {
 		switch method.ID {
@@ -396,7 +450,12 @@ func (s *AgentSessionService) EnsureSession(ctx context.Context, run *operatorv1
 	}
 	body, err = s.transport.PostACP(ctx, run.Status.PodName, bridge.serverID, "", newSessionEnv)
 	if err != nil {
-		return agentSessionState{}, err
+		bridge.mu.Lock()
+		bridge.transitionLocked(operatorv1alpha1.AgentSessionPhaseFailed)
+		bridge.mu.Unlock()
+		state = bridge.snapshot()
+		s.store.SaveState(state)
+		return state, err
 	}
 	var newSessionResp struct {
 		Result struct {
@@ -405,14 +464,24 @@ func (s *AgentSessionService) EnsureSession(ctx context.Context, run *operatorv1
 		Error *jsonRPCError `json:"error,omitempty"`
 	}
 	if err := json.Unmarshal(body, &newSessionResp); err != nil {
-		return agentSessionState{}, err
+		bridge.mu.Lock()
+		bridge.transitionLocked(operatorv1alpha1.AgentSessionPhaseFailed)
+		bridge.mu.Unlock()
+		state = bridge.snapshot()
+		s.store.SaveState(state)
+		return state, err
 	}
 	if newSessionResp.Error != nil {
-		return agentSessionState{}, fmt.Errorf("sandbox-agent session/new failed: %s", newSessionResp.Error.Message)
+		bridge.mu.Lock()
+		bridge.transitionLocked(operatorv1alpha1.AgentSessionPhaseFailed)
+		bridge.mu.Unlock()
+		state = bridge.snapshot()
+		s.store.SaveState(state)
+		return state, fmt.Errorf("sandbox-agent session/new failed: %s", newSessionResp.Error.Message)
 	}
 	bridge.mu.Lock()
 	bridge.sessionID = strings.TrimSpace(newSessionResp.Result.SessionID)
-	bridge.phase = operatorv1alpha1.AgentSessionPhaseReady
+	bridge.transitionLocked(operatorv1alpha1.AgentSessionPhaseReady)
 	bridge.mu.Unlock()
 	state = bridge.snapshot()
 	s.store.SaveState(state)
@@ -440,9 +509,10 @@ func (s *AgentSessionService) ensureStreaming(ctx context.Context, bridge *agent
 		stream, err := s.transport.StreamACP(streamCtx, podName, serverID)
 		if err != nil {
 			bridge.mu.Lock()
-			bridge.phase = operatorv1alpha1.AgentSessionPhaseFailed
+			bridge.transitionLocked(operatorv1alpha1.AgentSessionPhaseFailed)
 			bridge.streaming = false
 			bridge.mu.Unlock()
+			s.store.SaveState(bridge.snapshot())
 			return
 		}
 		bridge.mu.Lock()
@@ -478,16 +548,20 @@ func (s *AgentSessionService) consumeSSE(stream io.Reader, bridge *agentSessionB
 	bridge.mu.Lock()
 	bridge.streaming = false
 	switch bridge.phase {
-	case operatorv1alpha1.AgentSessionPhaseStopping, operatorv1alpha1.AgentSessionPhaseCompleted:
-		bridge.phase = operatorv1alpha1.AgentSessionPhaseCompleted
+	case operatorv1alpha1.AgentSessionPhaseStopping:
+		// Stop owns the terminal transition after it confirms whether DELETE
+		// succeeded or failed, so the stream closure alone must not mark the
+		// session completed.
+	case operatorv1alpha1.AgentSessionPhaseCompleted:
+		bridge.transitionLocked(operatorv1alpha1.AgentSessionPhaseCompleted)
 	default:
 		if scanner.Err() != nil {
-			bridge.phase = operatorv1alpha1.AgentSessionPhaseFailed
+			bridge.transitionLocked(operatorv1alpha1.AgentSessionPhaseFailed)
 		} else {
-			bridge.phase = operatorv1alpha1.AgentSessionPhaseCompleted
+			bridge.transitionLocked(operatorv1alpha1.AgentSessionPhaseCompleted)
 		}
 	}
-	state := agentSessionState{
+	state := normalizeAgentSessionState(agentSessionState{
 		HarnessRunID: bridge.runID,
 		PodName:      bridge.podName,
 		ServerID:     bridge.serverID,
@@ -496,7 +570,7 @@ func (s *AgentSessionService) consumeSSE(stream io.Reader, bridge *agentSessionB
 		SessionID:    bridge.sessionID,
 		Phase:        bridge.phase,
 		LastSequence: bridge.nextSeq,
-	}
+	})
 	bridge.mu.Unlock()
 	s.store.SaveState(state)
 }
@@ -511,7 +585,7 @@ func (s *AgentSessionService) Prompt(ctx context.Context, run *operatorv1alpha1.
 	}
 	bridge := s.bridgeFor(run)
 	bridge.mu.Lock()
-	bridge.phase = operatorv1alpha1.AgentSessionPhaseActive
+	bridge.transitionLocked(operatorv1alpha1.AgentSessionPhaseRunning)
 	bridge.mu.Unlock()
 	s.store.SaveState(bridge.snapshot())
 	body, err := s.transport.PostACP(ctx, run.Status.PodName, bridge.serverID, "", jsonRPCEnvelope{
@@ -525,7 +599,7 @@ func (s *AgentSessionService) Prompt(ctx context.Context, run *operatorv1alpha1.
 	})
 	if err != nil {
 		bridge.mu.Lock()
-		bridge.phase = operatorv1alpha1.AgentSessionPhaseFailed
+		bridge.transitionLocked(operatorv1alpha1.AgentSessionPhaseFailed)
 		bridge.mu.Unlock()
 		s.store.SaveState(bridge.snapshot())
 		return nil, bridge.snapshot(), err
@@ -550,9 +624,16 @@ func (s *AgentSessionService) GetState(run *operatorv1alpha1.HarnessRun) agentSe
 		return bridge.snapshot()
 	}
 	if state, ok := s.store.LoadState(run.Name, run.Labels["kocao.withakay.github.com/resumed-from"]); ok {
+		state = normalizeAgentSessionState(state)
 		state.HarnessRunID = run.Name
 		state.PodName = run.Status.PodName
 		state.ServerID = run.Name
+		if state.Runtime == "" {
+			state.Runtime = run.Spec.AgentSession.Runtime
+		}
+		if state.Agent == "" {
+			state.Agent = run.Spec.AgentSession.Agent
+		}
 		return state
 	}
 	state := agentSessionState{
@@ -564,9 +645,12 @@ func (s *AgentSessionService) GetState(run *operatorv1alpha1.HarnessRun) agentSe
 	}
 	if run.Status.AgentSession != nil {
 		state.SessionID = run.Status.AgentSession.SessionID
-		state.Phase = run.Status.AgentSession.Phase
+		state.Phase = operatorv1alpha1.NormalizeAgentSessionPhase(string(run.Status.AgentSession.Phase))
 	}
-	return state
+	if state.Phase == "" {
+		state.Phase = operatorv1alpha1.AgentSessionPhaseProvisioning
+	}
+	return normalizeAgentSessionState(state)
 }
 
 // isStalePodProxyError returns true when the error looks like a stale K8s pod
@@ -598,15 +682,17 @@ func (s *AgentSessionService) Stop(ctx context.Context, run *operatorv1alpha1.Ha
 		// No in-memory bridge. Check persisted state to decide whether the
 		// session is genuinely already completed/stopped.
 		state := s.GetState(run)
-		switch state.Phase {
-		case operatorv1alpha1.AgentSessionPhaseCompleted, operatorv1alpha1.AgentSessionPhaseFailed:
+		if state.Phase.IsTerminal() {
 			return state, nil
-		default:
-			return state, fmt.Errorf("no active session bridge for run %s (phase %s); cannot confirm stop", run.Name, state.Phase)
 		}
+		return state, fmt.Errorf("no active session bridge for run %s (phase %s); cannot confirm stop", run.Name, state.Phase)
 	}
 	bridge.mu.Lock()
-	bridge.phase = operatorv1alpha1.AgentSessionPhaseStopping
+	if operatorv1alpha1.NormalizeAgentSessionPhase(string(bridge.phase)).IsTerminal() {
+		bridge.mu.Unlock()
+		return bridge.snapshot(), nil
+	}
+	bridge.transitionLocked(operatorv1alpha1.AgentSessionPhaseStopping)
 	cancelFn := bridge.streamCancel
 	doneCh := bridge.streamDone
 	bridge.mu.Unlock()
@@ -647,7 +733,7 @@ func (s *AgentSessionService) Stop(ctx context.Context, run *operatorv1alpha1.Ha
 		} else {
 			slog.Error("agent session stop: DELETE failed with unexpected error", "run", run.Name, "error", deleteErr)
 			bridge.mu.Lock()
-			bridge.phase = operatorv1alpha1.AgentSessionPhaseFailed
+			bridge.transitionLocked(operatorv1alpha1.AgentSessionPhaseFailed)
 			bridge.mu.Unlock()
 			state := bridge.snapshot()
 			s.store.SaveState(state)
@@ -655,7 +741,7 @@ func (s *AgentSessionService) Stop(ctx context.Context, run *operatorv1alpha1.Ha
 		}
 	}
 	bridge.mu.Lock()
-	bridge.phase = operatorv1alpha1.AgentSessionPhaseCompleted
+	bridge.transitionLocked(operatorv1alpha1.AgentSessionPhaseCompleted)
 	bridge.mu.Unlock()
 	state := bridge.snapshot()
 	s.store.SaveState(state)
@@ -708,7 +794,7 @@ type agentSessionDTO struct {
 
 func (a *API) agentSessionToDTO(ctx context.Context, run *operatorv1alpha1.HarnessRun, state agentSessionState) agentSessionDTO {
 	dto := agentSessionDTO{
-		RunID:              state.HarnessRunID,
+		RunID:              run.Name,
 		PodName:            state.PodName,
 		ServerID:           state.ServerID,
 		Runtime:            state.Runtime,
@@ -782,7 +868,7 @@ func (a *API) handleRunAgentSessionCreate(w http.ResponseWriter, r *http.Request
 	}
 	a.updateHarnessRunAgentSessionStatus(r.Context(), run, state)
 	a.Audit.Append(r.Context(), principal(r.Context()), "agent-session.create", "harness-run", id, "allowed", map[string]any{"agent": state.Agent, "runtime": state.Runtime, "sessionId": state.SessionID})
-	writeJSON(w, http.StatusCreated, state)
+	writeJSON(w, http.StatusCreated, a.agentSessionToDTO(r.Context(), run, state))
 }
 
 func (a *API) handleRunAgentSessionPrompt(w http.ResponseWriter, r *http.Request, id string) {

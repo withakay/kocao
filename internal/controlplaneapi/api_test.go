@@ -526,11 +526,11 @@ func TestAgentSessionLifecycle_API(t *testing.T) {
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("create agent session status = %d, want 201 (body=%s)", resp.StatusCode, string(b))
 	}
-	var created agentSessionState
+	var created agentSessionDTO
 	if err := json.Unmarshal(b, &created); err != nil {
 		t.Fatalf("unmarshal create response: %v", err)
 	}
-	if created.SessionID != "sas-123" || created.Phase != operatorv1alpha1.AgentSessionPhaseReady {
+	if created.RunID != run.Name || created.SessionID != "sas-123" || created.Phase != operatorv1alpha1.AgentSessionPhaseReady {
 		t.Fatalf("unexpected agent session create response: %+v", created)
 	}
 	resp, b = doJSON(t, srv.Client(), http.MethodGet, srv.URL+"/api/v1/harness-runs/"+run.Name+"/agent-session", "full", nil)
@@ -569,6 +569,17 @@ func TestAgentSessionLifecycle_API(t *testing.T) {
 	resp, b = doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/harness-runs/"+run.Name+"/agent-session/prompt", "full", map[string]any{"prompt": "hello sandbox"})
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("prompt status = %d, want 200 (body=%s)", resp.StatusCode, string(b))
+	}
+	resp, b = doJSON(t, srv.Client(), http.MethodGet, srv.URL+"/api/v1/harness-runs/"+run.Name+"/agent-session", "full", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("get agent session after prompt status = %d, want 200 (body=%s)", resp.StatusCode, string(b))
+	}
+	var running agentSessionDTO
+	if err := json.Unmarshal(b, &running); err != nil {
+		t.Fatalf("unmarshal running response: %v", err)
+	}
+	if running.Phase != operatorv1alpha1.AgentSessionPhaseRunning {
+		t.Fatalf("running phase = %q, want %q", running.Phase, operatorv1alpha1.AgentSessionPhaseRunning)
 	}
 	select {
 	case line := <-streamCh:
@@ -1918,12 +1929,12 @@ func TestStatusAndStop_ResponseIncludesContractFields(t *testing.T) {
 	}
 }
 
-// TestStatusAndStop_DTOUnmarshalsIntoCLIAgentSession is a contract test that
-// verifies the actual API payload from the status and stop endpoints can be
+// TestCreateStatusAndStop_DTOUnmarshalsIntoCLIAgentSession is a contract test that
+// verifies the actual API payload from the create, status, and stop endpoints can be
 // unmarshalled into the public CLI AgentSession struct without relying on
 // client-side backfill. This catches field-name mismatches (e.g. "harnessRunID"
 // vs "runId") at the API layer.
-func TestStatusAndStop_DTOUnmarshalsIntoCLIAgentSession(t *testing.T) {
+func TestCreateStatusAndStop_DTOUnmarshalsIntoCLIAgentSession(t *testing.T) {
 	api, cleanup := newTestAPI(t)
 	defer cleanup()
 	transport := newFakeAgentSessionTransport()
@@ -1976,14 +1987,7 @@ func TestStatusAndStop_DTOUnmarshalsIntoCLIAgentSession(t *testing.T) {
 		t.Fatalf("create agent session status = %d (body=%s)", resp.StatusCode, string(b))
 	}
 
-	// GET status — unmarshal into the CLI contract shape.
-	resp, b = doJSON(t, srv.Client(), http.MethodGet, srv.URL+"/api/v1/harness-runs/"+run.ID+"/agent-session", "full", nil)
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("get agent session status = %d (body=%s)", resp.StatusCode, string(b))
-	}
-
-	// cliAgentSession mirrors controlplanecli.AgentSession — the public CLI
-	// contract shape. We define it locally to avoid an import cycle.
+	// POST create — unmarshal into the CLI contract shape.
 	type cliAgentSession struct {
 		SessionID   string `json:"sessionId"`
 		RunID       string `json:"runId"`
@@ -1993,6 +1997,37 @@ func TestStatusAndStop_DTOUnmarshalsIntoCLIAgentSession(t *testing.T) {
 		Phase       string `json:"phase"`
 		WorkspaceID string `json:"workspaceSessionId"`
 		CreatedAt   string `json:"createdAt,omitempty"`
+	}
+
+	var createCLI cliAgentSession
+	if err := json.Unmarshal(b, &createCLI); err != nil {
+		t.Fatalf("unmarshal create into CLI shape: %v", err)
+	}
+	if createCLI.RunID != run.ID {
+		t.Fatalf("CLI contract: create runId = %q, want %q", createCLI.RunID, run.ID)
+	}
+	if createCLI.SessionID != "sas-123" {
+		t.Fatalf("CLI contract: create sessionId = %q, want sas-123", createCLI.SessionID)
+	}
+	if createCLI.Phase != string(operatorv1alpha1.AgentSessionPhaseReady) {
+		t.Fatalf("CLI contract: create phase = %q, want Ready", createCLI.Phase)
+	}
+
+	var createRaw map[string]json.RawMessage
+	if err := json.Unmarshal(b, &createRaw); err != nil {
+		t.Fatalf("unmarshal create raw map: %v", err)
+	}
+	if _, ok := createRaw["harnessRunID"]; ok {
+		t.Fatalf("create payload contains deprecated 'harnessRunID' field; should use 'runId'")
+	}
+	if _, ok := createRaw["runId"]; !ok {
+		t.Fatalf("create payload missing 'runId' field; keys: %v", keysOf(createRaw))
+	}
+
+	// GET status — unmarshal into the CLI contract shape.
+	resp, b = doJSON(t, srv.Client(), http.MethodGet, srv.URL+"/api/v1/harness-runs/"+run.ID+"/agent-session", "full", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("get agent session status = %d (body=%s)", resp.StatusCode, string(b))
 	}
 
 	var statusCLI cliAgentSession
