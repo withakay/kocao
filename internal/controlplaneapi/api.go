@@ -21,10 +21,16 @@ import (
 )
 
 const (
-	annotationAttachEnabled              = "kocao.withakay.github.com/attach-enabled"
-	annotationEgressMode                 = "kocao.withakay.github.com/egress-mode"
-	annotationSymphonyRefreshRequestedAt = "kocao.withakay.github.com/symphony-refresh-requested-at"
-	allowMockAgentFixtureEnv             = "KOCAO_ALLOW_MOCK_AGENT_FIXTURE"
+	annotationAttachEnabled                = "kocao.withakay.github.com/attach-enabled"
+	annotationEgressMode                   = "kocao.withakay.github.com/egress-mode"
+	annotationHarnessImageProfileRequested = "kocao.withakay.github.com/harness-image-profile-requested"
+	annotationHarnessImageProfilePolicy    = "kocao.withakay.github.com/harness-image-profile-policy"
+	annotationHarnessImageProfileSelected  = "kocao.withakay.github.com/harness-image-profile-selected"
+	annotationHarnessImageProfileSource    = "kocao.withakay.github.com/harness-image-profile-source"
+	annotationHarnessImageProfileFallback  = "kocao.withakay.github.com/harness-image-profile-fallback"
+	annotationHarnessImageProfileReason    = "kocao.withakay.github.com/harness-image-profile-reason"
+	annotationSymphonyRefreshRequestedAt   = "kocao.withakay.github.com/symphony-refresh-requested-at"
+	allowMockAgentFixtureEnv               = "KOCAO_ALLOW_MOCK_AGENT_FIXTURE"
 )
 
 type API struct {
@@ -628,18 +634,19 @@ func (a *API) handleWorkspaceAgentSessionsList(w http.ResponseWriter, r *http.Re
 }
 
 type runCreateRequest struct {
-	RepoURL                 string                             `json:"repoURL"`
-	RepoRevision            string                             `json:"repoRevision,omitempty"`
-	Image                   string                             `json:"image"`
-	EgressMode              string                             `json:"egressMode,omitempty"`
-	Command                 []string                           `json:"command,omitempty"`
-	Args                    []string                           `json:"args,omitempty"`
-	WorkingDir              string                             `json:"workingDir,omitempty"`
-	Env                     []operatorv1alpha1.EnvVar          `json:"env,omitempty"`
-	GitAuth                 *operatorv1alpha1.GitAuthSpec      `json:"gitAuth,omitempty"`
-	AgentSession            *operatorv1alpha1.AgentSessionSpec `json:"agentSession,omitempty"`
-	ImagePullSecrets        []string                           `json:"imagePullSecrets,omitempty"`
-	TTLSecondsAfterFinished *int32                             `json:"ttlSecondsAfterFinished,omitempty"`
+	RepoURL                 string                                    `json:"repoURL"`
+	RepoRevision            string                                    `json:"repoRevision,omitempty"`
+	Image                   string                                    `json:"image"`
+	ImageProfile            *operatorv1alpha1.HarnessImageProfileSpec `json:"imageProfile,omitempty"`
+	EgressMode              string                                    `json:"egressMode,omitempty"`
+	Command                 []string                                  `json:"command,omitempty"`
+	Args                    []string                                  `json:"args,omitempty"`
+	WorkingDir              string                                    `json:"workingDir,omitempty"`
+	Env                     []operatorv1alpha1.EnvVar                 `json:"env,omitempty"`
+	GitAuth                 *operatorv1alpha1.GitAuthSpec             `json:"gitAuth,omitempty"`
+	AgentSession            *operatorv1alpha1.AgentSessionSpec        `json:"agentSession,omitempty"`
+	ImagePullSecrets        []string                                  `json:"imagePullSecrets,omitempty"`
+	TTLSecondsAfterFinished *int32                                    `json:"ttlSecondsAfterFinished,omitempty"`
 }
 
 // isAllowedRepoURL validates that the repo URL uses an https scheme to prevent
@@ -675,15 +682,16 @@ type agentSessionResponse struct {
 }
 
 type runResponse struct {
-	ID                 string                           `json:"id"`
-	DisplayName        string                           `json:"displayName,omitempty"`
-	WorkspaceSessionID string                           `json:"workspaceSessionID,omitempty"`
-	RepoURL            string                           `json:"repoURL"`
-	RepoRevision       string                           `json:"repoRevision,omitempty"`
-	Image              string                           `json:"image"`
-	Phase              operatorv1alpha1.HarnessRunPhase `json:"phase,omitempty"`
-	PodName            string                           `json:"podName,omitempty"`
-	AgentSession       *agentSessionResponse            `json:"agentSession,omitempty"`
+	ID                 string                                      `json:"id"`
+	DisplayName        string                                      `json:"displayName,omitempty"`
+	WorkspaceSessionID string                                      `json:"workspaceSessionID,omitempty"`
+	RepoURL            string                                      `json:"repoURL"`
+	RepoRevision       string                                      `json:"repoRevision,omitempty"`
+	Image              string                                      `json:"image"`
+	ImageProfile       *operatorv1alpha1.HarnessImageProfileStatus `json:"imageProfile,omitempty"`
+	Phase              operatorv1alpha1.HarnessRunPhase            `json:"phase,omitempty"`
+	PodName            string                                      `json:"podName,omitempty"`
+	AgentSession       *agentSessionResponse                       `json:"agentSession,omitempty"`
 
 	// GitHub outcome metadata (optional)
 	GitHubBranch      string `json:"gitHubBranch,omitempty"`
@@ -729,6 +737,7 @@ func runToResponse(run *operatorv1alpha1.HarnessRun, sessionDisplayName string) 
 		RepoURL:            run.Spec.RepoURL,
 		RepoRevision:       run.Spec.RepoRevision,
 		Image:              run.Spec.Image,
+		ImageProfile:       harnessImageProfileStatusForRun(run),
 		Phase:              run.Status.Phase,
 		PodName:            run.Status.PodName,
 		AgentSession:       agentSession,
@@ -799,6 +808,11 @@ func (a *API) handleSessionRunsCreate(w http.ResponseWriter, r *http.Request, wo
 		writeError(w, http.StatusBadRequest, "invalid egressMode")
 		return
 	}
+	imageProfileSpec, imageProfileStatus, err := normalizeHarnessImageProfileSelection(req.ImageProfile)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 
 	id := newID()
 	var agentSessionStatus *operatorv1alpha1.AgentSessionStatus
@@ -812,15 +826,17 @@ func (a *API) handleSessionRunsCreate(w http.ResponseWriter, r *http.Request, wo
 	run := &operatorv1alpha1.HarnessRun{
 		TypeMeta: metav1.TypeMeta{APIVersion: operatorv1alpha1.GroupVersion.String(), Kind: "HarnessRun"},
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      id,
-			Namespace: a.Namespace,
-			Labels:    map[string]string{controllers.LabelWorkspaceSessionName: workspaceSessionID},
+			Name:        id,
+			Namespace:   a.Namespace,
+			Labels:      map[string]string{controllers.LabelWorkspaceSessionName: workspaceSessionID},
+			Annotations: harnessImageProfileAnnotations(imageProfileStatus),
 		},
 		Spec: operatorv1alpha1.HarnessRunSpec{
 			WorkspaceSessionName: workspaceSessionID,
 			RepoURL:              req.RepoURL,
 			RepoRevision:         req.RepoRevision,
 			Image:                req.Image,
+			ImageProfile:         imageProfileSpec,
 			EgressMode:           egressMode,
 			Command:              req.Command,
 			Args:                 req.Args,
@@ -835,11 +851,17 @@ func (a *API) handleSessionRunsCreate(w http.ResponseWriter, r *http.Request, wo
 			ImagePullSecrets:        req.ImagePullSecrets,
 			TTLSecondsAfterFinished: req.TTLSecondsAfterFinished,
 		},
-		Status: operatorv1alpha1.HarnessRunStatus{AgentSession: agentSessionStatus},
+		Status: operatorv1alpha1.HarnessRunStatus{AgentSession: agentSessionStatus, ImageProfile: imageProfileStatus},
 	}
 	if err := a.K8s.Create(r.Context(), run); err != nil {
 		writeError(w, http.StatusInternalServerError, "create harness run failed")
 		return
+	}
+	if run.Spec.ImageProfile != nil || len(run.Annotations) != 0 {
+		if err := a.K8s.Update(r.Context(), run); err != nil {
+			writeError(w, http.StatusInternalServerError, "persist harness run profile contract failed")
+			return
+		}
 	}
 	if egressMode == "full" {
 		a.Audit.Append(r.Context(), principal(r.Context()), "harness-run.egress.override", "harness-run", run.Name, "allowed", map[string]any{"mode": egressMode})

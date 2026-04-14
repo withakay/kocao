@@ -192,4 +192,75 @@ Task 2.1 should add a profile-aware build job rather than replacing the existing
 ## Follow-up For Task 1.2
 
 Task 1.2 should build on this design by defining how callers request or infer one of the four profiles and how the selected profile is reported back in run/session status.
+
+## Task 1.2 Selection Contract
+
+### Request surface
+
+Run creation adds an optional `imageProfile` object alongside the existing `image` field. The contract is intentionally profile-first without removing the current explicit image string yet.
+
+```json
+{
+  "image": "kocao/harness-runtime:dev",
+  "imageProfile": {
+    "profile": "go",
+    "selectionPolicy": "auto"
+  }
+}
+```
+
+- `imageProfile.profile`: explicit selection. Allowed values are `base`, `go`, `web`, `full`.
+- `imageProfile.selectionPolicy`: policy selection. Allowed values are `auto`, `preferred-minimal`, `compatibility`.
+- `profile` and a non-`auto` `selectionPolicy` are mutually exclusive so the request cannot express competing intents.
+- Omitting `imageProfile` is equivalent to `selectionPolicy=auto`.
+
+### Deterministic selection order
+
+1. Explicit `imageProfile.profile` wins and is used as-is.
+2. Otherwise `selectionPolicy=preferred-minimal` selects `base`.
+3. Otherwise `selectionPolicy=compatibility` selects `full`.
+4. Otherwise `selectionPolicy=auto` attempts repo/task inference in Wave 2.
+5. If `auto` inference is unavailable or ambiguous, the system falls back to the matrix `compatibilityProfile`, which is `full`.
+
+### Validation and fallback rules
+
+- Unknown explicit profiles are rejected with `400`; they do not silently fall back.
+- Unknown policies are rejected with `400`.
+- Fallback only applies to `auto` selection, never to an explicit profile request.
+- The compatibility fallback remains `full` until Wave 2 inference can prove a narrower profile safely.
+
+### Reporting surface
+
+The selected profile is surfaced on both run and agent-session payloads as `imageProfile` status metadata:
+
+```json
+{
+  "requestedProfile": "go",
+  "selectionPolicy": "auto",
+  "selectedProfile": "go",
+  "selectionSource": "explicit",
+  "fallbackProfile": "full",
+  "reason": "explicit-request"
+}
+```
+
+- `requestedProfile`: explicit profile requested by the caller, if any.
+- `selectionPolicy`: normalized policy after defaulting.
+- `selectedProfile`: final profile the run/session should use.
+- `selectionSource`: one of `explicit`, `policy`, `inferred`, or `fallback`.
+- `fallbackProfile`: the matrix compatibility fallback, currently always `full`.
+- `reason`: stable machine-readable explanation for the selection outcome.
+
+### CLI surface
+
+`kocao agent start` accepts:
+
+- `--image-profile <base|go|web|full>` for explicit selection.
+- `--image-profile-policy <auto|preferred-minimal|compatibility>` for policy-driven selection.
+
+The CLI sends the same `imageProfile` object to the control-plane API and reports the resulting `selectedProfile` plus `selectionSource` in `agent start`, `agent status`, and `sessions status` output.
+
+### Wave 2 handoff
+
+Wave 2 should replace the temporary `auto-inference-pending` fallback reason with real repo/task heuristics and then map `selectedProfile` to the profile-tagged harness image built in task 2.1.
 <!-- ITO:END -->

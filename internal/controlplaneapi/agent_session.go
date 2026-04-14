@@ -912,18 +912,19 @@ func (a *API) updateHarnessRunAgentSessionStatus(ctx context.Context, run *opera
 // match the CLI AgentSession contract. The CLI must be able to unmarshal this
 // payload without client-side backfill.
 type agentSessionDTO struct {
-	RunID              string                             `json:"runId"`
-	PodName            string                             `json:"podName,omitempty"`
-	ServerID           string                             `json:"serverID,omitempty"`
-	Runtime            operatorv1alpha1.AgentRuntime      `json:"runtime,omitempty"`
-	Agent              operatorv1alpha1.AgentKind         `json:"agent,omitempty"`
-	SessionID          string                             `json:"sessionId,omitempty"`
-	Phase              operatorv1alpha1.AgentSessionPhase `json:"phase,omitempty"`
-	LastSequence       int64                              `json:"lastSequence,omitempty"`
-	WorkspaceSessionID string                             `json:"workspaceSessionId,omitempty"`
-	DisplayName        string                             `json:"displayName,omitempty"`
-	CreatedAt          string                             `json:"createdAt,omitempty"`
-	Diagnostic         *agentSessionDiagnosticDTO         `json:"diagnostic,omitempty"`
+	RunID              string                                      `json:"runId"`
+	PodName            string                                      `json:"podName,omitempty"`
+	ServerID           string                                      `json:"serverID,omitempty"`
+	ImageProfile       *operatorv1alpha1.HarnessImageProfileStatus `json:"imageProfile,omitempty"`
+	Runtime            operatorv1alpha1.AgentRuntime               `json:"runtime,omitempty"`
+	Agent              operatorv1alpha1.AgentKind                  `json:"agent,omitempty"`
+	SessionID          string                                      `json:"sessionId,omitempty"`
+	Phase              operatorv1alpha1.AgentSessionPhase          `json:"phase,omitempty"`
+	LastSequence       int64                                       `json:"lastSequence,omitempty"`
+	WorkspaceSessionID string                                      `json:"workspaceSessionId,omitempty"`
+	DisplayName        string                                      `json:"displayName,omitempty"`
+	CreatedAt          string                                      `json:"createdAt,omitempty"`
+	Diagnostic         *agentSessionDiagnosticDTO                  `json:"diagnostic,omitempty"`
 }
 
 type agentSessionDiagnosticDTO struct {
@@ -937,6 +938,7 @@ func (a *API) agentSessionToDTO(ctx context.Context, run *operatorv1alpha1.Harne
 		RunID:              run.Name,
 		PodName:            state.PodName,
 		ServerID:           state.ServerID,
+		ImageProfile:       harnessImageProfileStatusForRun(run),
 		Runtime:            state.Runtime,
 		Agent:              state.Agent,
 		SessionID:          state.SessionID,

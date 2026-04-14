@@ -30,18 +30,19 @@ type AgentSessionInfo struct {
 }
 
 type HarnessRun struct {
-	ID                 string            `json:"id"`
-	DisplayName        string            `json:"displayName,omitempty"`
-	WorkspaceSessionID string            `json:"workspaceSessionID,omitempty"`
-	RepoURL            string            `json:"repoURL"`
-	RepoRevision       string            `json:"repoRevision,omitempty"`
-	Image              string            `json:"image"`
-	Phase              string            `json:"phase,omitempty"`
-	PodName            string            `json:"podName,omitempty"`
-	AgentSession       *AgentSessionInfo `json:"agentSession,omitempty"`
-	GitHubBranch       string            `json:"gitHubBranch,omitempty"`
-	PullRequestURL     string            `json:"pullRequestURL,omitempty"`
-	PullRequestStatus  string            `json:"pullRequestStatus,omitempty"`
+	ID                 string                                      `json:"id"`
+	DisplayName        string                                      `json:"displayName,omitempty"`
+	WorkspaceSessionID string                                      `json:"workspaceSessionID,omitempty"`
+	RepoURL            string                                      `json:"repoURL"`
+	RepoRevision       string                                      `json:"repoRevision,omitempty"`
+	Image              string                                      `json:"image"`
+	ImageProfile       *operatorv1alpha1.HarnessImageProfileStatus `json:"imageProfile,omitempty"`
+	Phase              string                                      `json:"phase,omitempty"`
+	PodName            string                                      `json:"podName,omitempty"`
+	AgentSession       *AgentSessionInfo                           `json:"agentSession,omitempty"`
+	GitHubBranch       string                                      `json:"gitHubBranch,omitempty"`
+	PullRequestURL     string                                      `json:"pullRequestURL,omitempty"`
+	PullRequestStatus  string                                      `json:"pullRequestStatus,omitempty"`
 }
 
 type PodLogs struct {

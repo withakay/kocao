@@ -53,6 +53,12 @@ func (in *HarnessRun) DeepCopyInto(out *HarnessRun) {
 	out.Spec.RepoURL = in.Spec.RepoURL
 	out.Spec.RepoRevision = in.Spec.RepoRevision
 	out.Spec.Image = in.Spec.Image
+	if in.Spec.ImageProfile != nil {
+		out.Spec.ImageProfile = &HarnessImageProfileSpec{
+			Profile:         in.Spec.ImageProfile.Profile,
+			SelectionPolicy: in.Spec.ImageProfile.SelectionPolicy,
+		}
+	}
 	if in.Spec.Command != nil {
 		out.Spec.Command = append([]string(nil), in.Spec.Command...)
 	}
@@ -92,6 +98,16 @@ func (in *HarnessRun) DeepCopyInto(out *HarnessRun) {
 	out.Status.ObservedGeneration = in.Status.ObservedGeneration
 	out.Status.Phase = in.Status.Phase
 	out.Status.PodName = in.Status.PodName
+	if in.Status.ImageProfile != nil {
+		out.Status.ImageProfile = &HarnessImageProfileStatus{
+			RequestedProfile: in.Status.ImageProfile.RequestedProfile,
+			SelectionPolicy:  in.Status.ImageProfile.SelectionPolicy,
+			SelectedProfile:  in.Status.ImageProfile.SelectedProfile,
+			SelectionSource:  in.Status.ImageProfile.SelectionSource,
+			FallbackProfile:  in.Status.ImageProfile.FallbackProfile,
+			Reason:           in.Status.ImageProfile.Reason,
+		}
+	}
 	if in.Status.StartTime != nil {
 		out.Status.StartTime = &metav1.Time{Time: in.Status.StartTime.Time}
 	}

@@ -38,8 +38,8 @@ ______________________________________________________________________
 - **Verify**: API/CLI contract review and tests
 - **Done When**: The profile selection contract is documented and implementable without ambiguity.
 - **Requirements**: harness-image-profiles:deterministic-profile-selection, control-plane-api:image-profile-selection-surface
-- **Updated At**: 2026-04-13
-- **Status**: [ ] pending
+- **Updated At**: 2026-04-14
+- **Status**: [x] complete
 
 ______________________________________________________________________
 

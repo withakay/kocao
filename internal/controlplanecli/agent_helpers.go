@@ -63,6 +63,7 @@ func writeAgentSessionSummary(w io.Writer, heading string, session *AgentSession
 		{"Run ID", valueOrDash(session.RunID)},
 		{"Session ID", valueOrDash(session.SessionID)},
 		{"Name", valueOrDash(session.DisplayName)},
+		{"Profile", formatHarnessImageProfile(session.ImageProfile)},
 		{"Runtime", valueOrDash(session.Runtime)},
 		{"Agent", valueOrDash(session.Agent)},
 		{"Phase", valueOrDash(session.Phase)},

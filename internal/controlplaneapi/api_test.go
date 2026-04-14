@@ -1559,6 +1559,7 @@ func TestWorkspaceAgentSessionsList_WithLiveBridgeState(t *testing.T) {
 	resp, b = doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/workspace-sessions/"+sess.ID+"/harness-runs", "full", map[string]any{
 		"repoURL":      "https://example.com/repo",
 		"image":        "alpine:3",
+		"imageProfile": map[string]any{"profile": "web"},
 		"agentSession": map[string]any{"agent": "codex"},
 	})
 	if resp.StatusCode != http.StatusCreated {
@@ -1566,6 +1567,15 @@ func TestWorkspaceAgentSessionsList_WithLiveBridgeState(t *testing.T) {
 	}
 	var run runResponse
 	_ = json.Unmarshal(b, &run)
+	if run.ImageProfile == nil {
+		t.Fatal("run imageProfile missing from create response")
+	}
+	if run.ImageProfile.SelectedProfile != operatorv1alpha1.HarnessImageProfileWeb {
+		t.Fatalf("run selectedProfile = %q, want web", run.ImageProfile.SelectedProfile)
+	}
+	if run.ImageProfile.SelectionSource != operatorv1alpha1.HarnessImageProfileSelectionSourceExplicit {
+		t.Fatalf("run selectionSource = %q, want explicit", run.ImageProfile.SelectionSource)
+	}
 
 	// Simulate the pod being ready and create an agent session via the API.
 	var stored operatorv1alpha1.HarnessRun
@@ -2340,6 +2350,7 @@ func TestStatusAndStop_ResponseIncludesContractFields(t *testing.T) {
 	resp, b = doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/workspace-sessions/"+sess.ID+"/harness-runs", "full", map[string]any{
 		"repoURL":      "https://example.com/repo",
 		"image":        "alpine:3",
+		"imageProfile": map[string]any{"profile": "web"},
 		"agentSession": map[string]any{"agent": "codex"},
 	})
 	if resp.StatusCode != http.StatusCreated {
@@ -2347,6 +2358,9 @@ func TestStatusAndStop_ResponseIncludesContractFields(t *testing.T) {
 	}
 	var run runResponse
 	_ = json.Unmarshal(b, &run)
+	if run.ImageProfile == nil || run.ImageProfile.SelectedProfile != operatorv1alpha1.HarnessImageProfileWeb {
+		t.Fatalf("create run imageProfile = %#v, want selectedProfile web", run.ImageProfile)
+	}
 
 	// Simulate pod ready and set a creation timestamp (fake client doesn't
 	// auto-set it like a real API server would).
@@ -2478,8 +2492,36 @@ func TestCreateStatusAndStop_DTOUnmarshalsIntoCLIAgentSession(t *testing.T) {
 	if err := api.K8s.Get(context.Background(), client.ObjectKey{Namespace: api.Namespace, Name: run.ID}, &stored); err != nil {
 		t.Fatalf("get run: %v", err)
 	}
+	if stored.Spec.ImageProfile == nil {
+		stored.Spec.ImageProfile = &operatorv1alpha1.HarnessImageProfileSpec{
+			Profile:         operatorv1alpha1.HarnessImageProfileWeb,
+			SelectionPolicy: operatorv1alpha1.HarnessImageProfileSelectionPolicyAuto,
+		}
+	}
+	if stored.Annotations == nil {
+		stored.Annotations = map[string]string{}
+	}
+	stored.Annotations[annotationHarnessImageProfileSelected] = "web"
+	stored.Annotations[annotationHarnessImageProfileSource] = "explicit"
+	stored.Annotations[annotationHarnessImageProfilePolicy] = "auto"
+	stored.Annotations[annotationHarnessImageProfileFallback] = "full"
+	stored.Annotations[annotationHarnessImageProfileReason] = "explicit-request"
+	if err := api.K8s.Update(context.Background(), &stored); err != nil {
+		t.Fatalf("update run spec: %v", err)
+	}
+	if err := api.K8s.Get(context.Background(), client.ObjectKey{Namespace: api.Namespace, Name: run.ID}, &stored); err != nil {
+		t.Fatalf("refresh run after spec update: %v", err)
+	}
 	stored.Status.PodName = "pod-cli-contract"
 	stored.Status.Phase = operatorv1alpha1.HarnessRunPhaseRunning
+	stored.Status.ImageProfile = &operatorv1alpha1.HarnessImageProfileStatus{
+		RequestedProfile: operatorv1alpha1.HarnessImageProfileWeb,
+		SelectionPolicy:  operatorv1alpha1.HarnessImageProfileSelectionPolicyAuto,
+		SelectedProfile:  operatorv1alpha1.HarnessImageProfileWeb,
+		SelectionSource:  operatorv1alpha1.HarnessImageProfileSelectionSourceExplicit,
+		FallbackProfile:  operatorv1alpha1.HarnessImageProfileFull,
+		Reason:           "explicit-request",
+	}
 	if err := api.K8s.Status().Update(context.Background(), &stored); err != nil {
 		t.Fatalf("update run status: %v", err)
 	}
@@ -2491,14 +2533,15 @@ func TestCreateStatusAndStop_DTOUnmarshalsIntoCLIAgentSession(t *testing.T) {
 
 	// POST create — unmarshal into the CLI contract shape.
 	type cliAgentSession struct {
-		SessionID   string `json:"sessionId"`
-		RunID       string `json:"runId"`
-		DisplayName string `json:"displayName"`
-		Runtime     string `json:"runtime"`
-		Agent       string `json:"agent"`
-		Phase       string `json:"phase"`
-		WorkspaceID string `json:"workspaceSessionId"`
-		CreatedAt   string `json:"createdAt,omitempty"`
+		SessionID    string                                      `json:"sessionId"`
+		RunID        string                                      `json:"runId"`
+		DisplayName  string                                      `json:"displayName"`
+		ImageProfile *operatorv1alpha1.HarnessImageProfileStatus `json:"imageProfile,omitempty"`
+		Runtime      string                                      `json:"runtime"`
+		Agent        string                                      `json:"agent"`
+		Phase        string                                      `json:"phase"`
+		WorkspaceID  string                                      `json:"workspaceSessionId"`
+		CreatedAt    string                                      `json:"createdAt,omitempty"`
 	}
 
 	var createCLI cliAgentSession
@@ -2513,6 +2556,9 @@ func TestCreateStatusAndStop_DTOUnmarshalsIntoCLIAgentSession(t *testing.T) {
 	}
 	if createCLI.Phase != string(operatorv1alpha1.AgentSessionPhaseReady) {
 		t.Fatalf("CLI contract: create phase = %q, want Ready", createCLI.Phase)
+	}
+	if createCLI.ImageProfile == nil || createCLI.ImageProfile.SelectedProfile != operatorv1alpha1.HarnessImageProfileWeb {
+		t.Fatalf("CLI contract: create imageProfile = %#v, want selectedProfile web", createCLI.ImageProfile)
 	}
 
 	var createRaw map[string]json.RawMessage
@@ -2547,6 +2593,9 @@ func TestCreateStatusAndStop_DTOUnmarshalsIntoCLIAgentSession(t *testing.T) {
 	}
 	if statusCLI.Phase != string(operatorv1alpha1.AgentSessionPhaseReady) {
 		t.Fatalf("CLI contract: phase = %q, want Ready", statusCLI.Phase)
+	}
+	if statusCLI.ImageProfile == nil || statusCLI.ImageProfile.SelectedProfile != operatorv1alpha1.HarnessImageProfileWeb {
+		t.Fatalf("CLI contract: status imageProfile = %#v, want selectedProfile web", statusCLI.ImageProfile)
 	}
 
 	// Verify the old field name "harnessRunID" is NOT present in the payload.
