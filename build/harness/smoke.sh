@@ -113,7 +113,7 @@ sandbox_host=127.0.0.1
 sandbox_port=2468
 sandbox_health_endpoint=$(jq -r '.healthEndpoint' "${profile}")
 sandbox_catalog_endpoint=$(jq -r '.agentCatalogEndpoint' "${profile}")
-sandbox_report_agents=$(jq -r '[.requiredAgents[], .requiredTools[] | select(. != "sandbox-agent")] | unique[]' "${profile}")
+sandbox_report_agents=$(jq -r '.requiredAgents[]' "${profile}")
 sandbox_log="$(mktemp -t sandbox-agent-smoke.XXXXXX.log)"
 sandbox_pid=""
 

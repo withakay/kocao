@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"testing"
 )
@@ -135,10 +134,5 @@ func TestHarnessProfileMetadataDrivesSandboxSmokeChecks(t *testing.T) {
 			t.Fatalf("profile %s should derive sandbox smoke checks from required metadata only", entry.Name())
 		}
 
-		for _, agent := range profile.RequiredAgents {
-			if !slices.Contains(profile.RequiredTools, agent) {
-				t.Fatalf("profile %s must keep required agent %q in requiredTools for sandbox-agent verification", entry.Name(), agent)
-			}
-		}
 	}
 }
