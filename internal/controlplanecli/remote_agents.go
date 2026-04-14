@@ -244,7 +244,7 @@ func runRemoteAgentTaskGetCommand(args []string, cfg Config, stdout io.Writer, s
 func runRemoteAgentTaskDispatchCommand(args []string, cfg Config, stdout io.Writer, stderr io.Writer) error {
 	fs := newFlagSet("kocao remote-agents tasks dispatch", stderr)
 	agentID := fs.String("agent-id", "", "dispatch directly to a durable agent ID")
-	agentName := fs.String("agent", "", "dispatch to a named agent")
+	agentName := fs.String("agent", "", "dispatch to a named agent (preferred)")
 	pool := fs.String("pool", "", "disambiguate named agent by pool name")
 	workspace := fs.String("workspace", "", "disambiguate named agent by workspace session ID")
 	prompt := fs.String("prompt", "", "task prompt text")
@@ -258,10 +258,13 @@ func runRemoteAgentTaskDispatchCommand(args []string, cfg Config, stdout io.Writ
 		return fmt.Errorf("unexpected argument: %s", fs.Arg(0))
 	}
 	if strings.TrimSpace(*agentID) == "" && strings.TrimSpace(*agentName) == "" {
-		return fmt.Errorf("usage: kocao remote-agents tasks dispatch --agent <name>|--agent-id <id> --prompt <text>|--prompt-file <path> [--pool NAME] [--workspace ID] [--timeout-seconds N] [--output table|json]")
+		return fmt.Errorf("must specify --agent <name> or --agent-id <id>")
+	}
+	if strings.TrimSpace(*agentID) != "" && strings.TrimSpace(*agentName) != "" {
+		return fmt.Errorf("--agent and --agent-id are mutually exclusive")
 	}
 	if strings.TrimSpace(*prompt) == "" && strings.TrimSpace(*promptFile) == "" {
-		return fmt.Errorf("usage: kocao remote-agents tasks dispatch --agent <name>|--agent-id <id> --prompt <text>|--prompt-file <path> [--pool NAME] [--workspace ID] [--timeout-seconds N] [--output table|json]")
+		return fmt.Errorf("must specify --prompt <text> or --prompt-file <path>")
 	}
 	if strings.TrimSpace(*prompt) != "" && strings.TrimSpace(*promptFile) != "" {
 		return fmt.Errorf("--prompt and --prompt-file are mutually exclusive")
@@ -291,13 +294,12 @@ func runRemoteAgentTaskDispatchCommand(args []string, cfg Config, stdout io.Writ
 	if err != nil {
 		return err
 	}
+	target, err := resolveRemoteAgentTaskTarget(context.Background(), client, strings.TrimSpace(*agentName), strings.TrimSpace(*agentID), strings.TrimSpace(*pool), strings.TrimSpace(*workspace))
+	if err != nil {
+		return err
+	}
 	task, err := client.DispatchRemoteAgentTask(context.Background(), RemoteAgentTaskCreateRequest{
-		Target: RemoteAgentTaskTarget{
-			AgentID:            strings.TrimSpace(*agentID),
-			AgentName:          strings.TrimSpace(*agentName),
-			PoolName:           strings.TrimSpace(*pool),
-			WorkspaceSessionID: strings.TrimSpace(*workspace),
-		},
+		Target:         target,
 		Prompt:         promptText,
 		TimeoutSeconds: int32(*timeoutSeconds),
 	})
@@ -581,6 +583,17 @@ func resolveRemoteAgent(ctx context.Context, client *Client, ref string, pool st
 		return RemoteAgent{}, fmt.Errorf("remote agent %q is ambiguous; specify --pool or --workspace", ref)
 	}
 	return matches[0], nil
+}
+
+func resolveRemoteAgentTaskTarget(ctx context.Context, client *Client, agentName string, agentID string, pool string, workspace string) (RemoteAgentTaskTarget, error) {
+	if agentID != "" {
+		return RemoteAgentTaskTarget{AgentID: agentID}, nil
+	}
+	agent, err := resolveRemoteAgent(ctx, client, agentName, pool, workspace)
+	if err != nil {
+		return RemoteAgentTaskTarget{}, err
+	}
+	return RemoteAgentTaskTarget{AgentID: agent.ID}, nil
 }
 
 func parseRequiredRemoteAgentTaskID(command string, args []string) (string, []string, error) {
