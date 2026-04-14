@@ -24,15 +24,17 @@ make kind-prepull-harness-profiles
 make deploy
 ```
 
-MicroK8s or other registry-backed dev clusters can warm the common harness profiles with:
+Registry-backed dev clusters can warm the common harness profiles with:
 
 ```bash
 HARNESS_IMAGE=ghcr.io/withakay/kocao/harness-runtime IMAGE_TAG=dev-microk8s-amd64fix \
   IMAGE_PULL_SECRETS=ghcr-pull \
-  make microk8s-prepull-harness-profiles
+  make registry-prepull-harness-profiles
 ```
 
-That workflow creates a short-lived DaemonSet which pulls the configured `base`, `go`, `web`, and `full` profile tags onto each node, then removes the DaemonSet after rollout succeeds.
+That workflow creates a short-lived DaemonSet which pulls the configured `base`, `go`, `web`, and `full` profile tags onto each node, then removes the DaemonSet on exit unless `KEEP_PREPULL_DAEMONSET=1` is set.
+
+Use `make microk8s-prepull-harness-profiles` as a convenience wrapper when the target cluster is reachable through the default `microk8s` kube context.
 
 Delete:
 

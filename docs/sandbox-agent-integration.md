@@ -170,10 +170,10 @@ For registry-backed dev clusters, pre-pull the common harness profiles before a 
 ```bash
 HARNESS_IMAGE=ghcr.io/withakay/kocao/harness-runtime IMAGE_TAG=dev-microk8s-amd64fix \
   IMAGE_PULL_SECRETS=ghcr-pull \
-  bash ./hack/dev/prepull-harness-images.sh microk8s
+  make registry-prepull-harness-profiles
 ```
 
-The script uses a short-lived DaemonSet for MicroK8s and other registry-backed dev clusters. Set `PREPULL_CONTEXT` if your kube context is not `microk8s`, or use `kind` mode to load locally built images straight into Kind.
+The script uses a short-lived DaemonSet for MicroK8s and other registry-backed dev clusters, and cleans it up on exit unless `KEEP_PREPULL_DAEMONSET=1` is set. Use `make microk8s-prepull-harness-profiles` as a convenience wrapper for the default `microk8s` kube context, set `PREPULL_CONTEXT` when targeting another registry-backed cluster, or use `kind` mode to load locally built images straight into Kind.
 
 **Important**: When creating Harness Runs in Kind, use `"egressMode":"full"` to allow the pod to reach external git hosts and API endpoints. The default `restricted` egress mode only allows DNS.
 

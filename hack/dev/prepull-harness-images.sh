@@ -14,6 +14,7 @@ prepull_context=${PREPULL_CONTEXT:-}
 prepull_keep=${KEEP_PREPULL_DAEMONSET:-0}
 prepull_dry_run=${PREPULL_DRY_RUN:-0}
 image_pull_secrets=${IMAGE_PULL_SECRETS:-}
+prepull_cleanup_armed=0
 
 usage() {
   cat <<'EOF'
@@ -150,6 +151,16 @@ kubectl_cmd() {
   "${kubectl_bin}" "$@"
 }
 
+cleanup_registry_daemonset() {
+  local exit_code=$?
+
+  if [ "${prepull_cleanup_armed}" = "1" ] && [ "${prepull_keep}" != "1" ] && [ "${prepull_dry_run}" != "1" ]; then
+    kubectl_cmd -n "${prepull_namespace}" delete daemonset "${prepull_name}" --ignore-not-found >/dev/null 2>&1 || true
+  fi
+
+  return "${exit_code}"
+}
+
 render_registry_manifest() {
   local image_refs=()
   local image_ref
@@ -225,13 +236,11 @@ registry_prepull() {
     return
   fi
 
+  trap cleanup_registry_daemonset EXIT
+  prepull_cleanup_armed=1
   kubectl_cmd get namespace "${prepull_namespace}" >/dev/null 2>&1 || kubectl_cmd create namespace "${prepull_namespace}" >/dev/null
   render_registry_manifest | kubectl_cmd apply -f - >/dev/null
   kubectl_cmd -n "${prepull_namespace}" rollout status daemonset/"${prepull_name}" --timeout "${prepull_timeout}"
-
-  if [ "${prepull_keep}" != "1" ]; then
-    kubectl_cmd -n "${prepull_namespace}" delete daemonset "${prepull_name}" --ignore-not-found >/dev/null
-  fi
 }
 
 case "${cluster_type}" in
