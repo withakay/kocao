@@ -8,10 +8,10 @@ It does not claim live harness execution, Kind coverage, or showboat verificatio
 The workflow used in the test is:
 
 - `researcher` investigates the bug and produces notes
-- `implementer` receives `research-notes.md` as an explicit input artifact and turns it into a patch
-- `reviewer` receives `fix.patch` as an explicit input artifact and emits review comments
+- `implementer` is dispatched with the output artifact returned by the completed `researcher` task
+- `reviewer` is dispatched with the output artifact returned by the completed `implementer` task
 
-The important contract is that each task keeps its own identity, status, transcript, and input/output artifact list even though the larger workflow is only modeled through API and CLI boundaries.
+The important contract is that each task keeps its own identity, status, transcript, and input/output artifact list, and that downstream task inputs can be derived from prior task outputs returned by the API and CLI contract.
 
 ## 1. Create the logical pool and named agents
 
@@ -45,9 +45,12 @@ kocao remote-agents tasks dispatch \
 {"id":"task-research","agentName":"researcher","poolName":"workflow","state":"assigned"}
 ```
 
-## 3. Dispatch the linked follow-up tasks through the API
+## 3. Dispatch follow-up tasks using returned upstream artifacts
 
 ```bash
+# After `task-research` completes, read its returned output artifact.
+kocao remote-agents tasks get task-research --output json
+
 curl -fsS -X POST "$KOCAO_API_URL/api/v1/remote-agent-tasks" \
   -H "Authorization: Bearer $KOCAO_TOKEN" \
   -H 'Content-Type: application/json' \
@@ -58,6 +61,9 @@ curl -fsS -X POST "$KOCAO_API_URL/api/v1/remote-agent-tasks" \
       {"name": "research-notes.md", "kind": "report", "path": "/workspace/research-notes.md"}
     ]
   }'
+
+# After `task-implement` completes, read its returned output artifact.
+kocao remote-agents tasks get task-implement --output json
 
 curl -fsS -X POST "$KOCAO_API_URL/api/v1/remote-agent-tasks" \
   -H "Authorization: Bearer $KOCAO_TOKEN" \
@@ -72,11 +78,13 @@ curl -fsS -X POST "$KOCAO_API_URL/api/v1/remote-agent-tasks" \
 ```
 
 ```output
+{"id":"task-research","agentName":"researcher","poolName":"workflow","state":"completed","outputArtifacts":[{"name":"research-notes.md","kind":"report","path":"/workspace/research-notes.md"}]}
 {"id":"task-implement","agentName":"implementer","poolName":"workflow","state":"assigned","inputArtifacts":[{"name":"research-notes.md","kind":"report","path":"/workspace/research-notes.md"}]}
+{"id":"task-implement","agentName":"implementer","poolName":"workflow","state":"completed","outputArtifacts":[{"name":"fix.patch","kind":"patch","path":"/workspace/fix.patch"}]}
 {"id":"task-review","agentName":"reviewer","poolName":"workflow","state":"assigned","inputArtifacts":[{"name":"fix.patch","kind":"patch","path":"/workspace/fix.patch"}]}
 ```
 
-At this point the workflow has three independent task records, and the follow-up steps explicitly declare which prior artifact they consume.
+At this point the workflow has three independent task records, and each follow-up dispatch reuses the exact artifact reference returned by the previously completed task.
 
 ## 4. Inspect the coordinated workflow state
 
@@ -124,4 +132,4 @@ kocao remote-agents tasks artifacts task-review --output json
 {"taskId":"task-review","inputArtifacts":[{"name":"fix.patch","kind":"patch","path":"/workspace/fix.patch"}],"outputArtifacts":[{"name":"review.md","kind":"report","path":"/workspace/review.md"}]}
 ```
 
-Each task advertises both the artifact it consumed and the artifact it produced, so the researcher -> implementer -> reviewer chain is validated at the contract level without claiming live runtime execution.
+Each task advertises both the artifact it consumed and the artifact it produced, and the test proves the downstream inputs are copied from previously returned output artifacts rather than independently invented by the demo.

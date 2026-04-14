@@ -11,6 +11,18 @@ import (
 	"github.com/withakay/kocao/internal/controlplanecli"
 )
 
+type workflowStep struct {
+	agent          string
+	prompt         string
+	summary        string
+	outcome        string
+	inputFromAgent string
+	artifactName   string
+	artifactKind   remoteAgentArtifactKind
+	artifactPath   string
+	assistantText  string
+}
+
 func TestRemoteAgentOrchestrationContract_MultiAgentWorkflowViaCLIAndAPI(t *testing.T) {
 	api, cleanup := newTestAPI(t)
 	defer cleanup()
@@ -50,18 +62,6 @@ func TestRemoteAgentOrchestrationContract_MultiAgentWorkflowViaCLIAndAPI(t *test
 		}
 	}
 
-	type workflowStep struct {
-		agent          string
-		prompt         string
-		summary        string
-		outcome        string
-		inputArtifacts []remoteAgentArtifactCreateRequest
-		artifactName   string
-		artifactKind   remoteAgentArtifactKind
-		artifactPath   string
-		assistantText  string
-	}
-
 	steps := []workflowStep{
 		{
 			agent:         "researcher",
@@ -74,38 +74,31 @@ func TestRemoteAgentOrchestrationContract_MultiAgentWorkflowViaCLIAndAPI(t *test
 			assistantText: "Likely root cause narrowed to orchestration state handling during retries.",
 		},
 		{
-			agent:   "implementer",
-			prompt:  "Implement the fix described in research-notes.md.",
-			summary: "Implementation completed",
-			outcome: "patch-ready",
-			inputArtifacts: []remoteAgentArtifactCreateRequest{{
-				Name: "research-notes.md",
-				Kind: remoteAgentArtifactKindReport,
-				Path: "/workspace/research-notes.md",
-			}},
-			artifactName:  "fix.patch",
-			artifactKind:  remoteAgentArtifactKindPatch,
-			artifactPath:  "/workspace/fix.patch",
-			assistantText: "Patched the retry state transition and added validation coverage.",
+			agent:          "implementer",
+			prompt:         "Implement the fix described in research-notes.md.",
+			summary:        "Implementation completed",
+			outcome:        "patch-ready",
+			inputFromAgent: "researcher",
+			artifactName:   "fix.patch",
+			artifactKind:   remoteAgentArtifactKindPatch,
+			artifactPath:   "/workspace/fix.patch",
+			assistantText:  "Patched the retry state transition and added validation coverage.",
 		},
 		{
-			agent:   "reviewer",
-			prompt:  "Review fix.patch and confirm whether it is ready to merge.",
-			summary: "Review completed",
-			outcome: "approved-with-comments",
-			inputArtifacts: []remoteAgentArtifactCreateRequest{{
-				Name: "fix.patch",
-				Kind: remoteAgentArtifactKindPatch,
-				Path: "/workspace/fix.patch",
-			}},
-			artifactName:  "review.md",
-			artifactKind:  remoteAgentArtifactKindReport,
-			artifactPath:  "/workspace/review.md",
-			assistantText: "Patch looks correct; add one assertion for transcript retention before merge.",
+			agent:          "reviewer",
+			prompt:         "Review fix.patch and confirm whether it is ready to merge.",
+			summary:        "Review completed",
+			outcome:        "approved-with-comments",
+			inputFromAgent: "implementer",
+			artifactName:   "review.md",
+			artifactKind:   remoteAgentArtifactKindReport,
+			artifactPath:   "/workspace/review.md",
+			assistantText:  "Patch looks correct; add one assertion for transcript retention before merge.",
 		},
 	}
 
 	tasksByAgent := make(map[string]remoteAgentTask, len(steps))
+	outputArtifactByAgent := make(map[string]remoteAgentArtifactRef, len(steps))
 	for i, step := range steps {
 		var task remoteAgentTask
 		if i == 0 {
@@ -123,19 +116,31 @@ func TestRemoteAgentOrchestrationContract_MultiAgentWorkflowViaCLIAndAPI(t *test
 				t.Fatalf("unmarshal dispatched task for %s: %v (stdout=%s)", step.agent, err, string(stdout))
 			}
 		} else {
+			inputArtifact, ok := outputArtifactByAgent[step.inputFromAgent]
+			if !ok {
+				t.Fatalf("missing upstream output artifact for %s", step.inputFromAgent)
+			}
+			inputArtifacts := []remoteAgentArtifactCreateRequest{{
+				Name: inputArtifact.Name,
+				Kind: inputArtifact.Kind,
+				Path: inputArtifact.Path,
+			}}
 			resp, body := doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/remote-agent-tasks", "orchestration", map[string]any{
 				"target": map[string]any{
 					"agentName": step.agent,
 					"poolName":  "workflow",
 				},
 				"prompt":         step.prompt,
-				"inputArtifacts": step.inputArtifacts,
+				"inputArtifacts": inputArtifacts,
 			})
 			if resp.StatusCode != http.StatusCreated {
 				t.Fatalf("dispatch %s via API status = %d, want 201 (body=%s)", step.agent, resp.StatusCode, string(body))
 			}
 			if err := json.Unmarshal(body, &task); err != nil {
 				t.Fatalf("unmarshal API-dispatched task for %s: %v (body=%s)", step.agent, err, string(body))
+			}
+			if len(task.InputArtifacts) != 1 || task.InputArtifacts[0].Name != inputArtifact.Name || task.InputArtifacts[0].Kind != inputArtifact.Kind || task.InputArtifacts[0].Path != inputArtifact.Path {
+				t.Fatalf("dispatch %s did not preserve derived input artifact: got=%+v want=%+v", step.agent, task.InputArtifacts, inputArtifact)
 			}
 		}
 		if task.AgentName != step.agent || task.State != remoteAgentTaskStateAssigned {
@@ -166,7 +171,22 @@ func TestRemoteAgentOrchestrationContract_MultiAgentWorkflowViaCLIAndAPI(t *test
 			t.Fatalf("complete task for %s: %v", step.agent, err)
 		}
 
+		stdout, stderr, code := runRemoteAgentWorkflowCLI(t, srv.URL,
+			"remote-agents", "tasks", "get", task.ID, "--output", "json",
+		)
+		if code != 0 {
+			t.Fatalf("get completed task %s exit code = %d stderr=%s", task.ID, code, stderr)
+		}
+		var completedTask remoteAgentTask
+		if err := json.Unmarshal(stdout, &completedTask); err != nil {
+			t.Fatalf("unmarshal completed task for %s: %v (stdout=%s)", step.agent, err, string(stdout))
+		}
+		if len(completedTask.OutputArtifacts) != 1 {
+			t.Fatalf("expected one output artifact for %s, got %+v", step.agent, completedTask.OutputArtifacts)
+		}
+
 		tasksByAgent[step.agent] = task
+		outputArtifactByAgent[step.agent] = completedTask.OutputArtifacts[0]
 	}
 
 	stdout, stderr, code := runRemoteAgentWorkflowCLI(t, srv.URL,
@@ -205,10 +225,11 @@ func TestRemoteAgentOrchestrationContract_MultiAgentWorkflowViaCLIAndAPI(t *test
 		if task.Result == nil || task.Result.Summary != step.summary || task.Result.OutputArtifactCount != 1 || task.Result.TranscriptEntries != 2 {
 			t.Fatalf("unexpected task result for %s: %+v", step.agent, task.Result)
 		}
-		if len(task.InputArtifacts) != len(step.inputArtifacts) || len(task.OutputArtifacts) != 1 {
+		wantInputs := expectedInputArtifacts(step, outputArtifactByAgent)
+		if len(task.InputArtifacts) != len(wantInputs) || len(task.OutputArtifacts) != 1 {
 			t.Fatalf("unexpected artifact linkage for %s: inputs=%+v outputs=%+v", step.agent, task.InputArtifacts, task.OutputArtifacts)
 		}
-		for i, input := range step.inputArtifacts {
+		for i, input := range wantInputs {
 			if task.InputArtifacts[i].Name != input.Name || task.InputArtifacts[i].Kind != input.Kind || task.InputArtifacts[i].Path != input.Path {
 				t.Fatalf("unexpected input artifact %d for %s: %+v", i, step.agent, task.InputArtifacts[i])
 			}
@@ -248,10 +269,10 @@ func TestRemoteAgentOrchestrationContract_MultiAgentWorkflowViaCLIAndAPI(t *test
 		if err := json.Unmarshal(stdout, &artifacts); err != nil {
 			t.Fatalf("unmarshal artifacts %s: %v (stdout=%s)", taskID, err, string(stdout))
 		}
-		if len(artifacts.InputArtifacts) != len(step.inputArtifacts) || len(artifacts.OutputArtifacts) != 1 {
+		if len(artifacts.InputArtifacts) != len(wantInputs) || len(artifacts.OutputArtifacts) != 1 {
 			t.Fatalf("unexpected artifacts for %s: %+v", step.agent, artifacts)
 		}
-		for i, input := range step.inputArtifacts {
+		for i, input := range wantInputs {
 			if artifacts.InputArtifacts[i].Name != input.Name || artifacts.InputArtifacts[i].Kind != input.Kind || artifacts.InputArtifacts[i].Path != input.Path {
 				t.Fatalf("unexpected input artifact payload %d for %s: %+v", i, step.agent, artifacts.InputArtifacts[i])
 			}
@@ -274,6 +295,23 @@ func TestRemoteAgentOrchestrationContract_MultiAgentWorkflowViaCLIAndAPI(t *test
 	if reviewer.Availability != remoteAgentAvailabilityIdle || reviewer.CurrentTaskID != "" {
 		t.Fatalf("expected reviewer to be idle after workflow completion: %+v", reviewer)
 	}
+}
+
+func expectedInputArtifacts(step workflowStep, outputArtifactByAgent map[string]remoteAgentArtifactRef) []remoteAgentArtifactCreateRequest {
+	if step.inputFromAgent == "" {
+		return nil
+	}
+
+	inputArtifact, ok := outputArtifactByAgent[step.inputFromAgent]
+	if !ok {
+		return nil
+	}
+
+	return []remoteAgentArtifactCreateRequest{{
+		Name: inputArtifact.Name,
+		Kind: inputArtifact.Kind,
+		Path: inputArtifact.Path,
+	}}
 }
 
 func runRemoteAgentWorkflowCLI(t *testing.T, apiURL string, args ...string) ([]byte, string, int) {
