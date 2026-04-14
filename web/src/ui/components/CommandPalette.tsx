@@ -1,6 +1,7 @@
 import { Command } from 'cmdk'
 import { useNavigate, useRouterState } from '@tanstack/react-router'
 import { usePalette, useSidebarCollapsed, useAttachLayout } from '../lib/useLayoutState'
+import { remoteAgentTaskListSearchDefaults } from '../lib/remoteAgentDashboard'
 
 export function CommandPalette() {
   const { open, setOpen } = usePalette()
@@ -11,8 +12,8 @@ export function CommandPalette() {
 
   if (!open) return null
 
-  const go = (to: '/workspace-sessions' | '/harness-runs' | '/cluster' | '/settings') => {
-    navigate({ to })
+  const go = (to: '/workspace-sessions' | '/harness-runs' | '/cluster' | '/remote-agents/tasks' | '/settings') => {
+    navigate(to === '/remote-agents/tasks' ? { to, search: remoteAgentTaskListSearchDefaults } : { to })
     setOpen(false)
   }
 
@@ -56,6 +57,9 @@ export function CommandPalette() {
               </Item>
               <Item onSelect={() => go('/cluster')} icon={<ArrowRightIcon />}>
                 Go to Cluster
+              </Item>
+              <Item onSelect={() => go('/remote-agents/tasks')} icon={<ArrowRightIcon />}>
+                Go to Remote Agents
               </Item>
               <Item onSelect={() => go('/settings')} icon={<ArrowRightIcon />}>
                 Go to Settings

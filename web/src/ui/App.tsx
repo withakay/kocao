@@ -20,6 +20,13 @@ import { ClusterPage } from './pages/ClusterPage'
 import { SettingsPage } from './pages/SettingsPage'
 import { SymphonyPage } from './pages/SymphonyPage'
 import { SymphonyDetailPage } from './pages/SymphonyDetailPage'
+import { RemoteAgentsPage } from './pages/RemoteAgentsPage'
+import { RemoteAgentListPage } from './pages/RemoteAgentListPage'
+import { RemoteAgentTaskDetailPage } from './pages/RemoteAgentTaskDetailPage'
+import { RemoteAgentTaskTranscriptPage } from './pages/RemoteAgentTaskTranscriptPage'
+import { RemoteAgentTaskArtifactsPage } from './pages/RemoteAgentTaskArtifactsPage'
+import { RemoteAgentDetailPage } from './pages/RemoteAgentDetailPage'
+import { remoteAgentTaskListSearchDefaults } from './lib/remoteAgentDashboard'
 
 const rootRoute = createRootRoute({
   component: () => (
@@ -80,6 +87,54 @@ const clusterRoute = createRoute({
   component: ClusterPage,
 })
 
+const remoteAgentsIndexRoute = createRoute({
+  getParentRoute: () => shellRoute,
+  path: '/remote-agents',
+  component: () => <Navigate to="/remote-agents/tasks" search={remoteAgentTaskListSearchDefaults} replace />,
+})
+
+const remoteAgentTasksRoute = createRoute({
+  getParentRoute: () => shellRoute,
+  path: '/remote-agents/tasks',
+  validateSearch: (search: Record<string, unknown>) => ({
+    q: typeof search.q === 'string' ? search.q : remoteAgentTaskListSearchDefaults.q,
+    pool: typeof search.pool === 'string' ? search.pool : remoteAgentTaskListSearchDefaults.pool,
+    state: search.state === 'active' || search.state === 'terminal' ? search.state : remoteAgentTaskListSearchDefaults.state,
+    artifacts: search.artifacts === 'with-output' ? 'with-output' : remoteAgentTaskListSearchDefaults.artifacts,
+  }),
+  component: RemoteAgentsPage,
+})
+
+const remoteAgentTaskDetailRoute = createRoute({
+  getParentRoute: () => shellRoute,
+  path: '/remote-agents/tasks/$taskId',
+  component: RemoteAgentTaskDetailPage,
+})
+
+const remoteAgentTaskTranscriptRoute = createRoute({
+  getParentRoute: () => shellRoute,
+  path: '/remote-agents/tasks/$taskId/transcript',
+  component: RemoteAgentTaskTranscriptPage,
+})
+
+const remoteAgentTaskArtifactsRoute = createRoute({
+  getParentRoute: () => shellRoute,
+  path: '/remote-agents/tasks/$taskId/artifacts',
+  component: RemoteAgentTaskArtifactsPage,
+})
+
+const remoteAgentAgentsRoute = createRoute({
+  getParentRoute: () => shellRoute,
+  path: '/remote-agents/agents',
+  component: RemoteAgentListPage,
+})
+
+const remoteAgentDetailRoute = createRoute({
+  getParentRoute: () => shellRoute,
+  path: '/remote-agents/agents/$agentId',
+  component: RemoteAgentDetailPage,
+})
+
 const symphonyRoute = createRoute({
   getParentRoute: () => shellRoute,
   path: '/symphony',
@@ -107,6 +162,13 @@ const routeTree = rootRoute.addChildren([
     runsRoute,
     runDetailRoute,
     clusterRoute,
+    remoteAgentsIndexRoute,
+    remoteAgentTasksRoute,
+    remoteAgentTaskDetailRoute,
+    remoteAgentTaskTranscriptRoute,
+    remoteAgentTaskArtifactsRoute,
+    remoteAgentAgentsRoute,
+    remoteAgentDetailRoute,
     symphonyRoute,
     symphonyDetailRoute,
     settingsRoute,

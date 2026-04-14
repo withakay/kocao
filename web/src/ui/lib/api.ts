@@ -45,6 +45,122 @@ export type AgentSessionEvent = {
   envelope: unknown
 }
 
+export type RemoteAgentAvailability = 'idle' | 'busy' | 'offline'
+
+export type RemoteAgentTaskState =
+  | 'assigned'
+  | 'running'
+  | 'completed'
+  | 'failed'
+  | 'timed_out'
+  | 'cancelled'
+
+export type RemoteAgentArtifactKind = 'file' | 'patch' | 'bundle' | 'report'
+
+export type RemoteAgentTranscriptRole = 'system' | 'user' | 'agent' | 'tool'
+
+export type RemoteAgentSessionBinding = {
+  harnessRunId?: string
+  sessionId?: string
+  podName?: string
+  runtime?: string
+  agent?: string
+}
+
+export type RemoteAgentPool = {
+  id: string
+  name: string
+  displayName?: string
+  description?: string
+  workspaceSessionId?: string
+  createdAt?: string
+  updatedAt?: string
+}
+
+export type RemoteAgent = {
+  id: string
+  name: string
+  displayName?: string
+  description?: string
+  poolId?: string
+  poolName?: string
+  workspaceSessionId?: string
+  runtime?: string
+  agent?: string
+  availability?: RemoteAgentAvailability
+  currentTaskId?: string
+  lastActivityAt?: string
+  currentSession?: RemoteAgentSessionBinding
+  createdAt?: string
+  updatedAt?: string
+}
+
+export type RemoteAgentArtifactRef = {
+  id: string
+  name: string
+  kind: RemoteAgentArtifactKind
+  mediaType?: string
+  path?: string
+  uri?: string
+  digest?: string
+  sizeBytes?: number
+  createdAt?: string
+}
+
+export type RemoteAgentTranscriptEntry = {
+  sequence: number
+  at?: string
+  role: RemoteAgentTranscriptRole
+  kind?: string
+  text?: string
+  eventRef?: string
+}
+
+export type RemoteAgentTaskResult = {
+  summary?: string
+  outcome?: string
+  transcriptEntries?: number
+  outputArtifactCount?: number
+}
+
+export type RemoteAgentTaskBase = {
+  id: string
+  requestedBy?: string
+  agentId?: string
+  agentName?: string
+  poolId?: string
+  poolName?: string
+  workspaceSessionId?: string
+  prompt?: string
+  state: RemoteAgentTaskState
+  timeoutSeconds?: number
+  attempt?: number
+  retryCount?: number
+  currentSession?: RemoteAgentSessionBinding
+  createdAt?: string
+  assignedAt?: string
+  startedAt?: string
+  completedAt?: string
+  cancelledAt?: string
+  lastTransitionAt?: string
+  result?: RemoteAgentTaskResult
+}
+
+export type RemoteAgentTask = RemoteAgentTaskBase
+
+export type RemoteAgentTaskArtifactsResponse = {
+  taskId: string
+  inputArtifacts?: RemoteAgentArtifactRef[]
+  outputArtifacts?: RemoteAgentArtifactRef[]
+}
+
+export type RemoteAgentTaskTranscriptResponse = {
+  taskId: string
+  transcript?: RemoteAgentTranscriptEntry[]
+}
+
+export type RemoteAgentTaskDetail = RemoteAgentTaskBase & RemoteAgentTaskArtifactsResponse & RemoteAgentTaskTranscriptResponse
+
 export type AuditEvent = {
   id: string
   at: string
@@ -395,6 +511,21 @@ export const api = {
     const suffix = qs.toString() ? `?${qs.toString()}` : ''
     return apiFetch<PodLogs>(`/api/v1/pods/${encodeURIComponent(podName)}/logs${suffix}`, { token })
   },
+
+  listRemoteAgentPools: (token: string) =>
+    apiFetch<{ remoteAgentPools: RemoteAgentPool[] }>('/api/v1/remote-agent-pools', { token }),
+  listRemoteAgents: (token: string) =>
+    apiFetch<{ remoteAgents: RemoteAgent[] }>('/api/v1/remote-agents', { token }),
+  getRemoteAgent: (token: string, agentID: string) =>
+    apiFetch<RemoteAgent>(`/api/v1/remote-agents/${encodeURIComponent(agentID)}`, { token }),
+  listRemoteAgentTasks: (token: string) =>
+    apiFetch<{ remoteAgentTasks: RemoteAgentTask[] }>('/api/v1/remote-agent-tasks', { token }),
+  getRemoteAgentTask: (token: string, taskID: string) =>
+    apiFetch<RemoteAgentTaskDetail>(`/api/v1/remote-agent-tasks/${encodeURIComponent(taskID)}`, { token }),
+  getRemoteAgentTaskTranscript: (token: string, taskID: string) =>
+    apiFetch<RemoteAgentTaskTranscriptResponse>(`/api/v1/remote-agent-tasks/${encodeURIComponent(taskID)}/transcript`, { token }),
+  getRemoteAgentTaskArtifacts: (token: string, taskID: string) =>
+    apiFetch<RemoteAgentTaskArtifactsResponse>(`/api/v1/remote-agent-tasks/${encodeURIComponent(taskID)}/artifacts`, { token }),
 
   createAttachToken: (token: string, workspaceSessionID: string, role: 'viewer' | 'driver', mode: 'exclusive' | 'collab' = 'exclusive') =>
     apiFetch<{ token: string; expiresAt: string; workspaceSessionID: string; clientID: string; role: string; mode?: string }>(

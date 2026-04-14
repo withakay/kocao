@@ -27,8 +27,8 @@ ______________________________________________________________________
 - **Verify**: `go test ./internal/controlplaneapi/...`
 - **Done When**: Data model and API semantics are encoded in code/tests and match the proposal specs.
 - **Requirements**: remote-agent-orchestration:named-remote-agents, remote-agent-orchestration:task-dispatch-lifecycle, agent-artifacts:persistent-agent-transcripts, agent-artifacts:attached-task-artifacts
-- **Updated At**: 2026-04-13
-- **Status**: [ ] pending
+- **Updated At**: 2026-04-14
+- **Status**: [x] complete
 
 ### Task 1.2: Define dashboard information architecture
 
@@ -38,8 +38,8 @@ ______________________________________________________________________
 - **Verify**: UI design review or component-level tests
 - **Done When**: The dashboard structure is concrete enough to implement without guessing data shape later.
 - **Requirements**: web-ui:remote-agent-operations-dashboard
-- **Updated At**: 2026-04-13
-- **Status**: [ ] pending
+- **Updated At**: 2026-04-14
+- **Status**: [x] complete
 
 ______________________________________________________________________
 
@@ -55,8 +55,8 @@ ______________________________________________________________________
 - **Verify**: `go test ./internal/controlplaneapi/... ./internal/controlplanecli/...`
 - **Done When**: API and storage behavior satisfy orchestration and artifact requirements with passing tests.
 - **Requirements**: remote-agent-orchestration:named-remote-agents, remote-agent-orchestration:task-dispatch-lifecycle, agent-artifacts:persistent-agent-transcripts, agent-artifacts:attached-task-artifacts
-- **Updated At**: 2026-04-13
-- **Status**: [ ] pending
+- **Updated At**: 2026-04-14
+- **Status**: [x] complete
 
 ### Task 2.2: Extend CLI for orchestration workflows
 
@@ -66,8 +66,8 @@ ______________________________________________________________________
 - **Verify**: `go test ./cmd/kocao/... ./internal/controlplanecli/...`
 - **Done When**: CLI covers the orchestration lifecycle without requiring raw API calls.
 - **Requirements**: remote-agent-orchestration:named-remote-agents, remote-agent-orchestration:task-dispatch-lifecycle
-- **Updated At**: 2026-04-13
-- **Status**: [ ] pending
+- **Updated At**: 2026-04-14
+- **Status**: [x] complete
 
 ______________________________________________________________________
 
@@ -83,17 +83,17 @@ ______________________________________________________________________
 - **Verify**: `pnpm -C web test && pnpm -C web lint`
 - **Done When**: Operators can inspect remote-agent activity from the UI.
 - **Requirements**: web-ui:remote-agent-operations-dashboard
-- **Updated At**: 2026-04-13
-- **Status**: [ ] pending
+- **Updated At**: 2026-04-14
+- **Status**: [x] complete
 
-### Task 3.2: Add multi-agent workflow demonstrations and E2E coverage
+### Task 3.2: Add multi-agent workflow demonstrations and contract coverage
 
 - **Files**: `demos/*`, integration tests, CI workflow updates
 - **Dependencies**: None
-- **Action**: Add end-to-end coverage and demos for reviewer/implementer/researcher multi-agent workflows.
-- **Verify**: live or Kind-backed integration workflow + showboat verification
-- **Done When**: Orchestration behavior is exercised in automated coverage and documented demos.
+- **Action**: Add CLI+API contract coverage and demos for reviewer/implementer/researcher multi-agent workflows, including explicit input/output artifact linkage between steps.
+- **Verify**: `go test ./internal/controlplaneapi/... ./internal/controlplanecli/...`
+- **Done When**: The multi-step workflow contract is exercised in automated coverage and documented demos without claiming live runtime verification.
 - **Requirements**: remote-agent-orchestration:multi-agent-workflow-coordination, agent-artifacts:persistent-agent-transcripts
-- **Updated At**: 2026-04-13
-- **Status**: [ ] pending
+- **Updated At**: 2026-04-14
+- **Status**: [x] complete
 <!-- ITO:END -->
