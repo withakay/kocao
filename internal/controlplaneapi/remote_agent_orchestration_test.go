@@ -360,6 +360,36 @@ func TestRemoteAgentOrchestrationStorePersistsTranscriptsAndArtifacts(t *testing
 	}
 }
 
+func TestRemoteAgentOrchestrationStoreLoadsLargeTranscriptRecords(t *testing.T) {
+	store := newRemoteAgentOrchestrationStore(filepath.Join(t.TempDir(), "orchestration.jsonl"))
+	service := newRemoteAgentOrchestrationService(store, "", nil, nil)
+
+	agent, err := service.CreateAgent(remoteAgentCreateRequest{Name: "reviewer"})
+	if err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	task, err := service.DispatchTask("tester", remoteAgentTaskCreateRequest{
+		Target: remoteAgentTaskTarget{AgentID: agent.ID},
+		Prompt: "Review the large transcript",
+	})
+	if err != nil {
+		t.Fatalf("dispatch task: %v", err)
+	}
+	largeText := strings.Repeat("summary", 10_000)
+	if _, err := service.AppendTranscript(task.ID, remoteAgentTranscriptEntry{Role: remoteAgentTranscriptRoleAgent, Kind: "summary", Text: largeText}); err != nil {
+		t.Fatalf("append transcript: %v", err)
+	}
+
+	reloaded := newRemoteAgentOrchestrationService(store, "", nil, nil)
+	restoredTask, ok := reloaded.GetTask(task.ID)
+	if !ok {
+		t.Fatal("expected large transcript task to be loaded")
+	}
+	if len(restoredTask.Transcript) != 1 || restoredTask.Transcript[0].Text != largeText {
+		t.Fatalf("expected large transcript to round-trip, got %+v", restoredTask.Transcript)
+	}
+}
+
 func TestRemoteAgentOrchestrationAPIContract_ValidatesCurrentSessionBinding(t *testing.T) {
 	api, cleanup := newTestAPI(t)
 	defer cleanup()
@@ -405,6 +435,27 @@ func TestRemoteAgentOrchestrationAPIContract_ValidatesCurrentSessionBinding(t *t
 	})
 	if err == nil || !strings.Contains(err.Error(), "currentSession.harnessRunId required") {
 		t.Fatalf("expected harnessRunId validation error, got %v", err)
+	}
+
+	createHarnessRunForRemoteAgent(t, api, operatorv1alpha1.HarnessRun{
+		ObjectMeta: metav1.ObjectMeta{Name: "run-without-workspace", Namespace: "test-ns"},
+		Spec: operatorv1alpha1.HarnessRunSpec{
+			AgentSession: &operatorv1alpha1.AgentSessionSpec{
+				Runtime: operatorv1alpha1.AgentRuntimeSandboxAgent,
+				Agent:   operatorv1alpha1.AgentKindClaude,
+			},
+		},
+	})
+
+	_, err = api.RemoteAgentOrchestration.CreateAgent(remoteAgentCreateRequest{
+		Name:               "reviewer-3",
+		WorkspaceSessionID: "ws-123",
+		CurrentSession: &remoteAgentSessionBinding{
+			HarnessRunID: "run-without-workspace",
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "does not belong to workspaceSessionId") {
+		t.Fatalf("expected workspace session binding error, got %v", err)
 	}
 }
 
@@ -492,6 +543,12 @@ func TestRemoteAgentOrchestrationService_TimesOutAndCanRetryTask(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dispatch task: %v", err)
 	}
+	if _, err := service.AppendTranscript(task.ID, remoteAgentTranscriptEntry{Role: remoteAgentTranscriptRoleAgent, Kind: "summary", Text: "First attempt failed"}); err != nil {
+		t.Fatalf("append transcript: %v", err)
+	}
+	if _, err := service.AddOutputArtifact(task.ID, remoteAgentArtifactCreateRequest{Name: "attempt-1.md", Kind: remoteAgentArtifactKindReport, Path: "/tmp/attempt-1.md"}); err != nil {
+		t.Fatalf("add output artifact: %v", err)
+	}
 
 	ageRemoteAgentTaskForTimeout(t, service, task.ID, 2*time.Second)
 
@@ -520,8 +577,11 @@ func TestRemoteAgentOrchestrationService_TimesOutAndCanRetryTask(t *testing.T) {
 	if retried.State != remoteAgentTaskStateAssigned || retried.Attempt != 2 || retried.RetryCount != 1 {
 		t.Fatalf("unexpected retried task: %+v", retried)
 	}
-	if retried.CompletedAt != "" || retried.Result != nil || len(retried.OutputArtifacts) != 0 || len(retried.Transcript) != 0 {
-		t.Fatalf("expected retry to reset terminal attempt state, got %+v", retried)
+	if retried.CompletedAt != "" || retried.Result != nil {
+		t.Fatalf("expected retry to reset terminal attempt metadata, got %+v", retried)
+	}
+	if len(retried.OutputArtifacts) != 1 || len(retried.Transcript) != 1 {
+		t.Fatalf("expected retry to preserve prior attempt history, got %+v", retried)
 	}
 }
 

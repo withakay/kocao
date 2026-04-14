@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"os"
@@ -223,6 +224,8 @@ type RemoteAgentOrchestrationStore struct {
 	maxMem int
 }
 
+const remoteAgentStoreMaxRecordSize = 10 * 1024 * 1024
+
 func newRemoteAgentOrchestrationStore(path string) *RemoteAgentOrchestrationStore {
 	return &RemoteAgentOrchestrationStore{path: path, maxMem: 50_000}
 }
@@ -246,14 +249,23 @@ func (s *RemoteAgentOrchestrationStore) append(record remoteAgentOrchestrationSt
 		}
 		return
 	}
-	_ = os.MkdirAll(filepath.Dir(s.path), 0o755)
+	if err := os.MkdirAll(filepath.Dir(s.path), 0o755); err != nil {
+		slog.Error("remote agent orchestration store: mkdir failed", "path", s.path, "error", err)
+		return
+	}
 	f, err := os.OpenFile(s.path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 	if err != nil {
+		slog.Error("remote agent orchestration store: open failed", "path", s.path, "error", err)
 		return
 	}
 	defer func() { _ = f.Close() }()
-	_ = json.NewEncoder(f).Encode(record)
-	_ = f.Sync()
+	if err := json.NewEncoder(f).Encode(record); err != nil {
+		slog.Error("remote agent orchestration store: encode failed", "path", s.path, "error", err)
+		return
+	}
+	if err := f.Sync(); err != nil {
+		slog.Error("remote agent orchestration store: sync failed", "path", s.path, "error", err)
+	}
 }
 
 func sanitizeRemoteAgentStoreRecord(record remoteAgentOrchestrationStoreRecord) remoteAgentOrchestrationStoreRecord {
@@ -380,6 +392,7 @@ func (s *RemoteAgentOrchestrationStore) records() ([]remoteAgentOrchestrationSto
 	defer func() { _ = f.Close() }()
 	var out []remoteAgentOrchestrationStoreRecord
 	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 0, 64*1024), remoteAgentStoreMaxRecordSize)
 	for scanner.Scan() {
 		var rec remoteAgentOrchestrationStoreRecord
 		if err := json.Unmarshal(scanner.Bytes(), &rec); err != nil {
@@ -443,6 +456,8 @@ func newRemoteAgentOrchestrationService(store *RemoteAgentOrchestrationStore, na
 		service.pools = pools
 		service.agents = agents
 		service.tasks = tasks
+	} else {
+		slog.Error("remote agent orchestration store: load failed", "path", store.path, "error", err)
 	}
 	return service
 }
@@ -492,7 +507,7 @@ func (s *RemoteAgentOrchestrationService) resolveSessionBinding(workspaceSession
 		}
 		return nil, &requestError{status: http.StatusInternalServerError, msg: "resolve currentSession.harnessRunId failed"}
 	}
-	if requestedWorkspace := strings.TrimSpace(workspaceSessionID); requestedWorkspace != "" && run.Spec.WorkspaceSessionName != "" && run.Spec.WorkspaceSessionName != requestedWorkspace {
+	if requestedWorkspace := strings.TrimSpace(workspaceSessionID); requestedWorkspace != "" && run.Spec.WorkspaceSessionName != requestedWorkspace {
 		return nil, &requestError{status: http.StatusBadRequest, msg: "currentSession.harnessRunId does not belong to workspaceSessionId"}
 	}
 	if run.Status.PodName != "" {
@@ -573,9 +588,9 @@ func (s *RemoteAgentOrchestrationService) ListAgents() []remoteAgent {
 }
 
 func (s *RemoteAgentOrchestrationService) ListTasks() []remoteAgentTask {
+	s.expireTimedOutTasks(time.Now().UTC())
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.expireTimedOutTasksLocked(time.Now().UTC())
 	out := make([]remoteAgentTask, 0, len(s.tasks))
 	for _, task := range s.tasks {
 		out = append(out, task)
@@ -742,9 +757,9 @@ func (s *RemoteAgentOrchestrationService) DispatchTask(requestedBy string, req r
 	if err := validateRemoteAgentTaskCreateRequest(req); err != nil {
 		return remoteAgentTask{}, err
 	}
+	s.expireTimedOutTasks(time.Now().UTC())
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.expireTimedOutTasksLocked(time.Now().UTC())
 	agent, err := s.resolveAgentLocked(req.Target)
 	if err != nil {
 		return remoteAgentTask{}, err
@@ -791,9 +806,9 @@ func (s *RemoteAgentOrchestrationService) DispatchTask(requestedBy string, req r
 }
 
 func (s *RemoteAgentOrchestrationService) GetTask(id string) (remoteAgentTask, bool) {
+	s.expireTimedOutTask(strings.TrimSpace(id), time.Now().UTC())
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.expireTimedOutTaskLocked(strings.TrimSpace(id), time.Now().UTC())
 	task, ok := s.tasks[strings.TrimSpace(id)]
 	return task, ok
 }
@@ -819,23 +834,59 @@ func remoteAgentTaskDeadline(task remoteAgentTask) (time.Time, bool) {
 	return parsed.Add(time.Duration(task.TimeoutSeconds) * time.Second), true
 }
 
-func (s *RemoteAgentOrchestrationService) expireTimedOutTasksLocked(now time.Time) {
-	for id := range s.tasks {
-		s.expireTimedOutTaskLocked(id, now)
+type remoteAgentPersistenceBatch struct {
+	tasks  []remoteAgentTask
+	agents []remoteAgent
+}
+
+func (s *RemoteAgentOrchestrationService) expireTimedOutTasks(now time.Time) {
+	s.mu.Lock()
+	batch := s.expireTimedOutTasksLocked(now)
+	s.mu.Unlock()
+	s.persistBatch(batch)
+}
+
+func (s *RemoteAgentOrchestrationService) expireTimedOutTask(taskID string, now time.Time) bool {
+	s.mu.Lock()
+	expired, batch := s.expireTimedOutTaskLocked(taskID, now)
+	s.mu.Unlock()
+	s.persistBatch(batch)
+	return expired
+}
+
+func (s *RemoteAgentOrchestrationService) persistBatch(batch remoteAgentPersistenceBatch) {
+	if s.store == nil {
+		return
+	}
+	for _, agent := range batch.agents {
+		s.store.SaveAgent(agent)
+	}
+	for _, task := range batch.tasks {
+		s.store.SaveTask(task)
 	}
 }
 
-func (s *RemoteAgentOrchestrationService) expireTimedOutTaskLocked(taskID string, now time.Time) bool {
+func (s *RemoteAgentOrchestrationService) expireTimedOutTasksLocked(now time.Time) remoteAgentPersistenceBatch {
+	var batch remoteAgentPersistenceBatch
+	for id := range s.tasks {
+		_, taskBatch := s.expireTimedOutTaskLocked(id, now)
+		batch.tasks = append(batch.tasks, taskBatch.tasks...)
+		batch.agents = append(batch.agents, taskBatch.agents...)
+	}
+	return batch
+}
+
+func (s *RemoteAgentOrchestrationService) expireTimedOutTaskLocked(taskID string, now time.Time) (bool, remoteAgentPersistenceBatch) {
 	task, ok := s.tasks[strings.TrimSpace(taskID)]
 	if !ok {
-		return false
+		return false, remoteAgentPersistenceBatch{}
 	}
 	if task.State != remoteAgentTaskStateAssigned && task.State != remoteAgentTaskStateRunning {
-		return false
+		return false, remoteAgentPersistenceBatch{}
 	}
 	deadline, ok := remoteAgentTaskDeadline(task)
 	if !ok || deadline.After(now) {
-		return false
+		return false, remoteAgentPersistenceBatch{}
 	}
 	completedAt := now.UTC().Format(time.RFC3339)
 	task.State = remoteAgentTaskStateTimedOut
@@ -848,15 +899,17 @@ func (s *RemoteAgentOrchestrationService) expireTimedOutTaskLocked(taskID string
 		TranscriptEntries:   len(task.Transcript),
 		OutputArtifactCount: len(task.OutputArtifacts),
 	}
-	s.updateTaskLocked(task)
+	s.tasks[task.ID] = task
+	batch := remoteAgentPersistenceBatch{tasks: []remoteAgentTask{task}}
 	if agent, ok := s.agents[task.AgentID]; ok && agent.CurrentTaskID == task.ID {
 		agent.CurrentTaskID = ""
 		agent.Availability = remoteAgentAvailabilityIdle
 		agent.LastActivityAt = completedAt
 		agent.UpdatedAt = completedAt
-		s.updateAgentLocked(agent)
+		s.agents[agent.ID] = agent
+		batch.agents = append(batch.agents, agent)
 	}
-	return true
+	return true, batch
 }
 
 func (s *RemoteAgentOrchestrationService) updateTaskLocked(task remoteAgentTask) {
@@ -901,9 +954,9 @@ func (s *RemoteAgentOrchestrationService) transitionTaskLocked(taskID string, al
 }
 
 func (s *RemoteAgentOrchestrationService) StartTask(taskID string) (remoteAgentTask, error) {
+	s.expireTimedOutTask(strings.TrimSpace(taskID), time.Now().UTC())
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.expireTimedOutTaskLocked(strings.TrimSpace(taskID), time.Now().UTC())
 	task, err := s.transitionTaskLocked(taskID, []remoteAgentTaskState{remoteAgentTaskStateAssigned}, remoteAgentTaskStateRunning)
 	if err != nil {
 		return remoteAgentTask{}, err
@@ -919,9 +972,9 @@ func (s *RemoteAgentOrchestrationService) StartTask(taskID string) (remoteAgentT
 }
 
 func (s *RemoteAgentOrchestrationService) CancelTask(taskID string) (remoteAgentTask, error) {
+	s.expireTimedOutTask(strings.TrimSpace(taskID), time.Now().UTC())
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.expireTimedOutTaskLocked(strings.TrimSpace(taskID), time.Now().UTC())
 	task, err := s.transitionTaskLocked(taskID, []remoteAgentTaskState{remoteAgentTaskStateAssigned, remoteAgentTaskStateRunning}, remoteAgentTaskStateCancelled)
 	if err != nil {
 		return remoteAgentTask{}, err
@@ -937,9 +990,9 @@ func (s *RemoteAgentOrchestrationService) CancelTask(taskID string) (remoteAgent
 }
 
 func (s *RemoteAgentOrchestrationService) CompleteTask(taskID string, result remoteAgentTaskCompleteRequest) (remoteAgentTask, error) {
+	s.expireTimedOutTask(strings.TrimSpace(taskID), time.Now().UTC())
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.expireTimedOutTaskLocked(strings.TrimSpace(taskID), time.Now().UTC())
 	task, err := s.transitionTaskLocked(taskID, []remoteAgentTaskState{remoteAgentTaskStateAssigned, remoteAgentTaskStateRunning}, remoteAgentTaskStateCompleted)
 	if err != nil {
 		return remoteAgentTask{}, err
@@ -966,10 +1019,10 @@ func (s *RemoteAgentOrchestrationService) CompleteTask(taskID string, result rem
 }
 
 func (s *RemoteAgentOrchestrationService) RetryTask(taskID string) (remoteAgentTask, error) {
+	s.expireTimedOutTasks(time.Now().UTC())
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	taskID = strings.TrimSpace(taskID)
-	s.expireTimedOutTasksLocked(time.Now().UTC())
 	task, ok := s.tasks[taskID]
 	if !ok {
 		return remoteAgentTask{}, &requestError{status: http.StatusNotFound, msg: "remote agent task not found"}
@@ -995,8 +1048,6 @@ func (s *RemoteAgentOrchestrationService) RetryTask(taskID string) (remoteAgentT
 	task.CancelledAt = ""
 	task.LastTransitionAt = now
 	task.Result = nil
-	task.Transcript = nil
-	task.OutputArtifacts = nil
 	s.updateTaskLocked(task)
 	agent.CurrentTaskID = task.ID
 	agent.Availability = remoteAgentAvailabilityBusy
@@ -1007,10 +1058,10 @@ func (s *RemoteAgentOrchestrationService) RetryTask(taskID string) (remoteAgentT
 }
 
 func (s *RemoteAgentOrchestrationService) AppendTranscript(taskID string, entry remoteAgentTranscriptEntry) (remoteAgentTask, error) {
+	s.expireTimedOutTask(strings.TrimSpace(taskID), time.Now().UTC())
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	taskID = strings.TrimSpace(taskID)
-	s.expireTimedOutTaskLocked(taskID, time.Now().UTC())
 	task, ok := s.tasks[taskID]
 	if !ok {
 		return remoteAgentTask{}, &requestError{status: http.StatusNotFound, msg: "remote agent task not found"}
@@ -1034,10 +1085,10 @@ func (s *RemoteAgentOrchestrationService) AppendTranscript(taskID string, entry 
 }
 
 func (s *RemoteAgentOrchestrationService) AddOutputArtifact(taskID string, req remoteAgentArtifactCreateRequest) (remoteAgentTask, error) {
+	s.expireTimedOutTask(strings.TrimSpace(taskID), time.Now().UTC())
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	taskID = strings.TrimSpace(taskID)
-	s.expireTimedOutTaskLocked(taskID, time.Now().UTC())
 	task, ok := s.tasks[taskID]
 	if !ok {
 		return remoteAgentTask{}, &requestError{status: http.StatusNotFound, msg: "remote agent task not found"}
@@ -1055,10 +1106,10 @@ func (s *RemoteAgentOrchestrationService) AddOutputArtifact(taskID string, req r
 }
 
 func (s *RemoteAgentOrchestrationService) TaskTranscript(taskID string) ([]remoteAgentTranscriptEntry, error) {
+	s.expireTimedOutTask(strings.TrimSpace(taskID), time.Now().UTC())
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	taskID = strings.TrimSpace(taskID)
-	s.expireTimedOutTaskLocked(taskID, time.Now().UTC())
 	task, ok := s.tasks[taskID]
 	if !ok {
 		return nil, &requestError{status: http.StatusNotFound, msg: "remote agent task not found"}
@@ -1069,10 +1120,10 @@ func (s *RemoteAgentOrchestrationService) TaskTranscript(taskID string) ([]remot
 }
 
 func (s *RemoteAgentOrchestrationService) TaskArtifacts(taskID string) ([]remoteAgentArtifactRef, []remoteAgentArtifactRef, error) {
+	s.expireTimedOutTask(strings.TrimSpace(taskID), time.Now().UTC())
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	taskID = strings.TrimSpace(taskID)
-	s.expireTimedOutTaskLocked(taskID, time.Now().UTC())
 	task, ok := s.tasks[taskID]
 	if !ok {
 		return nil, nil, &requestError{status: http.StatusNotFound, msg: "remote agent task not found"}
