@@ -71,7 +71,12 @@ RUN curl -fsSL https://mise.run | sh
 COPY --chown=10001:10001 build/harness/mise.toml /home/kocao/.config/mise/config.toml
 
 ENV MISE_NODE_VERIFY=false
-RUN mise install --yes \
+RUN mise install --yes go python node dotnet bun zig uv
+
+# Install Rust toolchains serially because they share rustup state.
+RUN for v in 1.93.1 1.92.0 1.91.1; do \
+      mise install --yes rust@${v}; \
+    done \
   && mise reshim
 
 # ── Install Rust toolchain components for each version ──
