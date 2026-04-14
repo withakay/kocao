@@ -271,6 +271,51 @@ func (b *agentSessionBridge) subscribe() (chan agentSessionEvent, func()) {
 	}
 }
 
+func agentSessionStateFromHarnessRun(run *operatorv1alpha1.HarnessRun) (agentSessionState, bool) {
+	state := agentSessionState{
+		HarnessRunID: run.Name,
+		PodName:      run.Status.PodName,
+		ServerID:     run.Name,
+	}
+	if run.Spec.AgentSession != nil {
+		state.Runtime = run.Spec.AgentSession.Runtime
+		state.Agent = run.Spec.AgentSession.Agent
+	}
+	statusPresent := run.Status.AgentSession != nil
+	if !statusPresent {
+		return normalizeAgentSessionState(state), false
+	}
+	if run.Status.AgentSession.Runtime != "" {
+		state.Runtime = run.Status.AgentSession.Runtime
+	}
+	if run.Status.AgentSession.Agent != "" {
+		state.Agent = run.Status.AgentSession.Agent
+	}
+	state.SessionID = strings.TrimSpace(run.Status.AgentSession.SessionID)
+	state.Phase = operatorv1alpha1.NormalizeAgentSessionPhase(string(run.Status.AgentSession.Phase))
+	return normalizeAgentSessionState(state), true
+}
+
+func mergePersistedAgentSessionState(base, persisted agentSessionState, statusPresent bool) agentSessionState {
+	persisted = normalizeAgentSessionState(persisted)
+	if base.Runtime == "" {
+		base.Runtime = persisted.Runtime
+	}
+	if base.Agent == "" {
+		base.Agent = persisted.Agent
+	}
+	if base.SessionID == "" {
+		base.SessionID = persisted.SessionID
+	}
+	if !statusPresent {
+		base.Phase = resolveAgentSessionPhase(base.Phase, persisted.Phase)
+	}
+	if persisted.LastSequence > base.LastSequence {
+		base.LastSequence = persisted.LastSequence
+	}
+	return normalizeAgentSessionState(base)
+}
+
 type AgentSessionService struct {
 	transport  agentSessionTransport
 	store      *AgentSessionStore
@@ -297,59 +342,48 @@ func newAgentSessionServiceWithContext(ctx context.Context, transport agentSessi
 func (s *AgentSessionService) bridgeFor(run *operatorv1alpha1.HarnessRun) *agentSessionBridge {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	statusState, statusPresent := agentSessionStateFromHarnessRun(run)
 	bridge, ok := s.bridges[run.Name]
 	if ok {
 		bridge.mu.Lock()
-		bridge.podName = run.Status.PodName
-		if run.Status.AgentSession != nil {
-			if bridge.sessionID == "" {
-				bridge.sessionID = strings.TrimSpace(run.Status.AgentSession.SessionID)
-			}
-			bridge.phase = resolveAgentSessionPhase(bridge.phase, run.Status.AgentSession.Phase)
+		bridge.podName = statusState.PodName
+		bridge.runtime = statusState.Runtime
+		bridge.agent = statusState.Agent
+		if statusState.SessionID != "" {
+			bridge.sessionID = statusState.SessionID
 		}
-		if run.Spec.AgentSession != nil {
-			bridge.runtime = run.Spec.AgentSession.Runtime
-			bridge.agent = run.Spec.AgentSession.Agent
+		if statusPresent {
+			bridge.phase = statusState.Phase
+		} else if statusState.Phase != "" {
+			bridge.phase = resolveAgentSessionPhase(bridge.phase, statusState.Phase)
 		}
 		bridge.mu.Unlock()
 		return bridge
 	}
 
-	phase := operatorv1alpha1.AgentSessionPhaseProvisioning
-	if run.Status.AgentSession != nil && run.Status.AgentSession.Phase != "" {
-		phase = operatorv1alpha1.NormalizeAgentSessionPhase(string(run.Status.AgentSession.Phase))
-	}
-	var runtime operatorv1alpha1.AgentRuntime
-	var agent operatorv1alpha1.AgentKind
-	if run.Spec.AgentSession != nil {
-		runtime = run.Spec.AgentSession.Runtime
-		agent = run.Spec.AgentSession.Agent
+	phase := statusState.Phase
+	if phase == "" {
+		phase = operatorv1alpha1.AgentSessionPhaseProvisioning
 	}
 	bridge = &agentSessionBridge{
 		runID:       run.Name,
-		podName:     run.Status.PodName,
-		serverID:    run.Name,
-		runtime:     runtime,
-		agent:       agent,
+		podName:     statusState.PodName,
+		serverID:    statusState.ServerID,
+		runtime:     statusState.Runtime,
+		agent:       statusState.Agent,
+		sessionID:   statusState.SessionID,
 		phase:       phase,
 		subscribers: map[chan agentSessionEvent]struct{}{},
 	}
-	if run.Status.AgentSession != nil {
-		if run.Status.AgentSession.Runtime != "" {
-			bridge.runtime = run.Status.AgentSession.Runtime
-		}
-		if run.Status.AgentSession.Agent != "" {
-			bridge.agent = run.Status.AgentSession.Agent
-		}
-		bridge.sessionID = strings.TrimSpace(run.Status.AgentSession.SessionID)
-		bridge.phase = resolveAgentSessionPhase(bridge.phase, run.Status.AgentSession.Phase)
-	}
 
 	if persisted, ok := s.store.LoadState(run.Name); ok {
-		if persisted.SessionID != "" {
-			bridge.sessionID = persisted.SessionID
-		}
-		bridge.phase = resolveAgentSessionPhase(bridge.phase, persisted.Phase)
+		merged := mergePersistedAgentSessionState(bridge.snapshot(), persisted, statusPresent)
+		bridge.podName = merged.PodName
+		bridge.serverID = merged.ServerID
+		bridge.runtime = merged.Runtime
+		bridge.agent = merged.Agent
+		bridge.sessionID = merged.SessionID
+		bridge.phase = merged.Phase
 		if persisted.LastSequence > bridge.nextSeq {
 			bridge.nextSeq = persisted.LastSequence
 		}
@@ -639,29 +673,13 @@ func (s *AgentSessionService) GetState(run *operatorv1alpha1.HarnessRun) agentSe
 	if ok {
 		return bridge.snapshot()
 	}
-	if state, ok := s.store.LoadState(run.Name, run.Labels["kocao.withakay.github.com/resumed-from"]); ok {
-		state = normalizeAgentSessionState(state)
+	state, statusPresent := agentSessionStateFromHarnessRun(run)
+	if persisted, ok := s.store.LoadState(run.Name, run.Labels["kocao.withakay.github.com/resumed-from"]); ok {
+		state = mergePersistedAgentSessionState(state, persisted, statusPresent)
 		state.HarnessRunID = run.Name
 		state.PodName = run.Status.PodName
 		state.ServerID = run.Name
-		if state.Runtime == "" {
-			state.Runtime = run.Spec.AgentSession.Runtime
-		}
-		if state.Agent == "" {
-			state.Agent = run.Spec.AgentSession.Agent
-		}
-		return state
-	}
-	state := agentSessionState{
-		HarnessRunID: run.Name,
-		PodName:      run.Status.PodName,
-		ServerID:     run.Name,
-		Runtime:      run.Spec.AgentSession.Runtime,
-		Agent:        run.Spec.AgentSession.Agent,
-	}
-	if run.Status.AgentSession != nil {
-		state.SessionID = run.Status.AgentSession.SessionID
-		state.Phase = operatorv1alpha1.NormalizeAgentSessionPhase(string(run.Status.AgentSession.Phase))
+		return normalizeAgentSessionState(state)
 	}
 	if state.Phase == "" {
 		state.Phase = operatorv1alpha1.AgentSessionPhaseProvisioning
