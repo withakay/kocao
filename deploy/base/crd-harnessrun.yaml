@@ -110,6 +110,19 @@ spec:
                   type: integer
                   format: int32
                   minimum: 0
+                imageProfile:
+                  type: object
+                  description: >-
+                    Harness image profile selection intent.
+                  properties:
+                    profile:
+                      type: string
+                      description: >-
+                        Explicit profile name (e.g. "base", "go", "web", "full").
+                    selectionPolicy:
+                      type: string
+                      description: >-
+                        Profile selection policy (e.g. "auto", "preferred-minimal", "compatibility").
             status:
               type: object
               properties:
@@ -149,3 +162,19 @@ spec:
                   items:
                     type: object
                     x-kubernetes-preserve-unknown-fields: true
+                imageProfile:
+                  type: object
+                  description: Harness image profile selection status.
+                  properties:
+                    requestedProfile:
+                      type: string
+                    selectionPolicy:
+                      type: string
+                    selectedProfile:
+                      type: string
+                    selectionSource:
+                      type: string
+                    fallbackProfile:
+                      type: string
+                    reason:
+                      type: string
