@@ -118,11 +118,23 @@ spec:
                     profile:
                       type: string
                       description: >-
-                        Explicit profile name (e.g. "base", "go", "web", "full").
+                        Explicit profile name. Mutually exclusive with selectionPolicy
+                        (unless selectionPolicy is "auto").
+                      enum:
+                        - base
+                        - go
+                        - web
+                        - full
                     selectionPolicy:
                       type: string
                       description: >-
-                        Profile selection policy (e.g. "auto", "preferred-minimal", "compatibility").
+                        Profile selection policy. Use "auto" to let the system infer
+                        the best profile, "preferred-minimal" to prefer the smallest
+                        suitable profile, or "compatibility" to always use the full profile.
+                      enum:
+                        - auto
+                        - preferred-minimal
+                        - compatibility
             status:
               type: object
               properties:
@@ -168,13 +180,25 @@ spec:
                   properties:
                     requestedProfile:
                       type: string
+                      description: The profile explicitly requested by the caller, if any.
                     selectionPolicy:
                       type: string
+                      description: The selection policy used to choose the profile.
                     selectedProfile:
                       type: string
+                      description: The profile that was ultimately selected.
                     selectionSource:
                       type: string
+                      description: >-
+                        How the selected profile was determined: "explicit" (caller
+                        requested it), "policy" (derived from selectionPolicy),
+                        "inferred" (auto-detected from the image), or "fallback"
+                        (pending inference or no better match found).
                     fallbackProfile:
                       type: string
+                      description: >-
+                        The compatibility fallback profile used if the selected
+                        profile cannot be pulled.
                     reason:
                       type: string
+                      description: Human-readable explanation for the profile selection outcome.
