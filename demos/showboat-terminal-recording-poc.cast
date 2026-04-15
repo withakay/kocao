@@ -1,0 +1,9 @@
+{"version":3,"term":{"cols":100,"rows":28},"timestamp":1776255035,"idle_time_limit":1.25,"command":"tmpdir=$(mktemp -d) && trap 'rm -rf \"$tmpdir\"' EXIT && cd \"$tmpdir\" && run(){ printf '\\n$ %s\\n' \"$*\"; eval \"$@\"; } && run \"showboat init demo.md \\\"Asciinema PoC Demo\\\"\" && sleep 0.2 && run \"showboat note demo.md \\\"Record a small showboat workflow.\\\"\" && sleep 0.2 && run \"showboat exec demo.md bash \\\"echo ready\\\"\" && sleep 0.2 && run \"showboat verify demo.md\" && sleep 0.2 && run \"showboat extract demo.md\"","title":"Showboat terminal recording PoC","env":{"SHELL":"/bin/zsh"}}
+[0.008, "o", "\r\n$ showboat init demo.md \"Asciinema PoC Demo\"\r\n"]
+[0.232, "o", "\r\n$ showboat note demo.md \"Record a small showboat workflow.\"\r\n"]
+[0.238, "o", "\r\n$ showboat exec demo.md bash \"echo ready\"\r\n"]
+[0.042, "o", "ready\r\n"]
+[0.213, "o", "\r\n$ showboat verify demo.md\r\n"]
+[0.237, "o", "\r\n$ showboat extract demo.md\r\n"]
+[0.038, "o", "showboat init demo.md 'Asciinema PoC Demo'\r\nshowboat note demo.md 'Record a small showboat workflow.'\r\nshowboat exec demo.md bash 'echo ready'\r\n"]
+[0.004, "x", "0"]

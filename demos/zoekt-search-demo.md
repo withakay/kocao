@@ -5,83 +5,67 @@
 
 This demo proves the current zoekt-search skill with concise, deterministic output: install verification, indexing, narrow JSONL extraction, plain-text search, plugin presence, and the integration test.
 
+Companion terminal recording: [`zoekt-search-demo.cast`](zoekt-search-demo.cast)
+
+The cast is a shorter terminal walkthrough of the same workflow. It shows the install, index, and search flow as live terminal playback, while the markdown below remains the deterministic artifact for `showboat verify`.
+
 ```bash
-ls -1 .agents/skills/zoekt-search/bin && echo === && bash .agents/skills/zoekt-search/scripts/install-zoekt.sh
+bash .agents/skills/zoekt-search/scripts/install-zoekt.sh >/dev/null && bash .agents/skills/zoekt-search/scripts/install-zoekt.sh && ls -1 .agents/skills/zoekt-search/bin | sort
 ```
 
 ```output
-===
 [install-zoekt] Starting zoekt installation (version=latest)
 [install-zoekt] Detected platform: darwin-arm64
-[install-zoekt] Building from source (sourcegraph/zoekt publishes no pre-built binaries)...
-[install-zoekt] Found Go: go version go1.25.1 darwin/arm64
-[install-zoekt] Installing zoekt-index@latest ...
-[install-zoekt] Installing zoekt@latest ...
-[install-zoekt] Built zoekt binaries from source.
-[install-zoekt] Verification passed: zoekt-index --help succeeded.
-[install-zoekt] Installed zoekt to /Users/jack/Code/withakay/kocao/main/.agents/skills/zoekt-search/scripts/../bin/
-[install-zoekt] Done.
+[install-zoekt] zoekt binaries already installed and working in /Users/jack/Code/withakay/kocao/main/.agents/skills/zoekt-search/scripts/../bin
+[install-zoekt] Version pinning not requested; skipping re-install.
+zoekt
+zoekt-index
 ```
 
 Index the current repository into the worktree-safe git index directory.
 
 ```bash
-bash .agents/skills/zoekt-search/scripts/zoekt-index.sh
+bash .agents/skills/zoekt-search/scripts/zoekt-index.sh 2>&1 | grep -E '^\[zoekt-index\] (Using binary|Indexing:|Index dir:|Indexed )'
 ```
 
 ```output
 [zoekt-index] Using binary: /Users/jack/Code/withakay/kocao/main/.agents/skills/zoekt-search/scripts/../bin/zoekt-index
 [zoekt-index] Indexing: /Users/jack/Code/withakay/kocao/main
 [zoekt-index] Index dir: /Users/jack/Code/withakay/kocao/.bare/worktrees/main/zoekt
-2026/04/13 21:06:45 finished shard /Users/jack/Code/withakay/kocao/.bare/worktrees/main/zoekt/main_v16.00000.zoekt: 283034230 index bytes (overhead 2.7), 18124 files processed 
-2026/04/13 21:06:47 finished shard /Users/jack/Code/withakay/kocao/.bare/worktrees/main/zoekt/main_v16.00001.zoekt: 236066974 index bytes (overhead 2.7), 12330 files processed 
 [zoekt-index] Indexed /Users/jack/Code/withakay/kocao/main → /Users/jack/Code/withakay/kocao/.bare/worktrees/main/zoekt
-[zoekt-index]   Shards: 2
-[zoekt-index]   Index size: 495M
 ```
 
-Use JSONL mode, but extract only file and line data so the output stays readable.
+Use JSONL mode, but extract only the plugin filename so the output stays readable and stable as the repository evolves.
 
 ```bash
-bash .agents/skills/zoekt-search/scripts/zoekt-search.sh "ZOEKT_REINDEX_DEBOUNCE_MS" | jq -r .' .FileName as $f | .LineMatches[] | "\($f):\(.LineNumber)" ' | head -10
+bash .agents/skills/zoekt-search/scripts/zoekt-search.sh "ZOEKT_REINDEX_DEBOUNCE_MS" | jq -r 'select(.FileName == ".opencode/plugins/zoekt-reindex.js") | .FileName' | sort -u
 ```
 
 ```output
-.opencode/plugins/zoekt-reindex.js:14
-.opencode/plugins/zoekt-reindex.js:31
+.opencode/plugins/zoekt-reindex.js
 ```
 
-Plain-text mode is useful when you want grep-like output without decoding JSONL fields.
+Plain-text mode is useful when you want grep-like output without decoding JSONL fields. Normalize the hit so line movement does not churn the demo.
 
 ```bash
-bash .agents/skills/zoekt-search/scripts/zoekt-search.sh --no-json "zoekt-reindex" | head -12
+bash .agents/skills/zoekt-search/scripts/zoekt-search.sh --no-json "zoekt-reindex" | grep '^\.opencode/plugins/zoekt-reindex.js:' | sed -E 's#^([^:]+):[0-9]+:.*#\1: match#' | head -1
 ```
 
 ```output
-.opencode/plugins/zoekt-reindex.js:65:        body: { service: 'zoekt-reindex', level, message },
-.ito/changes/008-01_zoekt-search-skill/tasks.md:91:- **Files**: `.opencode/plugins/zoekt-reindex/index.js`
-.ito/changes/008-01_zoekt-search-skill/proposal.md:11:- New OpenCode plugin at `.opencode/plugins/zoekt-reindex/` that auto-reindexes on file changes or session idle via debounced hooks.
-.ito/changes/008-01_zoekt-search-skill/proposal.md:20:- `zoekt-opencode-plugin`: OpenCode plugin (`.opencode/plugins/zoekt-reindex/`) that auto-reindexes on file changes via debounced hooks, keeping the zoekt index fresh without manual intervention.
-.ito/changes/008-01_zoekt-search-skill/proposal.md:30:- New plugin: `.opencode/plugins/zoekt-reindex/`
-.ito/changes/008-01_zoekt-search-skill/specs/zoekt-opencode-plugin/spec.md:54:The plugin SHALL be located at `.opencode/plugins/zoekt-reindex/` and SHALL follow the OpenCode plugin contract (ESM module with hook exports).
-.ito/changes/008-01_zoekt-search-skill/specs/zoekt-opencode-plugin/spec.md:60:- **WHEN** OpenCode starts in a repository containing `.opencode/plugins/zoekt-reindex/`
+.opencode/plugins/zoekt-reindex.js: match
 ```
 
-The OpenCode plugin is part of the feature surface and points back at the zoekt index script.
+The OpenCode plugin is part of the feature surface and points back at the zoekt index script. Normalize the grep output to the matched tokens so verification is resilient to line movement.
 
 ```bash
-grep -n "zoekt-index.sh\|ZOEKT_REINDEX_DEBOUNCE_MS\|session.idle\|file.watcher.updated" .opencode/plugins/zoekt-reindex.js
+grep -o "zoekt-index.sh\|ZOEKT_REINDEX_DEBOUNCE_MS\|session.idle\|file.watcher.updated" .opencode/plugins/zoekt-reindex.js | awk '!seen[$0]++'
 ```
 
 ```output
-9: *   - session.idle — agent finished processing, good time to refresh the index
-10: *   - file.watcher.updated — files changed on disk (git checkout, editor saves)
-14: *   ZOEKT_REINDEX_DEBOUNCE_MS      — override debounce window (default 30000)
-15: *   ZOEKT_INDEX_DIR                — override index directory (forwarded to zoekt-index.sh)
-31:    const raw = Number.parseInt(process.env.ZOEKT_REINDEX_DEBOUNCE_MS || '', 10);
-40:      worktree && path.join(worktree, '.agents/skills/zoekt-search/scripts/zoekt-index.sh'),
-41:      path.join(directory, '.agents/skills/zoekt-search/scripts/zoekt-index.sh'),
-142:      if (event.type === 'session.idle' || event.type === 'file.watcher.updated') {
+session.idle
+file.watcher.updated
+ZOEKT_REINDEX_DEBOUNCE_MS
+zoekt-index.sh
 ```
 
 Finally, run the full integration test script to verify indexing and search behavior end-to-end.

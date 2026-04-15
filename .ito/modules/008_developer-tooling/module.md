@@ -8,3 +8,4 @@
 
 ## Changes
 - [ ] 008-01_zoekt-search-skill
+- [ ] 008-02_add-showboat-terminal-recordings

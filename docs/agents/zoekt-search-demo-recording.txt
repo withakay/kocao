@@ -1,0 +1,19 @@
+
+Representative terminal walkthrough for the Zoekt skill demo.
+
+$ bash .agents/skills/zoekt-search/scripts/install-zoekt.sh >/dev/null && bash .agents/skills/zoekt-search/scripts/install-zoekt.sh && ls -1 .agents/skills/zoekt-search/bin | sort
+[install-zoekt] Starting zoekt installation (version=latest)
+[install-zoekt] Detected platform: darwin-arm64
+[install-zoekt] zoekt binaries already installed and working in /Users/jack/Code/withakay/kocao/main/.agents/skills/zoekt-search/scripts/../bin
+[install-zoekt] Version pinning not requested; skipping re-install.
+zoekt
+zoekt-index
+
+$ bash .agents/skills/zoekt-search/scripts/zoekt-index.sh 2>&1 | grep -E '^\[zoekt-index\] (Using binary|Indexing:|Index dir:|Indexed )'
+[zoekt-index] Using binary: /Users/jack/Code/withakay/kocao/main/.agents/skills/zoekt-search/scripts/../bin/zoekt-index
+[zoekt-index] Indexing: /Users/jack/Code/withakay/kocao/main
+[zoekt-index] Index dir: /Users/jack/Code/withakay/kocao/.bare/worktrees/main/zoekt
+[zoekt-index] Indexed /Users/jack/Code/withakay/kocao/main → /Users/jack/Code/withakay/kocao/.bare/worktrees/main/zoekt
+
+$ bash .agents/skills/zoekt-search/scripts/zoekt-search.sh --no-json 'zoekt-reindex' | grep '^\.opencode/plugins/zoekt-reindex.js:' | sed -E 's#^([^:]+):[0-9]+:.*#\1: match#' | head -1
+.opencode/plugins/zoekt-reindex.js: match

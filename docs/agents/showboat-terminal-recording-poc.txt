@@ -1,0 +1,14 @@
+
+$ showboat init demo.md "Asciinema PoC Demo"
+
+$ showboat note demo.md "Record a small showboat workflow."
+
+$ showboat exec demo.md bash "echo ready"
+ready
+
+$ showboat verify demo.md
+
+$ showboat extract demo.md
+showboat init demo.md 'Asciinema PoC Demo'
+showboat note demo.md 'Record a small showboat workflow.'
+showboat exec demo.md bash 'echo ready'
